@@ -29,14 +29,18 @@ function escapeXml(value:string):string {return value.replace(/[&<>]/g,character
  * The plist carries the interpreter and the installing PATH, because launchd
  * starts an agent with a minimal environment: neither `bun` nor `omp` would be
  * found by name there, and the recorded PATH is what `omp` resolves through.
+ * A `trusted-run` on PATH goes first: launchd makes the program it starts the
+ * one macOS privacy checks attribute to, and an interpreter reached through a
+ * version manager shim changes path on every upgrade, so its grants are lost.
  */
-function plistDocument(interpreter:string):string {
+function plistDocument(interpreter:string,wrapper:string|null):string {
+  const program=[...(wrapper?[wrapper]:[]),interpreter,cliPath,'serve'].map(argument=>`<string>${escapeXml(argument)}</string>`).join('');
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
   <key>Label</key><string>${LAUNCHER_LABEL}</string>
-  <key>ProgramArguments</key><array><string>${escapeXml(interpreter)}</string><string>${escapeXml(cliPath)}</string><string>serve</string></array>
+  <key>ProgramArguments</key><array>${program}</array>
   <key>WorkingDirectory</key><string>${escapeXml(dirname(cliPath))}</string>
   <key>EnvironmentVariables</key><dict><key>PATH</key><string>${escapeXml(process.env.PATH??'')}</string></dict>
   <key>RunAtLoad</key><true/>
@@ -46,6 +50,11 @@ function plistDocument(interpreter:string):string {
 </dict>
 </plist>
 `;
+}
+
+function onPath(name:string):string|null {
+  const found=(process.env.PATH??'').split(':').filter(part=>part.length>0).map(directory=>join(directory,name)).find(candidate=>existsSync(candidate));
+  return found??null;
 }
 
 function interpreterOnPath():string|null {
@@ -93,7 +102,7 @@ export async function installLauncher():Promise<Result<LauncherReport,LauncherFa
   if(!interpreter)return failure(diagnosticText({kind:'noInterpreter'}));
   await mkdir(dirname(plistPath),{recursive:true});
   await mkdir(dirname(logPath('out')),{recursive:true});
-  await writeFile(plistPath,plistDocument(interpreter),'utf8');
+  await writeFile(plistPath,plistDocument(interpreter,onPath('trusted-run')),'utf8');
   await run('launchctl',['bootout',launchctlTarget],{});
   const bootstrapped=await run('launchctl',['bootstrap',`gui/${process.getuid?.()??''}`,plistPath],{});
   if(bootstrapped.code!==0)return failure(diagnosticText({kind:'bootstrap',detail:bootstrapped.stderr.trim()||bootstrapped.stdout.trim()}));
