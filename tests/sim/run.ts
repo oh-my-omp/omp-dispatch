@@ -18,7 +18,8 @@ import type {Expect, Scenario, TicketSpec} from './scenario.ts';
 const ROOT = resolve(import.meta.dir, '../..');
 const REPO = {owner: 'sim', name: 'arena'};
 const KEY = `${REPO.owner}/${REPO.name}`;
-const DEADLINE_MS = 240_000;
+// Long enough for the abandon scenario's injected provider failure: omp retries it eleven times, about 30 seconds apart.
+const DEADLINE_MS = 420_000;
 
 /** Parse a file-shaped workflow fixture; a fixture the parser refuses is a broken simulation. */
 function workflowOf(source: unknown): Workflow {
@@ -87,8 +88,11 @@ function setup(spec: Case): Run {
 function start(run: Run): void {
   run.starts++;
   const stdout = openSync(join(run.dir, `omp-${run.starts}.stdout.jsonl`), 'a'), stderr = openSync(join(run.dir, `omp-${run.starts}.stderr.log`), 'a');
+  // The injected provider failure must surface at once: omp's automatic retry would otherwise wait out its budget.
+  const config = join(run.dir, 'omp-config.yml');
+  writeFileSync(config, 'retry:\n  enabled: false\n');
   run.proc = Bun.spawn(['omp', '--mode', 'rpc', '--no-ui', '--no-extensions', '-e', join(ROOT, 'index.ts'), '-e', join(ROOT, 'tests/sim/extension.ts'),
-    '--model', 'sim/main', '--session-dir', run.mainSessions, '--dispatch', `${KEY}#${run.rootIssue}`], {
+    '--model', 'sim/main', '--session-dir', run.mainSessions, '--dispatch', `${KEY}#${run.rootIssue}`, '--config', config], {
     cwd: run.work, stdin: 'pipe', stdout, stderr,
     env: {...process.env, PATH: `${run.bin}:${process.env.PATH}`, OMP_DISPATCH_DIR: run.data, OMP_DISPATCH_RECOMPUTE_SECONDS: '1', SIM_SCENARIO: run.scenarioFile},
   });
@@ -393,15 +397,22 @@ const cases: Case[] = [
     issues: [{title: 'Q'}],
     requiredChecks: [], ci: {default: 'SUCCESS', failMarker: null}, rootIssue: 1,
     scenario: () => ({parent: null, closure: {}, tickets: [
-      ticket('Q', 1, [{kind: 'quit'}, commit({'q.txt': '1\n'})], {'q.txt': '1\n'}, {rulings: [{to: 'Coding', ruling: 'Try again.'}]}),
+      // The first review judge's model request fails; Main resolves it back to Coding, and the next judge passes.
+      ticket('Q', 1, [{kind: 'quit'}, commit({'q.txt': '1\n'})], {'q.txt': '1\n'}, {
+        judgeFailure: {role: 'review', message: 'sim rate limit'},
+        rulings: [{to: 'Coding', ruling: 'Try again.'}, {to: 'Coding', ruling: 'Try the review again.'}]}),
     ]}),
     async check(run) {
       const failures = await commonChecks(run, {'q.txt': '1\n'});
       const state = await agenda(run);
-      if (!ticketOf(state, 'Q')?.notes.some(note => note.text.includes('ended without a handoff'))) failures.push('the abandoned Owner did not escalate Q');
+      const notes = ticketOf(state, 'Q')?.notes ?? [];
+      if (!notes.some(note => note.text.endsWith('the session ended without submit, verdict, or escalate'))) failures.push(`the abandoned Owner's escalation note is wrong: ${JSON.stringify(notes)}`);
+      if (!notes.some(note => note.kind === 'escalation' && note.text.endsWith('the model request failed: sim rate limit'))) failures.push(`the failed review seat's escalation lost the provider error: ${JSON.stringify(notes)}`);
       if (!modelLog(run).some(entry => entry.kind === 'main' && entry.note.includes('escalated:Q:'))) failures.push('Main was not woken for the abandoned seat');
       const seats = owners(seatSessions(run, state!.id), 'Q');
-      if (seats.length !== 2 || seats.some(seat => seat.parent)) failures.push(`expected two fresh Owner sessions, found ${seats.map(seat => `${seat.id}<-${seat.parent}`).join(', ')}`);
+      // The abandoned seat and the round-1 seat are fresh; the rework after the failed review is a fork of round 1.
+      const [abandoned, round1, rework] = seats;
+      if (seats.length !== 3 || abandoned?.parent || round1?.parent || rework?.parent !== round1?.id) failures.push(`expected fresh Owner sessions then a fork of round 1, found ${seats.map(seat => `${seat.id}<-${seat.parent}`).join(', ')}`);
       return failures;
     },
   },

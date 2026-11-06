@@ -19,7 +19,7 @@ const repo = scenario.repo;
 let callCounter = 0;
 
 type Message = Context['messages'][number];
-type Step = {call: {name: string; args: Record<string, unknown>}} | {text: string};
+type Step = {call: {name: string; args: Record<string, unknown>}} | {text: string} | {fail: string};
 type Played = {op: string | null; result: string};
 /** The `{ok, value}` envelope the dispatch tool returns, with the few fields the script branches on. */
 const replySchema = z.object({ok: z.boolean(), value: z.object({
@@ -179,6 +179,14 @@ function gateStep(messages: Message[], role: string, ticketId: string, brief: st
   const expect = scenario.parentRoles.includes(role) ? scenario.closure : spec!.judgeExpect?.[role] ?? spec!.gate;
   const hold = spec?.hold?.roles.some(item => item === role) ? spec.hold.marker : null;
   const step = messages.filter(message => message.role === 'assistant').length;
+  // The provider failure hits the first judge of this role, once: its request fails and the seat ends with that error.
+  if (spec?.judgeFailure?.role === role && step === 0) {
+    const failedBefore = readFileSync(scenario.log, 'utf8').split('\n').filter(Boolean).some(line => {
+      const entry = JSON.parse(line) as {ticket?: string; role?: string; note?: string};
+      return entry.ticket === ticketId && entry.role === role && entry.note === 'provider error';
+    });
+    if (!failedBefore) return {step: {fail: spec.judgeFailure.message}, note: 'provider error'};
+  }
   if (step === 0) return {step: {call: {name: 'bash', args: {command: inspect(expect, hold), timeout: 0}}}, note: 'inspect'};
   if (step === 1) {
     const judged = verdict(expect, played(messages, 0, 'bash')[0]?.result ?? '');
@@ -208,13 +216,17 @@ function respond(model: Model<Api>, context: Context, options?: SimpleStreamOpti
     const schema = intentSchema.safeParse(context.tools?.find(tool => tool.name === name)?.parameters);
     return schema.success && schema.data.required?.includes('i') ? {i: 'Simulated step', ...args} : args;
   };
-  appendFileSync(scenario.log, `${JSON.stringify({at: Date.now(), session: options?.sessionId ?? null, ...who, note: decided.note, step: 'call' in decided.step ? decided.step.call : decided.step})}\n`);
+  appendFileSync(scenario.log, `${JSON.stringify({at: Date.now(), session: options?.sessionId ?? null, ...who, note: decided.note, step: 'call' in decided.step ? decided.step.call : 'fail' in decided.step ? {error: decided.step.fail} : decided.step})}\n`);
   const partial: AssistantMessage = {role: 'assistant', content: [], api: model.api, provider: model.provider, model: model.id,
     usage: {input: 100, output: 50, cacheRead: 0, cacheWrite: 0, totalTokens: 150, cost: {input: 0.001, output: 0.002, cacheRead: 0, cacheWrite: 0, total: 0.003}},
     stopReason: 'stop', timestamp: Date.now()};
   const stream = createAssistantMessageEventStream();
   stream.push({type: 'start', partial});
-  if ('call' in decided.step) {
+  if ('fail' in decided.step) {
+    // A provider failure ends the stream with stopReason 'error', as omp reports a request that failed after retries.
+    const failure: AssistantMessage = {...partial, stopReason: 'error', errorMessage: decided.step.fail};
+    stream.push({type: 'error', reason: 'error', error: failure});
+  } else if ('call' in decided.step) {
     const call: ToolCall = {type: 'toolCall', id: `sim_${++callCounter}_${Date.now().toString(36)}`, name: decided.step.call.name, arguments: withIntent(decided.step.call.name, decided.step.call.args)};
     partial.content.push(call);
     stream.push({type: 'toolcall_start', contentIndex: 0, partial});

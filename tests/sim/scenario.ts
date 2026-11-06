@@ -41,6 +41,8 @@ const ticketSpecSchema = z.object({
   judgeExpect: z.record(z.string(), expectSchema).optional(),
   /** Judges that wait for a marker file before inspecting their checkout. */
   hold: z.object({roles: z.array(z.string()), marker: z.string()}).optional(),
+  /** The first judge of `role` ends with a model request failure carrying `message` instead of a verdict. */
+  judgeFailure: z.object({role: z.string(), message: z.string()}).optional(),
   /** Main's rulings for this ticket's escalations, in order. */
   rulings: z.array(rulingSchema).optional(),
 });
