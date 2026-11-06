@@ -134,7 +134,7 @@ When neither the environment nor plugin setting selects a file, `convene` reads 
 
 ## Interface language
 
-Notifications, command help, and the launcher CLI and HTML use English or Chinese. On each text generation, language is resolved from normalized `OMOMP_LANG=en|zh`, then the strict `omomp-lang: {language: en|zh}` section in exactly one `omomp.yml`, `omomp.yaml`, `omomp.json`, or `omomp.toml` in the agent directory, then the first nonempty `LC_ALL`, `LC_MESSAGES`, or `LANG` (`zh` prefix means Chinese), then English. The agent-directory section is read once per process; environment variables stay live. Ambiguous files or invalid sections are ignored. Model-facing tool descriptions, results, workflow briefs, and coordinator instructions stay English. Runtime notifications show a localized error category and point to the log for the full structured protocol diagnostic.
+Notifications, command help, and the launcher CLI and HTML use English or Chinese. On each text generation, language is resolved from normalized `OMOMP_LANG=en|zh`, then the first nonempty `LC_ALL`, `LC_MESSAGES`, or `LANG` (`zh` prefix means Chinese), then English. The agent-directory omomp files never participate in language resolution. Model-facing tool descriptions, results, workflow briefs, and coordinator instructions stay English. Runtime notifications show a localized error category and point to the log for the full structured protocol diagnostic.
 
 ## Ticket handoff
 
