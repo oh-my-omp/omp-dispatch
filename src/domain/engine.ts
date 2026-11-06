@@ -445,6 +445,13 @@ export function reconcile(state:Agenda,facts:Facts,at:number):void {
  */
 export const ESCALATES_ON_FAILURE:Readonly<Record<Action['kind'],boolean>>={publishPr:true,merge:true,setIssueState:true,replaceBody:true,createIssue:true,attachChild:true,rerunChecks:true,comment:false,setProjectField:false};
 
+/**
+ * Whether `retry` without a source result sends the same effect again. PM records belong to no state entry, so no
+ * action state can request them afresh, and they are idempotent by marker key or field value: the executor adopts
+ * one the source already shows instead of writing it twice. Every other kind is requested afresh by its action state.
+ */
+const RETRY_RESENDS:Readonly<Record<Action['kind'],boolean>>={publishPr:false,merge:false,setIssueState:false,replaceBody:false,createIssue:false,attachChild:false,rerunChecks:false,comment:true,setProjectField:true};
+
 /* ------------------------------------------------------------ effects */
 
 export function effectPrecondition(state:Agenda,effect:Effect,facts:Facts):string|null {
@@ -612,8 +619,12 @@ function settleEffects(next:Agenda,operation:Extract<PortInput,{op:'resolve'}>,f
     switch(resolution.disposition){
       case 'cancel':effect.state={kind:'cancelled',reason:operation.ruling};break;
       case 'adopt':if(!result)return reject('sourceChanged','Source does not confirm the effect');confirmEffect(next,effect,result,facts,at);break;
-      // A retried action is requested afresh by entering its action state; only a source-confirmed one is adopted.
-      case 'retry':if(result)confirmEffect(next,effect,result,facts,at);else effect.state={kind:'cancelled',reason:`Main requested a retry: ${operation.ruling}`};break;
+      // A source-confirmed effect is adopted. Otherwise a PM record is queued again under its id and intent, and any
+      // other effect is cancelled: resolving to its action state requests it afresh.
+      case 'retry':
+        if(result)confirmEffect(next,effect,result,facts,at);
+        else effect.state=RETRY_RESENDS[effect.action.kind]?{kind:'ready'}:{kind:'cancelled',reason:`Main requested a retry: ${operation.ruling}`};
+        break;
     }
   }
   if(next.effects.some(effect=>effect.ticketId===operation.ticketId&&(effect.state.kind==='failed'||effect.state.kind==='uncertain'||effect.state.kind==='executing')))return reject('invalidTransition','Resolve every failed or uncertain effect before reopening work on this ticket');

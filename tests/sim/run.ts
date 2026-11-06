@@ -59,7 +59,8 @@ type Case = {
   workflow?: Workflow;
   /**
    * PM integration on, with PM_CONFIG. `holdComment` makes the simulated GitHub hold the comment request that finds
-   * `skip` comments, `at` before or after recording it, touching `markers/comment-arrived` until `markers/release-comment` exists.
+   * `skip` comments, `at` before or after recording it, touching `markers/comment-arrived` until `markers/release-comment`
+   * or `markers/drop-comment` exists.
    */
   pm?: {holdComment: Pick<NonNullable<SimState['commentHold']>, 'skip' | 'at'> | null};
   files: Record<string, string>;
@@ -82,7 +83,7 @@ function setup(spec: Case): Run {
   const bin = seedGitHub(github, {viewer: 'sim', ciDefault: spec.ci.default, ciFailMarker: spec.ci.failMarker,
     repos: [{...REPO, defaultBranch: 'main', requiredChecks: spec.requiredChecks, files: spec.files}],
     issues: spec.issues.map(issue => ({repo: KEY, title: issue.title, body: `Simulated ${issue.title}.`, ...(issue.children ? {children: issue.children} : {})})),
-    commentHold: spec.pm?.holdComment ? {...spec.pm.holdComment, arrived: join(markers, 'comment-arrived'), release: join(markers, 'release-comment')} : null});
+    commentHold: spec.pm?.holdComment ? {...spec.pm.holdComment, arrived: join(markers, 'comment-arrived'), release: join(markers, 'release-comment'), drop: join(markers, 'drop-comment')} : null});
   const workflow = spec.workflow ?? SIM_WORKFLOW;
   // Every agent the workflow names is a scripted seat; the data directory's workflow.yml is the override convene reads (JSON is YAML).
   for (const agent of workflowAgents(workflow))
@@ -346,24 +347,71 @@ const RESTART_PM_TICKET = ticket('M', 1, [commit({'m.txt': '1\n'}), commit({'m.v
 /** The held comment's effect: the rework Owner's impl comment, the second comment effect. */
 const heldComment = (state: Agenda | null) => state?.effects.filter(effect => effect.action.kind === 'comment')[1];
 const commentCount = (run: Run) => simState(run).issues.reduce((count, issue) => count + issue.comments.length, 0);
+/** The body the held comment's effect writes. */
+const heldBody = (state: Agenda | null) => { const held = heldComment(state); return held?.action.kind === 'comment' ? held.action.body : null; };
 
-/** Both restart-pm branches: the delivery and PM records hold, the held comment was sent once and is source-confirmed, M never escalated, and each Owner session sent one comment. */
-async function restartPmChecks(run: Run): Promise<string[]> {
+/** The attention keys of every Main notification, in order. */
+const mainNotifications = (run: Run) => modelLog(run).filter(entry => entry.kind === 'main').map(entry => entry.note.slice(entry.note.indexOf(':') + 1).split(', '));
+
+/**
+ * Every restart-pm branch: the delivery and PM records hold, the held comment's effect is source-confirmed after
+ * `attempts` sends, M never escalated, and GitHub recorded one comment request per Owner session.
+ */
+async function restartPmChecks(run: Run, attempts: number): Promise<string[]> {
   const failures = [...await commonChecks(run, {'m.txt': '1\n', 'm.verify': '1\n'}), ...await pmChecks(run)];
   const state = await agenda(run);
   const held = heldComment(state);
   const m = ticketOf(state, 'M');
   if (m?.notes.some(note => note.kind === 'escalation')) failures.push(`the interrupted comment escalated M: ${JSON.stringify(m.notes)}`);
   if (held?.state.kind !== 'confirmed') failures.push(`the interrupted comment effect is ${held?.state.kind}, not source-confirmed`);
-  if (held?.attempt !== 1) failures.push(`the interrupted comment effect was sent ${held?.attempt} times`);
+  if (held?.attempt !== attempts) failures.push(`the interrupted comment effect was sent ${held?.attempt} times, not ${attempts}`);
   const sessions = owners(seatSessions(run, state!.id), 'M');
-  const posts = readFileSync(join(run.github, 'requests.jsonl'), 'utf8').split('\n').filter(line => line.includes('"method":"POST"') && /\/issues\/\d+\/comments"/.test(line));
-  if (sessions.length !== 3 || posts.length !== sessions.length) failures.push(`${posts.length} comment POSTs for ${sessions.length} Owner sessions; expected one each for the first, the interrupted and the resumed Owner`);
+  const posts = readFileSync(join(run.github, 'requests.jsonl'), 'utf8').split('\n')
+    .filter(line => line.includes('"method":"POST"') && /\/issues\/\d+\/comments"/.test(line) && !line.includes('"dropped":true'));
+  if (sessions.length !== 3 || posts.length !== sessions.length) failures.push(`${posts.length} recorded comment POSTs for ${sessions.length} Owner sessions; expected one each for the first, the interrupted and the resumed Owner`);
   return failures;
 }
 
-/** The attention keys of every Main notification, in order. */
-const mainNotifications = (run: Run) => modelLog(run).filter(entry => entry.kind === 'main').map(entry => entry.note.slice(entry.note.indexOf(':') + 1).split(', '));
+/**
+ * The kill lands while the held comment request has not reached GitHub. After resume the effect fails; the driver
+ * then ends the held request with `outcome` and waits for its result, and lets Main retry once M is delivered.
+ */
+async function killBeforeWrite(run: Run, outcome: 'release' | 'drop'): Promise<void> {
+  const markers = join(run.dir, 'markers');
+  await waitUntil(run, 'the held impl comment request', () => existsSync(join(markers, 'comment-arrived')));
+  if (commentCount(run) !== 1) throw new Error(`the held comment reached the simulated GitHub before the kill: ${commentCount(run)} comments`);
+  await kill(run);
+  start(run);
+  await waitUntil(run, 'the interrupted comment failed', state => heldComment(state)?.state.kind === 'failed');
+  const body = heldBody(await agenda(run));
+  writeFileSync(join(markers, `${outcome}-comment`), '');
+  if (outcome === 'release') await waitUntil(run, 'the late comment on the simulated GitHub', () => simState(run).issues.some(issue => issue.comments.some(comment => comment.body === body)));
+  else await waitUntil(run, 'the held request dropped', () => readFileSync(join(run.github, 'requests.jsonl'), 'utf8').includes('"dropped":true'));
+  await waitUntil(run, 'M delivered with the comment still failed', state => ticketOf(state, 'M')?.state === 'Done' && heldComment(state)?.state.kind === 'failed');
+  writeFileSync(join(markers, 'retry-failed'), '');
+  await waitUntil(run, 'completion after the retry', completed);
+}
+
+/** A branch Main settled by retry: the failed: notification, a refused finish, then the accepted retry, and one comment with the held body. */
+async function retriedChecks(run: Run, attempts: number): Promise<string[]> {
+  const failures = await restartPmChecks(run, attempts);
+  const state = await agenda(run);
+  const held = heldComment(state)!;
+  const key = `failed:M:${held.id}`;
+  if (!mainNotifications(run).some(keys => keys.includes(key))) failures.push(`Main was not woken for ${key}`);
+  const calls = mainCalls(run);
+  const resolved = calls.findIndex(call => call.input.op === 'resolve' && call.reply?.ok === true);
+  const finishes = calls.slice(0, resolved < 0 ? calls.length : resolved).filter(call => call.input.op === 'finish');
+  if (!finishes.some(call => call.reply?.ok === false && call.reply.error?.error?.kind === 'invalidTransition'))
+    failures.push(`finish was not refused before the retry: ${JSON.stringify(finishes.map(call => call.reply))}`);
+  if (resolved < 0 || JSON.stringify(calls[resolved]!.input.effects) !== JSON.stringify([{effectId: held.id, disposition: 'retry'}]))
+    failures.push(`Main did not settle ${held.id} with an accepted retry: ${JSON.stringify(calls.filter(call => call.input.op === 'resolve'))}`);
+  if (ticketOf(state, 'M')?.rulings.length !== 1) failures.push(`M took ${ticketOf(state, 'M')?.rulings.length} rulings, not the one retry`);
+  const body = heldBody(state);
+  const copies = simState(run).issues.flatMap(issue => issue.comments.filter(comment => comment.body === body)).length;
+  if (copies !== 1) failures.push(`the simulated GitHub holds ${copies} comments with the held body, not one`);
+  return failures;
+}
 
 const cases: Case[] = [
   {
@@ -572,7 +620,7 @@ const cases: Case[] = [
       await waitUntil(run, 'completion after resume', completed);
     },
     async check(run) {
-      const failures = await restartPmChecks(run);
+      const failures = await restartPmChecks(run, 1);
       const m = ticketOf(await agenda(run), 'M');
       if (m?.rulings.length) failures.push(`M took rulings: ${JSON.stringify(m.rulings)}`);
       const failed = mainNotifications(run).flat().filter(key => key.startsWith('failed:'));
@@ -583,42 +631,23 @@ const cases: Case[] = [
   {
     // The kill lands before the comment is recorded. Resume finds no comment, so the effect fails, Main is woken with
     // failed:M:<effect> and finish is refused. The killed process's request reaches GitHub late, and Main's
-    // resolve with retry adopts that source copy as confirmed.
+    // resolve with retry adopts that source copy as confirmed without sending it again.
     name: 'restart-pm/lost',
     pm: {holdComment: {skip: 1, at: 'beforeWrite'}},
     ...RESTART_PM,
     scenario: markers => ({parent: null, closure: {}, retryFailed: join(markers, 'retry-failed'), tickets: [RESTART_PM_TICKET]}),
-    async drive(run) {
-      const markers = join(run.dir, 'markers');
-      await waitUntil(run, 'the held impl comment request', () => existsSync(join(markers, 'comment-arrived')));
-      if (commentCount(run) !== 1) throw new Error(`the held comment reached the simulated GitHub before the kill: ${commentCount(run)} comments`);
-      await kill(run);
-      start(run);
-      await waitUntil(run, 'the interrupted comment failed', state => heldComment(state)?.state.kind === 'failed');
-      writeFileSync(join(markers, 'release-comment'), '');
-      const held = heldComment(await agenda(run));
-      const body = held?.action.kind === 'comment' ? held.action.body : null;
-      await waitUntil(run, 'the late comment on the simulated GitHub', () => simState(run).issues.some(issue => issue.comments.some(comment => comment.body === body)));
-      await waitUntil(run, 'M delivered with the comment still failed', state => ticketOf(state, 'M')?.state === 'Done' && heldComment(state)?.state.kind === 'failed');
-      writeFileSync(join(markers, 'retry-failed'), '');
-      await waitUntil(run, 'completion after the retry', completed);
-    },
-    async check(run) {
-      const failures = await restartPmChecks(run);
-      const state = await agenda(run);
-      const held = heldComment(state)!;
-      const key = `failed:M:${held.id}`;
-      if (!mainNotifications(run).some(keys => keys.includes(key))) failures.push(`Main was not woken for ${key}`);
-      const calls = mainCalls(run);
-      const resolved = calls.findIndex(call => call.input.op === 'resolve' && call.reply?.ok === true);
-      const finishes = calls.slice(0, resolved < 0 ? calls.length : resolved).filter(call => call.input.op === 'finish');
-      if (!finishes.some(call => call.reply?.ok === false && call.reply.error?.error?.kind === 'invalidTransition'))
-        failures.push(`finish was not refused before the retry: ${JSON.stringify(finishes.map(call => call.reply))}`);
-      if (resolved < 0 || JSON.stringify(calls[resolved]!.input.effects) !== JSON.stringify([{effectId: held.id, disposition: 'retry'}]))
-        failures.push(`Main did not settle ${held.id} with an accepted retry: ${JSON.stringify(calls.filter(call => call.input.op === 'resolve'))}`);
-      if (ticketOf(state, 'M')?.rulings.length !== 1) failures.push(`M took ${ticketOf(state, 'M')?.rulings.length} rulings, not the one retry`);
-      return failures;
-    },
+    drive: run => killBeforeWrite(run, 'release'),
+    check: run => retriedChecks(run, 1),
+  },
+  {
+    // As lost, but the killed process's request never reaches GitHub: Main's resolve with retry sends the comment
+    // again, and the next GitHub read confirms it.
+    name: 'restart-pm/dropped',
+    pm: {holdComment: {skip: 1, at: 'beforeWrite'}},
+    ...RESTART_PM,
+    scenario: markers => ({parent: null, closure: {}, retryFailed: join(markers, 'retry-failed'), tickets: [RESTART_PM_TICKET]}),
+    drive: run => killBeforeWrite(run, 'drop'),
+    check: run => retriedChecks(run, 2),
   },
   {
     name: 'flow',
