@@ -1,6 +1,6 @@
 {
   "name": "omp-dispatch",
-  "version": "0.1.40",
+  "version": "0.1.41",
   "description": "Dispatch delivery for Oh My Pi: tickets move along a configurable workflow state machine, with durable local protocol state, isolated seats, source-confirmed effects, and native scheduling.",
   "type": "module",
   "license": "MIT",
