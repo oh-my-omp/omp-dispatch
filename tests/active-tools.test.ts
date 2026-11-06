@@ -25,6 +25,6 @@ test('same tool set yields the same array when only extension registration order
 
 test('builtins keep registry order, others sort by code unit and dedupe',async()=>{
   const {pi,calls}=stub([builtin('write'),builtin('read')]);
-  await applyActiveTools(pi,['read','Z','a','a','write','mcp__x']);
+  await applyActiveTools(pi,['mcp__x','a','write','Z','read','a']);
   expect(calls).toEqual([['write','read','Z','a','mcp__x']]);
 });
