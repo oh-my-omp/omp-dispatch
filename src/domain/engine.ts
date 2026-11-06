@@ -1,5 +1,6 @@
-import type {Action,Agenda,Caller,ClosureGate,ConveneInput,DomainError,Effect,EffectResult,Entry,Facts,MergeCommitStamp,NoteAuthor,ParentStamp,PortError,PortInput,PrSnapshot,PullRequestStamp,Result,Role,Ticket,Workflow} from './model.ts';
+import type {Action,Agenda,Caller,ClosureGate,ConveneInput,DomainError,Effect,EffectResult,Entry,Facts,MergeCommitStamp,NoteAuthor,ParentStamp,PmContext,PortError,PortInput,PrSnapshot,PullRequestStamp,Result,Role,Ticket,WorkerStarted,Workflow} from './model.ts';
 import {bodyHash,canonical,contains,digest,exactClosingBody,nextId,sameRef,sameRepo,sameTarget,targetHead} from './identity.ts';
+import {formatMarker} from '../pm/markers.ts';
 import {validateTopology} from './parse.ts';
 import {ESCALATE,ESCALATED,openVerdicts,pendingRoles,routeTarget,stagePassed,type Branch,type Condition,type Observe,type ParentState,type TicketState} from './workflow.ts';
 
@@ -428,7 +429,21 @@ export function reconcile(state:Agenda,facts:Facts,at:number):void {
   reconcileParent(state,facts,at);
   // An effect that is still only an intent belongs to the state entry that requested it.
   for(const effect of state.effects)if(effect.state.kind==='ready'&&effect.origin&&!currentOrigin(state,effect))effect.state={kind:'cancelled',reason:'The state that requested this effect has been left'};
+  // A non-escalating effect left uncertain is settled by this complete read: confirmed when the source shows it,
+  // failed otherwise. It belongs to no state entry, so its confirmation moves no machine.
+  for(const effect of state.effects){
+    if(effect.state.kind!=='uncertain'||ESCALATES_ON_FAILURE[effect.action.kind])continue;
+    const result=satisfiedResult(state,effect,facts);
+    effect.state=result?{kind:'confirmed',result}:{kind:'failed',startedAt:effect.state.startedAt,error:effect.state.error};
+  }
 }
+
+/**
+ * Whether a failed or uncertain effect of each kind escalates its ticket. PM records (`comment`, `setProjectField`)
+ * are bookkeeping written beside a live seat, so they never escalate the ticket or supersede its seats: an uncertain
+ * one is settled by the next complete read, and a failed one is shown to Main and blocks `finish` until Main resolves it.
+ */
+export const ESCALATES_ON_FAILURE:Readonly<Record<Action['kind'],boolean>>={publishPr:true,merge:true,setIssueState:true,replaceBody:true,createIssue:true,attachChild:true,rerunChecks:true,comment:false,setProjectField:false};
 
 /* ------------------------------------------------------------ effects */
 
@@ -471,6 +486,8 @@ export function effectPrecondition(state:Agenda,effect:Effect,facts:Facts):strin
       const pr=facts.prs.find(pr=>sameRef(pr.ref,action.pr)),attempt=facts.checkAttempts.find(item=>sameRepo(item.repo,action.repo)&&item.workflowRunId===action.workflowRunId);
       return pr?.head===action.head&&attempt?.attempt===action.previousAttempt?null:'Workflow attempt or PR head changed';
     }
+    // PM records have no source precondition: the comment and the field value are confirmed by reading them back.
+    case 'comment':case 'setProjectField':return null;
   }
 }
 export function satisfiedResult(state:Agenda,effect:Effect,facts:Facts):EffectResult|null {
@@ -500,6 +517,11 @@ export function satisfiedResult(state:Agenda,effect:Effect,facts:Facts):EffectRe
       const attempt=facts.checkAttempts.find(item=>sameRepo(item.repo,action.repo)&&item.workflowRunId===action.workflowRunId&&item.head===action.head&&item.attempt>action.previousAttempt);
       return attempt?{kind:'rerun',repo:action.repo,workflowRunId:action.workflowRunId,attempt:attempt.attempt}:null;
     }
+    case 'comment':{
+      const marker=facts.issues.find(issue=>sameRef(issue.ref,action.issue))?.pm?.markers.find(marker=>marker.kind==='impl'&&action.marker.kind==='impl'&&marker.json.session===action.marker.key);
+      return marker?{kind:'commented',issue:action.issue,comment:marker.id}:null;
+    }
+    case 'setProjectField':return facts.issues.find(issue=>sameRef(issue.ref,action.issue))?.pm?.item?.status===action.option?{kind:'projectFieldSet',issue:action.issue,field:action.field,option:action.option}:null;
   }
 }
 /**
@@ -528,6 +550,7 @@ export function confirmEffect(state:Agenda,effect:Effect,result:EffectResult,fac
 export function failEffect(state:Agenda,effect:Effect,error:PortError,uncertain:boolean,at:number):void {
   const startedAt=effect.state.kind==='executing'?effect.state.startedAt:at;
   effect.state={kind:uncertain?'uncertain':'failed',startedAt,error};
+  if(!ESCALATES_ON_FAILURE[effect.action.kind])return;
   const ticket=state.tickets.find(ticket=>ticket.id===effect.ticketId);
   if(ticket)escalateTicket(ticket,`Effect ${effect.id} ${effect.state.kind}: ${error.message}`,at,'escalation');
   else if(state.closure)escalateClosure(state.closure,`Effect ${effect.id}: ${error.message}`);
@@ -545,6 +568,35 @@ export function abandonSeat(state:Agenda,ticketId:string,role:Role,revision:numb
   const closure=state.closure;
   if(closure?.id!==ticketId||closure.revision!==revision||!closureRoles(state).includes(role))return false;
   escalateClosure(closure,`The ${role} seat ended without a handoff: ${reason}`);return true;
+}
+
+/* ------------------------------------------------------------ PM progress */
+
+/**
+ * A work seat's native session has started on its ticket: its implementation issue gets an `impl` marker keyed by
+ * that session, and its Project Status moves to in progress unless the source already shows it. The effects belong
+ * to no state entry, so a seat that hands off before they run does not cancel them.
+ */
+export function workerStarted(state:Agenda,started:WorkerStarted,pm:PmContext,facts:Facts):Result<Agenda,DomainError> {
+  const next=structuredClone(state),ticket=next.tickets.find(ticket=>ticket.id===started.ticketId);
+  if(!ticket)return reject('notFound','Unknown ticket');
+  if(ticket.revision!==started.revision)return reject('staleRevision','The seat revision has been superseded');
+  const definition=ticketDefinition(next.workflow,ticket);
+  if(definition?.kind!=='work'||definition.role!==started.role)return reject('invalidTransition','Only the ticket\u2019s work seat starts its implementation');
+  const marker=formatMarker({kind:'impl',json:{v:1,host:pm.host,pid:pm.pid,agenda:next.id,session:started.sessionId,file:started.sessionFile}});
+  enqueue(next,ticket.id,{kind:'comment',issue:ticket.issue,body:`工人会话 ${started.sessionId} 开始实现本 issue。\n\n${marker}`,marker:{kind:'impl',key:started.sessionId}},null);
+  if(facts.issues.find(issue=>sameRef(issue.ref,ticket.issue))?.pm?.item?.status!==pm.status.inProgress)
+    enqueue(next,ticket.id,{kind:'setProjectField',issue:ticket.issue,field:'status',option:pm.status.inProgress},null);
+  next.version++;return {ok:true,value:next};
+}
+/** Every ticket that `next` newly entered into the final state `Done` gets its Project Status set to done. */
+export function statusOnDone(previous:Agenda,next:Agenda,pm:PmContext):void {
+  if(previous.id!==next.id)return;
+  for(const ticket of next.tickets){
+    if(ticket.state!=='Done'||ticketDefinition(next.workflow,ticket)?.kind!=='final')continue;
+    const before=previous.tickets.find(item=>item.id===ticket.id);
+    if((ticket.visits.Done??0)>(before?.visits.Done??0))enqueue(next,ticket.id,{kind:'setProjectField',issue:ticket.issue,field:'status',option:pm.status.done},null);
+  }
 }
 
 /* ------------------------------------------------------------ operations */

@@ -2,7 +2,9 @@ import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { z, type ZodLikeSchema } from '@oh-my-pi/omptype/zod';
 import * as m from '../domain/model.ts';
-import type { GitHubPort, PrWrite } from './contracts.ts';
+import { logger } from '@oh-my-pi/pi-coding-agent';
+import { parseMarker } from '../pm/markers.ts';
+import type { GitHubPort, PmProjectSource, PrWrite } from './contracts.ts';
 
 // Source schemas deliberately differ from domain schemas. Null/incomplete source data
 // must be rejected before it can become an apparently complete Facts read.
@@ -58,6 +60,10 @@ const issueRead = z.object({ number: positive, repository: repositoryName, body:
   subIssues: connection(sourceRef), lastClose: z.object({ nodes: z.array(lifecycle).max(1) }), lastReopen: z.object({ nodes: z.array(lifecycle).max(1) }),
   closedByPullRequestsReferences: connection(sourceRef),
 });
+// Read only when PM is on: every comment (markers are found by their last line) and the issue's Project items.
+const sourceComment = z.object({ databaseId: positive, body: z.string() });
+const sourceProjectItem = z.object({ id: z.string().min(1), project: z.object({ number: positive, owner: z.object({ login: z.string().min(1) }) }),
+  fieldValueByName: z.object({ __typename: z.literal('ProjectV2ItemFieldSingleSelectValue'), name: z.string().min(1) }).nullable() });
 const graphEnvelope = z.object({ data: z.record(z.string(), z.unknown()).optional(), errors: z.array(z.object({ message: z.string(), type: z.string().optional() })).optional() });
 type HttpResponse = { status: number; headers: ReadonlyMap<string, string>; body: unknown };
 class SourceFailure extends Error {
@@ -117,13 +123,15 @@ const issueFields = `${referenceFields} body updatedAt state ${subIssuesPage(nul
  lastClose:timelineItems(last:1,itemTypes:[CLOSED_EVENT]) { nodes { ... on ClosedEvent { id createdAt } } }
  lastReopen:timelineItems(last:1,itemTypes:[REOPENED_EVENT]) { nodes { ... on ReopenedEvent { id createdAt } } }
  ${closedByPage(null)}`;
-function issueSnapshot(source: z.infer<typeof issueRead>): m.IssueSnapshot {
+const commentsPage = (cursor: string | null) => `comments(first:50${afterClause(cursor)}) { pageInfo { hasNextPage endCursor } nodes { databaseId body } }`;
+const projectItemsPage = (status: string, cursor: string | null) => `projectItems(first:20${afterClause(cursor)}) { pageInfo { hasNextPage endCursor } nodes { id project { number owner { __typename ... on Organization { login } ... on User { login } } } fieldValueByName(name:${quote(status)}) { __typename ... on ProjectV2ItemFieldSingleSelectValue { name } } } }`;
+function issueSnapshot(source: z.infer<typeof issueRead>, pm: m.IssuePm | null): m.IssueSnapshot {
   const closed = source.lastClose.nodes[0], reopened = source.lastReopen.nodes[0];
   return { ref: ref(source), body: source.body, bodyHash: digest(source.body), updatedAt: source.updatedAt,
     state: source.state === 'OPEN' ? 'open' : 'closed',
     lastClose: closed ? { id: closed.id, at: closed.createdAt } : null,
     lastReopen: reopened ? { id: reopened.id, at: reopened.createdAt } : null,
-    children: source.subIssues.nodes.map(ref) };
+    children: source.subIssues.nodes.map(ref), pm };
 }
 function requirements(value: z.infer<typeof sourceBranch>): m.MergeRequirements {
   const required: m.RequiredCheckIdentity[] = [];
@@ -194,9 +202,12 @@ function checks(value: SourcePr, rules: m.MergeRequirements): m.ChecksSnapshot {
   return { kind: 'passing', required: rules.required };
 }
 
-export function createGitHubPort(options: { actor?: string } = {}): GitHubPort {
+/** `pm` names the Project and Status field PM integration reads and writes; null keeps every read and write PM-free. */
+export function createGitHubPort(options: { actor?: string; pm: PmProjectSource | null } = { pm: null }): GitHubPort {
   let blockedUntil = 0;
   const ancestry = new Map<string, 'contains' | 'notContained'>();
+  const pm = options.pm;
+  const issueSelection = pm ? `${issueFields} ${commentsPage(null)} ${projectItemsPage(pm.statusField, null)}` : issueFields;
   async function result<T>(action: () => Promise<T>): Promise<m.Result<T, m.PortError>> {
     try { return { ok: true, value: await action() }; }
     catch (error) { return { ok: false, error: error instanceof SourceFailure ? error.detail : { kind: 'invalidResponse', message: sanitize(error instanceof Error ? error.message : String(error)) } }; }
@@ -230,10 +241,8 @@ export function createGitHubPort(options: { actor?: string } = {}): GitHubPort {
     if (response.status >= 500 || response.status === 408 || response.status === 0) return fail(write ? 'uncertainOutcome' : 'unavailable', message);
     return fail(response.status === 404 ? 'unavailable' : 'precondition', message);
   }
-  async function api(endpoint: string, method: string, payload: unknown, cause: string, allowNotFound = false): Promise<HttpResponse> {
+  async function api(endpoint: string, method: string, payload: unknown, cause: string, allowNotFound = false, write = method !== 'GET' && endpoint !== 'graphql'): Promise<HttpResponse> {
     if (Date.now() < blockedUntil) throw new SourceFailure({ kind: 'rateLimited', message: 'Source rate limit reset has not been reached', resetAt: blockedUntil });
-    const graphql = endpoint === 'graphql';
-    const write = method !== 'GET' && !graphql;
     const args = ['api', '--include', '--method', method, endpoint, '-H', 'Accept: application/vnd.github+json', '-H', 'X-GitHub-Api-Version: 2022-11-28'];
     if (payload !== undefined) args.push('--input', '-');
     const output = await command(args, payload === undefined ? undefined : JSON.stringify(payload), write);
@@ -253,8 +262,9 @@ export function createGitHubPort(options: { actor?: string } = {}): GitHubPort {
     if (raw.trim() && body === null) fail(write ? 'uncertainOutcome' : 'invalidResponse', `${method} ${endpoint}: malformed JSON response`);
     return response;
   }
-  async function graph(query: string, cause: string): Promise<Record<string, unknown>> {
-    const response = await api('graphql', 'POST', { query }, cause);
+  /** `write` marks a mutation: a lost response is an uncertain outcome, not an unavailable read. */
+  async function graph(query: string, cause: string, write = false): Promise<Record<string, unknown>> {
+    const response = await api('graphql', 'POST', { query }, cause, false, write);
     const envelope = decode(graphEnvelope, response.body, 'GraphQL envelope');
     if (envelope.errors?.length) {
       const errors = envelope.errors.map(item => `${item.type ?? 'GraphQL'}: ${item.message}`).join('; ');
@@ -315,6 +325,41 @@ export function createGitHubPort(options: { actor?: string } = {}): GitHubPort {
       });
       source.closedByPullRequestsReferences = { ...source.closedByPullRequestsReferences, nodes };
     }
+  }
+  /** The issue's item in the configured Project, every page of its items drained. */
+  async function projectItem(raw: unknown, project: PmProjectSource, cause: string): Promise<m.IssuePm['item']> {
+    const source = decode(z.object({ ...sourceRefFields, projectItems: connection(sourceProjectItem) }), raw, 'issue project items');
+    const repository = repo(source.repository), anchor = `${repoKey(repository)}#${source.number}`;
+    const items = await drain({
+      label: `${anchor} project items`, cause, first: source.projectItems, anchor,
+      next: after => selection(repository, `issue(number:${source.number}) { number repository { nameWithOwner } ${projectItemsPage(project.statusField, after)} }`),
+      read: data => {
+        const issue = decode(z.object({ repository: z.object({ issue: z.object({ ...sourceRefFields, projectItems: connection(sourceProjectItem) }) }) }), data, 'project items page').repository.issue;
+        return { anchor: `${repoKey(repo(issue.repository))}#${issue.number}`, connection: issue.projectItems };
+      },
+    });
+    const item = items.find(node => node.project.number === project.number && node.project.owner.login.toLowerCase() === project.owner.toLowerCase());
+    return item ? { id: item.id, status: item.fieldValueByName?.name ?? null } : null;
+  }
+  /** The issue's marker comments, every page drained, and its Project item; invalid markers are logged and ignored. */
+  async function issuePm(raw: unknown, project: PmProjectSource, cause: string): Promise<m.IssuePm> {
+    const source = decode(z.object({ ...sourceRefFields, comments: connection(sourceComment) }), raw, 'issue comments');
+    const repository = repo(source.repository), anchor = `${repoKey(repository)}#${source.number}`;
+    const comments = await drain({
+      label: `${anchor} comments`, cause, first: source.comments, anchor,
+      next: after => selection(repository, `issue(number:${source.number}) { number repository { nameWithOwner } ${commentsPage(after)} }`),
+      read: data => {
+        const issue = decode(z.object({ repository: z.object({ issue: z.object({ ...sourceRefFields, comments: connection(sourceComment) }) }) }), data, 'comments page').repository.issue;
+        return { anchor: `${repoKey(repo(issue.repository))}#${issue.number}`, connection: issue.comments };
+      },
+    });
+    const markers: m.IssuePm['markers'] = [];
+    for (const comment of comments) {
+      const read = parseMarker(comment.databaseId, comment.body);
+      if (read.kind === 'marker') markers.push(read.fact);
+      else if (read.kind === 'invalid') logger.warn('Dispatch ignored an invalid PM marker', { issue: anchor, reason: read.reason });
+    }
+    return { markers, item: await projectItem(raw, project, cause) };
   }
   async function completePrConnections(source: SourcePr, cause: string): Promise<void> {
     const repository = repo(source.repository);
@@ -413,11 +458,12 @@ export function createGitHubPort(options: { actor?: string } = {}): GitHubPort {
         for (const item of requested) addBranch(identity, item.name, item.branch, item.name === source.defaultBranchRef.name);
       } });
     }
-    for (const wanted of scope.issues) tasks.push({ query: selection(wanted.repo, `issue(number:${wanted.number}) { ${issueFields} }`), consume: async value => {
-      const item = decode(z.object({ issue: issueRead }), value, 'issue').issue;
+    for (const wanted of scope.issues) tasks.push({ query: selection(wanted.repo, `issue(number:${wanted.number}) { ${issueSelection} }`), consume: async value => {
+      const raw = decode(z.object({ issue: z.unknown() }), value, 'issue').issue;
+      const item = decode(issueRead, raw, 'issue');
       if (refKey(ref(item)) !== refKey(wanted)) fail('invalidResponse', 'Issue identity mismatch');
       await completeIssueConnections(item, cause);
-      issues.push(issueSnapshot(item));
+      issues.push(issueSnapshot(item, pm ? await issuePm(raw, pm, cause) : null));
       for (const linked of item.closedByPullRequestsReferences.nodes) { const pr = ref(linked); wantedPrs.set(refKey(pr), pr); links.push({ issue: ref(item), pr }); }
     } });
     for (const wanted of scope.branches) tasks.push({ query: selection(wanted.repo, `ref(qualifiedName:${quote(`refs/heads/${wanted.name}`)}) { ${branchFields} }`), consume: async value => {
@@ -577,11 +623,12 @@ export function createGitHubPort(options: { actor?: string } = {}): GitHubPort {
     return value;
   }
   async function singleIssue(reference: m.IssueRef, cause: string): Promise<m.IssueSnapshot> {
-    const data = await graph(`query { ${selection(reference.repo, `issue(number:${reference.number}) { ${issueFields} }`)} }`, cause);
-    const source = decode(z.object({ repository: z.object({ issue: issueRead }) }), data, 'issue').repository.issue;
+    const data = await graph(`query { ${selection(reference.repo, `issue(number:${reference.number}) { ${issueSelection} }`)} }`, cause);
+    const raw = decode(z.object({ repository: z.object({ issue: z.unknown() }) }), data, 'issue').repository.issue;
+    const source = decode(issueRead, raw, 'issue');
     if (refKey(ref(source)) !== refKey(reference)) fail('invalidResponse', 'Issue identity mismatch');
     await completeIssueConnections(source, cause);
-    return issueSnapshot(source);
+    return issueSnapshot(source, pm ? await issuePm(raw, pm, cause) : null);
   }
   async function preflightPr(input: PrWrite): Promise<void> {
     const value = await branch(input.headRepo, input.branch, 'publishPreflight');
@@ -592,6 +639,38 @@ export function createGitHubPort(options: { actor?: string } = {}): GitHubPort {
     const data = await graph(`query { ${selection(repository, `ref(qualifiedName:${quote(`refs/heads/${name}`)}) { target { oid } }`)} }`, cause);
     const source = decode(z.object({ repository: z.object({ ref: z.object({ target: z.object({ oid: m.shaSchema }) }).nullable() }) }), data, 'branch head').repository.ref;
     return source ? { kind: 'present', head: source.target.oid } : { kind: 'missing' };
+  }
+  // Project, field and option node ids are looked up by their configured names once per process.
+  let statusIds: { projectId: string; fieldId: string; options: ReadonlyMap<string, string> } | null = null;
+  async function statusField(project: PmProjectSource, cause: string): Promise<NonNullable<typeof statusIds>> {
+    if (statusIds) return statusIds;
+    const fields = `projectV2(number:${project.number}) { id field(name:${quote(project.statusField)}) { __typename ... on ProjectV2SingleSelectField { id options { id name } } } }`;
+    const data = await graph(`query { repositoryOwner(login:${quote(project.owner)}) { __typename ... on Organization { ${fields} } ... on User { ${fields} } } }`, cause);
+    const owner = decode(z.object({ repositoryOwner: z.object({ projectV2: z.object({ id: z.string().min(1),
+      field: z.object({ __typename: z.literal('ProjectV2SingleSelectField'), id: z.string().min(1), options: z.array(z.object({ id: z.string().min(1), name: z.string().min(1) })) }).nullable() }) }).nullable() }), data, 'PM project').repositoryOwner;
+    if (!owner) return fail('precondition', `Project owner ${project.owner} does not exist`);
+    const field = owner.projectV2.field;
+    if (!field) return fail('precondition', `Project ${project.owner}#${project.number} has no field ${project.statusField}`);
+    statusIds = { projectId: owner.projectV2.id, fieldId: field.id, options: new Map(field.options.map(option => [option.name, option.id])) };
+    return statusIds;
+  }
+  /** Adds the issue to the configured Project when it has no item there, then selects `option` on its Status field. */
+  async function setStatus(issue: m.IssueRef, option: string): Promise<null> {
+    if (!pm) return fail('precondition', 'PM integration is off; no Project is configured');
+    const ids = await statusField(pm, 'setProjectField');
+    const optionId = ids.options.get(option);
+    if (!optionId) return fail('precondition', `Project field ${pm.statusField} has no option ${option}`);
+    const data = await graph(`query { ${selection(issue.repo, `issue(number:${issue.number}) { id ${referenceFields} ${projectItemsPage(pm.statusField, null)} }`)} }`, 'setProjectField');
+    const raw = decode(z.object({ repository: z.object({ issue: z.unknown() }) }), data, 'issue').repository.issue;
+    const content = decode(z.object({ id: z.string().min(1), ...sourceRefFields }), raw, 'issue');
+    if (refKey(ref(content)) !== refKey(issue)) fail('invalidResponse', 'Issue identity mismatch');
+    let itemId = (await projectItem(raw, pm, 'setProjectField'))?.id;
+    if (!itemId) {
+      const added = await graph(`mutation { addProjectV2ItemById(input:{projectId:${quote(ids.projectId)},contentId:${quote(content.id)}}) { item { id } } }`, 'setProjectField', true);
+      itemId = decode(z.object({ addProjectV2ItemById: z.object({ item: z.object({ id: z.string().min(1) }) }) }), added, 'added project item').addProjectV2ItemById.item.id;
+    }
+    await graph(`mutation { updateProjectV2ItemFieldValue(input:{projectId:${quote(ids.projectId)},itemId:${quote(itemId)},fieldId:${quote(ids.fieldId)},value:{singleSelectOptionId:${quote(optionId)}}}) { projectV2Item { id } } }`, 'setProjectField', true);
+    return null;
   }
   return {
     facts: (scope, cause) => result(() => collect(scope, cause)),
@@ -673,5 +752,12 @@ export function createGitHubPort(options: { actor?: string } = {}): GitHubPort {
       await api(`${pathRepo(repository)}/actions/runs/${workflowRunId}/rerun-failed-jobs`, 'POST', undefined, 'rerunChecks');
       return null;
     }),
+    comment: (issue, body) => result(async () => {
+      const response = await api(`${pathRepo(issue.repo)}/issues/${issue.number}/comments`, 'POST', { body }, 'comment');
+      const created = z.object({ id: positive }).safeParse(response.body);
+      if (!created.success) return fail('uncertainOutcome', 'Create comment returned success without a valid source identity');
+      return created.data.id;
+    }),
+    setProjectField: (issue, _field, option) => result(() => setStatus(issue, option)),
   };
 }

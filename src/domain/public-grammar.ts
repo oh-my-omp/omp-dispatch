@@ -30,6 +30,10 @@ export function buildPublicGrammar(z: PublicZ) {
     object({kind:z.literal('createIssue'),repo:repoSchema,title:text,body:text}),
     object({kind:z.literal('attachChild'),parent:issueRefSchema,child:issueRefSchema}),
     object({kind:z.literal('rerunChecks'),pr:prRefSchema,repo:repoSchema,workflowRunId:revision,previousAttempt:revision,head:shaSchema}),
+    /** `body` is the whole comment, ending with its marker line; the marker's key field identifies the comment at source. */
+    object({kind:z.literal('comment'),issue:issueRefSchema,body:text,marker:object({kind:z.enum(['impl']),key:text})}),
+    /** `option` is the configured option name of the Project field. */
+    object({kind:z.literal('setProjectField'),issue:issueRefSchema,field:z.literal('status'),option:text}),
   ]);
   const effectResolutionSchema = object({effectId:idSchema,disposition:z.enum(['retry','adopt','cancel'])});
   const resolveSchema = object({op:z.literal('resolve'),ticketId:idSchema,revision,ruling:text,

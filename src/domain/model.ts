@@ -1,4 +1,5 @@
 import { z, type ZodLikeSchema } from '@oh-my-pi/omptype/zod';
+import { markerFactSchema } from '../pm/markers.ts';
 import { buildPublicGrammar } from './public-grammar.ts';
 
 export const {text,ordinal,revision,millisSchema,shaSchema,hashSchema,idSchema,agendaIdSchema,repoSchema,issueRefSchema,prRefSchema,shaRefSchema,targetSchema,roleSchema,entrySchema,conveneSchema,actionSchema,portInputSchema,toolParametersSchema} = buildPublicGrammar(z);
@@ -26,7 +27,10 @@ export type {Workflow};
 export type Action = z.infer<typeof actionSchema>;
 export const lifecycleEventSchema = object({ id: text, at: millisSchema });
 export type LifecycleEvent = z.infer<typeof lifecycleEventSchema>;
-export const issueSnapshotSchema = object({ ref: issueRefSchema, body: z.string(), bodyHash: hashSchema, updatedAt: millisSchema, state: z.enum(['open','closed']), lastClose: lifecycleEventSchema.nullable(), lastReopen: lifecycleEventSchema.nullable(), children: z.array(issueRefSchema) });
+/** What PM integration observes on an issue: its marker comments and its item in the configured Project; null when PM is off. */
+export const issuePmSchema = object({ markers: z.array(markerFactSchema), item: object({ id: text, status: text.nullable() }).nullable() });
+export type IssuePm = z.infer<typeof issuePmSchema>;
+export const issueSnapshotSchema = object({ ref: issueRefSchema, body: z.string(), bodyHash: hashSchema, updatedAt: millisSchema, state: z.enum(['open','closed']), lastClose: lifecycleEventSchema.nullable(), lastReopen: lifecycleEventSchema.nullable(), children: z.array(issueRefSchema), pm: issuePmSchema.nullable() });
 export type IssueSnapshot = z.infer<typeof issueSnapshotSchema>;
 export const requiredCheckIdentitySchema = object({ name: text, source: z.union([object({kind:z.literal('any')}),object({kind:z.literal('app'),id:revision})]) });
 export type RequiredCheckIdentity = z.infer<typeof requiredCheckIdentitySchema>;
@@ -138,6 +142,8 @@ export const effectResultSchema = z.union([
   object({kind:z.literal('created'),issue:issueRefSchema}),
   object({kind:z.literal('attached'),parent:issueRefSchema,child:issueRefSchema}),
   object({kind:z.literal('rerun'),repo:repoSchema,workflowRunId:revision,attempt:revision}),
+  object({kind:z.literal('commented'),issue:issueRefSchema,comment:revision}),
+  object({kind:z.literal('projectFieldSet'),issue:issueRefSchema,field:z.literal('status'),option:text}),
 ]);
 export type EffectResult = z.infer<typeof effectResultSchema>;
 /** `origin` is the state entry that requested the effect; it advances only that entry. Main's resolve actions have none. */
@@ -156,5 +162,9 @@ export const agendaSchema = object({id:agendaIdSchema,version:revision,nextId:re
 export type CoordinatorProcess = Pick<Extract<z.infer<typeof agendaSchema>['run'],{kind:'attached'}>,'pid'|'startedAt'>;
 export type Agenda = Omit<z.infer<typeof agendaSchema>,'workflow'>&{workflow:Workflow};
 export type Caller = {agentId:string;sessionId:string;sessionFile:string|null;kind:'main'}|{agentId:string;sessionId:string;sessionFile:string;kind:'seat';ticketId:string;role:Role;revision:number};
+/** Internal operation from the controller, never part of the public grammar: a work seat's native session has started. */
+export type WorkerStarted = {ticketId:string;revision:number;role:Role;sessionId:string;sessionFile:string};
+/** What the engine needs to record PM progress: this coordinator process and the configured Status option names. */
+export type PmContext = {host:string;pid:number;status:{inProgress:string;done:string}};
 export type DomainError = {kind:'unauthorized'|'invalidTransition'|'staleRevision'|'sourceUnavailable'|'sourceChanged'|'notFound'|'ownershipBlocked'|'invalidTopology'|'agenda_attached';message:string};
 export type ParseError = {path:string;reason:string};

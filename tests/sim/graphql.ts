@@ -39,8 +39,8 @@ function tokenize(source: string): Token[] {
   return tokens;
 }
 
-/** Parses `query { ... }` into its root selection set. */
-export function parseQuery(source: string): Selection[] {
+/** Parses `query { ... }` or `mutation { ... }` into its operation and root selection set. */
+export function parseQuery(source: string): {operation: 'query' | 'mutation'; selections: Selection[]} {
   const tokens = tokenize(source);
   let position = 0;
   const peek = () => tokens[position];
@@ -88,10 +88,11 @@ export function parseQuery(source: string): Selection[] {
     take('}');
     return result;
   }
-  take('query');
+  const operation = take().text;
+  if (operation !== 'query' && operation !== 'mutation') throw new QueryError(`Unsupported operation ${operation}`);
   const root = selections();
   if (position !== tokens.length) throw new QueryError('Trailing tokens after the query');
-  return root;
+  return {operation, selections: root};
 }
 
 function project(node: Node, selected: Selection[], path: string): Record<string, unknown> {
@@ -120,7 +121,8 @@ function shape(value: Value, selected: Selection[] | null, path: string): unknow
   return value;
 }
 
-/** Evaluates a query against the root node. Throws QueryError on anything outside the model. */
-export function evaluate(source: string, root: Node): Record<string, unknown> {
-  return project(root, parseQuery(source), 'query');
+/** Evaluates a query or mutation against its root node. Throws QueryError on anything outside the model. */
+export function evaluate(source: string, roots: {query: Node; mutation: Node}): Record<string, unknown> {
+  const parsed = parseQuery(source);
+  return project(roots[parsed.operation], parsed.selections, parsed.operation);
 }

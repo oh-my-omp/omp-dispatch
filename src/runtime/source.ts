@@ -18,7 +18,7 @@ export function createSourceReader(github:GitHubPort) {
       switch(value.kind){
         case 'publishPr':issue(value.issue);target(value.target);branch(value.headRepo,value.branch);if(value.pr)pr(value.pr);break;
         case 'merge':issue(value.issue);target(value.target);pr(value.pr);break;
-        case 'setIssueState':case 'replaceBody':issue(value.issue);break;
+        case 'setIssueState':case 'replaceBody':case 'comment':case 'setProjectField':issue(value.issue);break;
         case 'createIssue':repo(value.repo);break;
         case 'attachChild':issue(value.parent);issue(value.child);break;
         case 'rerunChecks':pr(value.pr);scope.checkRuns.push({repo:value.repo,runId:value.workflowRunId});break;
@@ -27,7 +27,7 @@ export function createSourceReader(github:GitHubPort) {
     function result(value:EffectResult):void {
       switch(value.kind){
         case 'published':case 'merged':pr(value.pr);break;
-        case 'created':case 'bodyReplaced':case 'issueState':issue(value.issue);break;
+        case 'created':case 'bodyReplaced':case 'issueState':case 'commented':case 'projectFieldSet':issue(value.issue);break;
         case 'attached':issue(value.parent);issue(value.child);break;
         case 'rerun':repo(value.repo);break;
       }

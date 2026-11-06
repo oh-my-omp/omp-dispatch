@@ -3,6 +3,8 @@ import type {Agenda,AgendaId,Caller,CheckAttempt,ClosureGate,CoordinatorProcess,
 
 export type PrWrite = {headRepo:Repo;branch:string;head:Sha;target:Target;title:string;body:string};
 export type IssueWrite = {repo:Repo;title:string;body:string};
+/** The Project PM integration reads and writes: its owner login, number, and the name of its Status field. */
+export type PmProjectSource = {owner:string;number:number;statusField:string};
 export interface GitHubPort {
   facts(scope:SourceScope,cause:string):Promise<Result<Facts,PortError>>;
   contains(repo:Repo,ancestor:Sha,descendant:Sha):Promise<Result<'contains'|'notContained'|'missing',PortError>>;
@@ -20,6 +22,10 @@ export interface GitHubPort {
   editPr(pr:PrRef,input:PrWrite):Promise<Result<null,PortError>>;
   mergePr(pr:PrRef,head:Sha):Promise<Result<null,PortError>>;
   rerunCheck(repo:Repo,workflowRunId:number):Promise<Result<null,PortError>>;
+  /** Posts a comment and returns its id. */
+  comment(issue:IssueRef,body:string):Promise<Result<number,PortError>>;
+  /** Selects the configured option name on the issue's item in the configured Project, adding the item first when missing. */
+  setProjectField(issue:IssueRef,field:'status',option:string):Promise<Result<null,PortError>>;
 }
 export type StateError = {kind:'notFound'|'unsupportedFormat'|'corruptState'|'versionConflict'|'unavailable';message:string};
 /** A workflow that cannot be read or parsed; `source` is the file path the reason refers to. */
@@ -35,7 +41,7 @@ export type FileMetrics = {replaces:number;unchangedReplaces:number};
 export type SeatWorkspace={kind:'fork';sessionFile:string}|{kind:'base';target:Target}|{kind:'commit';repo:Repo;sha:Sha;pull:number|null};
 /** `seat` tells the host whether the seat works (writable, its checkout survives for rework forks) or judges (read-only, blank session, disposable checkout). */
 export type SeatLaunch = {agendaId:string;ticketId:string;revision:number;role:Role;seat:'work'|'judge';agent:string;cwd:string;prompt:string;ticket:Ticket|ClosureGate;workspace:SeatWorkspace};
-export type SeatHandle = {agentId:string;sessionFile:string;jobId:string};
+export type SeatHandle = {agentId:string;sessionId:string;sessionFile:string;jobId:string};
 export type SeatExit = {ticketId:string;role:Role;revision:number};
 export interface HostPort {
   bind(ctx:ExtensionContext):Result<Caller,PortError>;

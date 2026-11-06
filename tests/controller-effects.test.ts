@@ -20,7 +20,7 @@ const workflow=async()=>({ok:true as const,value:defaultWorkflow});
 const repository={owner:'test',name:'dispatch'};
 const issue={repo:repository,number:1};
 const head='1'.repeat(40),base='2'.repeat(40);
-const facts:Facts={viewer:'test',issues:[{ref:issue,body:'Deliver the ticket.',bodyHash:bodyHash('Deliver the ticket.'),updatedAt:1,state:'open',lastClose:null,lastReopen:null,children:[]}],prs:[],links:[],repos:[{repo:repository,defaultBranch:'main',defaultHead:base,bases:[{name:'main',state:{kind:'present',head:base,isDefault:true,rules:{required:[],strict:false,constraints:[]}}}]}],branches:[{repo:repository,name:'feature',state:{kind:'present',head}}],maintenance:[],commits:[],checkAttempts:[],createdIssues:[]};
+const facts:Facts={viewer:'test',issues:[{ref:issue,body:'Deliver the ticket.',bodyHash:bodyHash('Deliver the ticket.'),updatedAt:1,state:'open',lastClose:null,lastReopen:null,children:[],pm:null}],prs:[],links:[],repos:[{repo:repository,defaultBranch:'main',defaultHead:base,bases:[{name:'main',state:{kind:'present',head:base,isDefault:true,rules:{required:[],strict:false,constraints:[]}}}]}],branches:[{repo:repository,name:'feature',state:{kind:'present',head}}],maintenance:[],commits:[],checkAttempts:[],createdIssues:[]};
 function unexpected():never {throw new Error('Unexpected port call');}
 const host:HostPort={agents:async()=>({ok:true,value:null}),bind:unexpected,launch:unexpected,active:()=>false,seated:()=>false,finish:async()=>({ok:true,value:null}),dispose:async()=>{}};
 function success<T>(value:T):Result<T,PortError>{return {ok:true,value};}
@@ -42,12 +42,12 @@ for(const operation of ['publishPr','merge'] as const)test(`an unknown ${operati
   const github:GitHubPort={
     facts:async()=>success(structuredClone(source)),openPrsByHead:async()=>success([]),
     contains:unexpected,branchHead:unexpected,issue:unexpected,pr:unexpected,issuesCreatedSince:unexpected,checkAttempt:unexpected,
-    createIssue:unexpected,addSubIssue:unexpected,editIssueBody:unexpected,setIssueOpen:unexpected,editPr:unexpected,rerunCheck:unexpected,
+    createIssue:unexpected,addSubIssue:unexpected,editIssueBody:unexpected,setIssueOpen:unexpected,editPr:unexpected,rerunCheck:unexpected,comment:unexpected,setProjectField:unexpected,
     createPr:operation==='publishPr'?unknownWrite:unexpected,mergePr:operation==='merge'?unknownWrite:unexpected,
   };
   const errors:unknown[]=[];
   const processes=new ProcessTable();
-  controller=new DispatchController({files,github,host,process:processes.spawn(101,'Sat Nov 7 06:00:00 2026'),cwd:root,workflow,intervalSeconds:3600,onChange:()=>{},onError:error=>errors.push(error)});
+  controller=new DispatchController({files,github,host,process:processes.spawn(101,'Sat Nov 7 06:00:00 2026'),cwd:root,workflow,intervalSeconds:3600,pm:null,onChange:()=>{},onError:error=>errors.push(error)});
   const main:Caller={kind:'main',agentId:'Main',sessionId:'first-main',sessionFile:null};controller.setMain(main);
   try {
     const convened=await controller.execute(main,{op:'convene',parent:null,tickets:[{id:'one',issue,target:{repo:repository,base:'main'},dependsOn:[],adoptPr:operation==='merge'?prRef:null}]});
@@ -75,7 +75,7 @@ for(const operation of ['publishPr','merge'] as const)test(`an unknown ${operati
     expect(failed.tickets[0]?.state).toBe('Escalated');
     if(operation==='publishPr')expect(failed.tickets[0]?.sessions.owner).toBe(owner.sessionFile);
     await controller.shutdown();
-    controller=new DispatchController({files,github,host,process:processes.spawn(102,'Sat Nov 7 06:05:00 2026'),cwd:root,workflow:async()=>{throw new Error('Resume must use the frozen workflow');},intervalSeconds:3600,onChange:()=>{},onError:error=>errors.push(error)});
+    controller=new DispatchController({files,github,host,process:processes.spawn(102,'Sat Nov 7 06:05:00 2026'),cwd:root,workflow:async()=>{throw new Error('Resume must use the frozen workflow');},intervalSeconds:3600,pm:null,onChange:()=>{},onError:error=>errors.push(error)});
     const successor:Caller={kind:'main',agentId:'Main',sessionId:'second-main',sessionFile:null};controller.setMain(successor);
     expect((await controller.execute(successor,{op:'resume',agenda:failed.id})).ok).toBe(true);
     await controller.run();await controller.run();
@@ -95,9 +95,9 @@ test('Main can adopt a source-confirmed external merge below the target head in 
   const github:GitHubPort={
     facts:async scope=>success({...structuredClone(source),prs:source.prs.filter(pr=>scope.prs.some(wanted=>wanted.number===pr.ref.number))}),
     contains:async(_repo,ancestor,descendant)=>{comparisons.push(`${ancestor}:${descendant}`);return success('contains');},
-    openPrsByHead:async()=>success([]),branchHead:unexpected,issue:unexpected,pr:unexpected,issuesCreatedSince:unexpected,checkAttempt:unexpected,createIssue:unexpected,addSubIssue:unexpected,editIssueBody:unexpected,setIssueOpen:unexpected,editPr:unexpected,rerunCheck:unexpected,createPr:unexpected,mergePr:unexpected,
+    openPrsByHead:async()=>success([]),branchHead:unexpected,issue:unexpected,pr:unexpected,issuesCreatedSince:unexpected,checkAttempt:unexpected,createIssue:unexpected,addSubIssue:unexpected,editIssueBody:unexpected,setIssueOpen:unexpected,editPr:unexpected,rerunCheck:unexpected,createPr:unexpected,mergePr:unexpected,comment:unexpected,setProjectField:unexpected,
   };
-  const controller=new DispatchController({files:createAgendaFiles(root),github,host,process:new ProcessTable().spawn(101,'Sat Nov 7 06:00:00 2026'),cwd:root,workflow,intervalSeconds:3600,onChange:()=>{},onError:unexpected});
+  const controller=new DispatchController({files:createAgendaFiles(root),github,host,process:new ProcessTable().spawn(101,'Sat Nov 7 06:00:00 2026'),cwd:root,workflow,intervalSeconds:3600,pm:null,onChange:()=>{},onError:unexpected});
   const main:Caller={kind:'main',agentId:'Main',sessionId:'external-main',sessionFile:null};controller.setMain(main);
   try {
     expect((await controller.execute(main,{op:'convene',parent:null,tickets:[{id:'one',issue,target:{repo:repository,base:'main'},dependsOn:[],adoptPr:null}]})).ok).toBe(true);
@@ -119,9 +119,9 @@ test('convene checks every configured agent and refuses the agenda when one cann
   parent.judges=[{role:'release',agent:'parent-agent',brief:'Release.'}];
   const checked:string[][]=[];
   const refusing:HostPort={...host,agents:async(_cwd,names)=>{checked.push([...names]);return {ok:false,error:{kind:'precondition',message:'Configured seat agent is unavailable: missing-agent'}};}};
-  const github:GitHubPort={facts:unexpected,contains:unexpected,openPrsByHead:unexpected,branchHead:unexpected,issue:unexpected,pr:unexpected,issuesCreatedSince:unexpected,checkAttempt:unexpected,createIssue:unexpected,addSubIssue:unexpected,editIssueBody:unexpected,setIssueOpen:unexpected,editPr:unexpected,rerunCheck:unexpected,createPr:unexpected,mergePr:unexpected};
+  const github:GitHubPort={facts:unexpected,contains:unexpected,openPrsByHead:unexpected,branchHead:unexpected,issue:unexpected,pr:unexpected,issuesCreatedSince:unexpected,checkAttempt:unexpected,createIssue:unexpected,addSubIssue:unexpected,editIssueBody:unexpected,setIssueOpen:unexpected,editPr:unexpected,rerunCheck:unexpected,createPr:unexpected,mergePr:unexpected,comment:unexpected,setProjectField:unexpected};
   const files=createAgendaFiles(root);
-  const controller=new DispatchController({files,github,host:refusing,process:new ProcessTable().spawn(101,'Sat Nov 7 06:00:00 2026'),cwd:root,workflow:async()=>({ok:true,value:custom}),intervalSeconds:3600,onChange:()=>{},onError:unexpected});
+  const controller=new DispatchController({files,github,host:refusing,process:new ProcessTable().spawn(101,'Sat Nov 7 06:00:00 2026'),cwd:root,workflow:async()=>({ok:true,value:custom}),intervalSeconds:3600,pm:null,onChange:()=>{},onError:unexpected});
   const main:Caller={kind:'main',agentId:'Main',sessionId:'agents-main',sessionFile:null};controller.setMain(main);
   try {
     const convened=await controller.execute(main,{op:'convene',parent:null,tickets:[{id:'one',issue,target:{repo:repository,base:'main'},dependsOn:[],adoptPr:null}]});
@@ -133,10 +133,10 @@ test('convene checks every configured agent and refuses the agenda when one cann
 });
 
 // Resume asks the host's process table whether the recorded coordinator still runs: same pid and same start time.
-const quietGithub:GitHubPort={facts:async()=>success(structuredClone(facts)),openPrsByHead:async()=>success([]),contains:unexpected,branchHead:unexpected,issue:unexpected,pr:unexpected,issuesCreatedSince:unexpected,checkAttempt:unexpected,createIssue:unexpected,addSubIssue:unexpected,editIssueBody:unexpected,setIssueOpen:unexpected,editPr:unexpected,rerunCheck:unexpected,createPr:unexpected,mergePr:unexpected};
+const quietGithub:GitHubPort={facts:async()=>success(structuredClone(facts)),openPrsByHead:async()=>success([]),contains:unexpected,branchHead:unexpected,issue:unexpected,pr:unexpected,issuesCreatedSince:unexpected,checkAttempt:unexpected,createIssue:unexpected,addSubIssue:unexpected,editIssueBody:unexpected,setIssueOpen:unexpected,editPr:unexpected,rerunCheck:unexpected,createPr:unexpected,mergePr:unexpected,comment:unexpected,setProjectField:unexpected};
 const ORIGINAL_START='Sat Nov 7 06:00:00 2026',SUCCESSOR_START='Sat Nov 7 06:05:00 2026';
 function coordinator(root:string,processes:ProcessTable,pid:number,startedAt:string):{controller:DispatchController;main:Extract<Caller,{kind:'main'}>} {
-  const controller=new DispatchController({files:createAgendaFiles(root),github:quietGithub,host,process:processes.spawn(pid,startedAt),cwd:root,workflow,intervalSeconds:3600,onChange:()=>{},onError:unexpected});
+  const controller=new DispatchController({files:createAgendaFiles(root),github:quietGithub,host,process:processes.spawn(pid,startedAt),cwd:root,workflow,intervalSeconds:3600,pm:null,onChange:()=>{},onError:unexpected});
   const main={kind:'main' as const,agentId:'Main',sessionId:`main-${pid}`,sessionFile:null};controller.setMain(main);
   return {controller,main};
 }

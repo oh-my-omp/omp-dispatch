@@ -30,7 +30,7 @@ function unexpected():never {throw new Error('Unexpected port call');}
 
 function harness(root:string,workflow:Workflow=defaultWorkflow) {
   const source:Facts={viewer:'test',prs:[],links:[],maintenance:[],commits:[],checkAttempts:[],createdIssues:[],
-    issues:[issueA,issueB].map(ref=>({ref,body:`Deliver ${ref.number}.`,bodyHash:bodyHash(`Deliver ${ref.number}.`),updatedAt:1,state:'open' as const,lastClose:null,lastReopen:null,children:[]})),
+    issues:[issueA,issueB].map(ref=>({ref,body:`Deliver ${ref.number}.`,bodyHash:bodyHash(`Deliver ${ref.number}.`),updatedAt:1,state:'open' as const,lastClose:null,lastReopen:null,children:[],pm:null})),
     repos:[{repo:repository,defaultBranch:'main',defaultHead:BASE,bases:[{name:'main',state:{kind:'present',head:BASE,isDefault:true,rules:{required:[],strict:false,constraints:[]}}}]}],
     branches:[{repo:repository,name:'feature-1',state:{kind:'present',head:HEAD}}]};
   function setBase(head:string):void {
@@ -55,13 +55,13 @@ function harness(root:string,workflow:Workflow=defaultWorkflow) {
       issue.state=open?'open':'closed';issue.lastClose=open?issue.lastClose:{id:`close-${ref.number}`,at:4};
       return success(null);
     },
-    branchHead:unexpected,issue:unexpected,pr:unexpected,issuesCreatedSince:unexpected,checkAttempt:unexpected,createIssue:unexpected,addSubIssue:unexpected,editIssueBody:unexpected,rerunCheck:unexpected,
+    branchHead:unexpected,issue:unexpected,pr:unexpected,issuesCreatedSince:unexpected,checkAttempt:unexpected,createIssue:unexpected,addSubIssue:unexpected,editIssueBody:unexpected,rerunCheck:unexpected,comment:unexpected,setProjectField:unexpected,
   };
   const live=new Map<string,SeatLaunch>(),launches:SeatLaunch[]=[];
   const host:HostPort={agents:async()=>success(null),bind:unexpected,finish:async()=>success(null),dispose:async()=>{},
     active:(ticketId,role)=>live.has(`${ticketId}/${role}`),
     seated:(ticketId,role,revision)=>launches.some(seat=>seat.ticketId===ticketId&&seat.role===role&&seat.revision===revision),
-    launch:async input=>{launches.push(input);live.set(`${input.ticketId}/${input.role}`,input);return success({agentId:`${input.role}-${launches.length}`,sessionFile:join(root,`${input.role}-${launches.length}.jsonl`),jobId:`job-${launches.length}`});},
+    launch:async input=>{launches.push(input);live.set(`${input.ticketId}/${input.role}`,input);return success({agentId:`${input.role}-${launches.length}`,sessionId:`session-${launches.length}`,sessionFile:join(root,`${input.role}-${launches.length}.jsonl`),jobId:`job-${launches.length}`});},
   };
   const attention=new Attention(),wakes:string[][]=[],errors:unknown[]=[];
   let controller:DispatchController|null=null;
@@ -71,7 +71,7 @@ function harness(root:string,workflow:Workflow=defaultWorkflow) {
     const fresh=attention.observe(agenda,host.active);if(fresh.length)wakes.push(fresh);
   }
   const processes=new ProcessTable();
-  controller=new DispatchController({files:createAgendaFiles(root),github,host,process:processes.spawn(101,'Sat Nov 7 06:00:00 2026'),cwd:root,workflow:async()=>({ok:true,value:workflow}),intervalSeconds:3600,onChange:observe,onError:error=>errors.push(error)});
+  controller=new DispatchController({files:createAgendaFiles(root),github,host,process:processes.spawn(101,'Sat Nov 7 06:00:00 2026'),cwd:root,workflow:async()=>({ok:true,value:workflow}),intervalSeconds:3600,pm:null,onChange:observe,onError:error=>errors.push(error)});
   const dispatch=controller;
   const main:Caller={kind:'main',agentId:'Main',sessionId:'main',sessionFile:null};dispatch.setMain(main);
   // run() is the entry the kick timer uses; calling it directly drains effects and relays deterministically.
@@ -260,7 +260,7 @@ test('resume uses the frozen workflow without calling the current workflow loade
   try {
     expect((await h.asMain({op:'convene',parent:null,tickets:[{id:'A',issue:issueA,target,dependsOn:[],adoptPr:null}]})).ok).toBe(true);
     const id=h.controller.snapshot()!.id;await h.controller.shutdown();
-    resumed=new DispatchController({files:createAgendaFiles(root),github:h.github,host:h.host,process:h.processes.spawn(102,'Sat Nov 7 06:05:00 2026'),cwd:root,workflow:async()=>{loads++;throw new Error('Current workflow is unavailable');},intervalSeconds:3600,onChange:()=>{},onError:error=>h.errors.push(error)});
+    resumed=new DispatchController({files:createAgendaFiles(root),github:h.github,host:h.host,process:h.processes.spawn(102,'Sat Nov 7 06:05:00 2026'),cwd:root,workflow:async()=>{loads++;throw new Error('Current workflow is unavailable');},intervalSeconds:3600,pm:null,onChange:()=>{},onError:error=>h.errors.push(error)});
     const main:Caller={kind:'main',agentId:'successor',sessionId:'successor-main',sessionFile:null};resumed.setMain(main);
     expect((await resumed.execute(main,{op:'resume',agenda:id})).ok).toBe(true);
     expect((await resumed.execute(main,{op:'launch',ticketId:'A'})).ok).toBe(true);

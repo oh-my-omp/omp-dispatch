@@ -1,0 +1,4 @@
+guardiansURL: http://127.0.0.1:7410
+defaultTier: simple
+tierHelp: simple 用于单一实现细节的决策；complex 用于跨模块或影响契约的决策。
+resumePrompt: 你的询问已得到答复，答复如下。按答复继续实现本 issue。

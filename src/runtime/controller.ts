@@ -1,6 +1,6 @@
 import {randomUUID} from 'node:crypto';
-import type {Agenda,Caller,DomainError,Effect,EffectResult,Facts,PortError,PortInput,Result,Role,Workflow} from '../domain/model.ts';
-import {abandonSeat,applyOperation,availableRoles,awaitsLaunch,closureRoles,confirmEffect,createAgenda,currentSeat,effectPrecondition,failEffect,reconcile,satisfiedResult,ticketDefinition} from '../domain/engine.ts';
+import type {Agenda,Caller,DomainError,Effect,EffectResult,Facts,PmContext,PortError,PortInput,Result,Role,Workflow} from '../domain/model.ts';
+import {abandonSeat,applyOperation,availableRoles,awaitsLaunch,closureRoles,confirmEffect,createAgenda,currentSeat,effectPrecondition,failEffect,reconcile,satisfiedResult,statusOnDone,ticketDefinition,workerStarted} from '../domain/engine.ts';
 import {canonical,sameRef} from '../domain/identity.ts';
 import {seatBrief} from '../domain/briefs.ts';
 import {parentSeatRoles,ticketSeatRoles,workflowAgents} from '../domain/workflow.ts';
@@ -11,8 +11,11 @@ export type RuntimeError={kind:'domain';error:DomainError}|{kind:'storage';error
 /** Main's view: which tickets it may launch, and which seats the relay currently runs. */
 export type AgendaView={agenda:Agenda;launchable:string[];seated:{ticketId:string;roles:Role[]}[]};
 export type ControllerOutput=AgendaView|{active:string[]}|{ticket:Agenda['tickets'][number]|NonNullable<Agenda['closure']>}|{launched:SeatHandle[]};
-/** `workflow` reads the workflow a new agenda will freeze; an attached agenda never consults it. */
-export type ControllerOptions={files:AgendaFiles;github:GitHubPort;host:HostPort;process:ProcessPort;cwd:string;workflow:()=>Promise<Result<Workflow,WorkflowError>>;intervalSeconds:number;onChange:()=>void;onError:(error:RuntimeError)=>void};
+/**
+ * `workflow` reads the workflow a new agenda will freeze; an attached agenda never consults it.
+ * `pm` turns on PM integration: work seats record their sessions on their issues and Project Status follows delivery.
+ */
+export type ControllerOptions={files:AgendaFiles;github:GitHubPort;host:HostPort;process:ProcessPort;cwd:string;workflow:()=>Promise<Result<Workflow,WorkflowError>>;intervalSeconds:number;pm:PmContext|null;onChange:()=>void;onError:(error:RuntimeError)=>void};
 function domain(kind:DomainError['kind'],message:string):{ok:false;error:RuntimeError}{return {ok:false,error:{kind:'domain',error:{kind,message}}};}
 
 /** The controller is the sole writer of its agenda. GitHub observations are never optimistic writes. */
@@ -55,6 +58,8 @@ export class DispatchController {
   }
   private async save(state:Agenda,expected:number|null):Promise<Result<null,RuntimeError>> {
     if(this.pending)throw new Error('Unresolved durable write must be flushed before a new transition');
+    // Every transition passes here, so a ticket's entry into Done queues its Status write in the same durable save.
+    if(this.options.pm&&this.state)statusOnDone(this.state,state,this.options.pm);
     this.pending={state,expected};return this.flush();
   }
   private view():Result<ControllerOutput,RuntimeError> {
@@ -133,7 +138,7 @@ export class DispatchController {
       const committed=await this.save(changed.value,this.state.version);if(!committed.ok)return committed;
       if(operation.op==='launch'){
         // Launching a ticket seats its current stage at once; later stages follow from the relay.
-        const relayed=await this.relay();if(!relayed.ok)return relayed;
+        const relayed=await this.relay(fresh.value);if(!relayed.ok)return relayed;
         this.kick();return {ok:true,value:{launched:relayed.value}};
       }
       this.kick();
@@ -201,7 +206,7 @@ export class DispatchController {
    * a work seat waits for every seat of its ticket, so a rework fork copies a complete, flushed transcript and owns
    * the checkout alone.
    */
-  private async relay():Promise<Result<SeatHandle[],RuntimeError>> {
+  private async relay(facts:Facts):Promise<Result<SeatHandle[],RuntimeError>> {
     const launched:SeatHandle[]=[],host=this.options.host;
     if(this.closed||this.state?.lifecycle!=='active')return {ok:true,value:launched};
     const due:{ticketId:string;role:Role}[]=[],ticketRoles=ticketSeatRoles(this.state.workflow);
@@ -219,7 +224,16 @@ export class DispatchController {
       // An earlier failed launch may have escalated this ticket.
       const input=this.seatLaunch(ticketId,role);if(!input)continue;
       const result=await host.launch(input);
-      if(result.ok){launched.push(result.value);continue;}
+      if(result.ok){
+        launched.push(result.value);
+        // A work seat's session now exists, so its id and file can be recorded on the ticket's issue.
+        const pm=this.options.pm;
+        if(!pm||input.seat!=='work')continue;
+        const started=workerStarted(this.state,{ticketId,revision:input.revision,role,sessionId:result.value.sessionId,sessionFile:result.value.sessionFile},pm,facts);
+        if(!started.ok){this.options.onError({kind:'domain',error:started.error});continue;}
+        const saved=await this.save(started.value,this.state.version);if(!saved.ok)return saved;
+        continue;
+      }
       this.options.onError({kind:'host',error:result.error});
       // A precondition refusal (a seat already live, a host shutting down) is a race, not a broken seat.
       if(result.error.kind==='precondition')continue;
@@ -236,7 +250,7 @@ export class DispatchController {
       if(this.closed||!this.state||this.state.lifecycle!=='active')return;
       const observed=await this.source.read(this.state,null,'refresh');if(!observed.ok){this.options.onError({kind:'source',error:observed.error});return;}
       const settled=await this.settle(observed.value);if(!settled.ok){this.options.onError(settled.error);return;}
-      const seated=await this.relay();if(!seated.ok){this.options.onError(seated.error);return;}
+      const seated=await this.relay(observed.value);if(!seated.ok){this.options.onError(seated.error);return;}
       const runnable=(effect:Effect):boolean=>{
         if(effect.state.kind!=='ready')return false;
         if(effect.action.kind!=='merge')return true;
@@ -248,7 +262,7 @@ export class DispatchController {
       if(!effect)return;
       const result=await this.drive(effect,observed.value);if(!result.ok){this.options.onError(result.error);return;}
       // A confirmed effect advances the ticket (Reviewing after publish, Verifying after merge); seat its next stage.
-      const advanced=await this.relay();if(!advanced.ok){this.options.onError(advanced.error);return;}
+      const advanced=await this.relay(observed.value);if(!advanced.ok){this.options.onError(advanced.error);return;}
       if(this.state.effects.some(effect=>runnable(effect)||effect.state.kind==='executing'))this.kick();
     });
   }
@@ -301,6 +315,8 @@ export class DispatchController {
       case 'createIssue':{const result=await github.createIssue(action);return result.ok?{ok:true,value:{kind:'created',issue:result.value}}:result;}
       case 'attachChild':{const result=await github.addSubIssue(action.parent,action.child);return result.ok?{ok:true,value:null}:result;}
       case 'rerunChecks':{const result=await github.rerunCheck(action.repo,action.workflowRunId);return result.ok?{ok:true,value:null}:result;}
+      case 'comment':{const result=await github.comment(action.issue,action.body);return result.ok?{ok:true,value:{kind:'commented',issue:action.issue,comment:result.value}}:result;}
+      case 'setProjectField':{const result=await github.setProjectField(action.issue,action.field,action.option);return result.ok?{ok:true,value:null}:result;}
     }
   }
   snapshot():Agenda|null{return this.state?structuredClone(this.state):null;}

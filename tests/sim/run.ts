@@ -6,16 +6,20 @@
 // bare repositories). Run: `bun run sim [scenario...]`.
 
 import {closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, writeFileSync} from 'node:fs';
+import {hostname} from 'node:os';
 import {join, resolve} from 'node:path';
 import {YAML, type Subprocess} from 'bun';
 import {z} from '@oh-my-pi/omptype/zod';
 import type {Agenda} from '../../src/domain/model.ts';
+import {parseMarker} from '../../src/pm/markers.ts';
 import {encodeWorkflow, parseWorkflow, parentSeatRoles, workflowAgents, type ParentState, type TicketState, type Workflow} from '../../src/domain/workflow.ts';
 import {createAgendaFiles} from '../../src/ports/state.ts';
 import {git, remotePath, seedGitHub, withState, type SimState} from './github-sim.ts';
 import type {Expect, Scenario, TicketSpec} from './scenario.ts';
 
 const ROOT = resolve(import.meta.dir, '../..');
+/** The PM configuration PM-on scenarios point `dispatch.pmConfigDir` at; its Project is the simulated `sim` #1. */
+const PM_CONFIG = join(ROOT, 'tests/sim/pm-config');
 const REPO = {owner: 'sim', name: 'arena'};
 const KEY = `${REPO.owner}/${REPO.name}`;
 // Long enough for the abandon scenario's injected provider failure: omp retries it eleven times, about 30 seconds apart.
@@ -47,12 +51,14 @@ const workRoles = (workflow: Workflow) => [...new Set(Object.values(workflow.tic
 
 type Run = {
   name: string; dir: string; github: string; bin: string; work: string; data: string; mainSessions: string;
-  scenarioFile: string; scenario: Scenario; workflow: Workflow; rootIssue: number; proc: Subprocess<'pipe', number, number> | null; starts: number;
+  scenarioFile: string; scenario: Scenario; workflow: Workflow; rootIssue: number; pm: boolean; proc: Subprocess<'pipe', number, number> | null; starts: number;
 };
 type Case = {
   name: string;
   /** The workflow the run's data directory supplies to convene; SIM_WORKFLOW when omitted. */
   workflow?: Workflow;
+  /** PM integration on, with PM_CONFIG; `holdComment` names how many comments pass before the simulated GitHub holds the next response until `markers/release-comment` exists. */
+  pm?: {holdComment: number | null};
   files: Record<string, string>;
   /** Issue titles in creation order; issue N is the Nth entry. The first may list children. */
   issues: {title: string; children?: number[]}[];
@@ -72,7 +78,8 @@ function setup(spec: Case): Run {
   for (const path of [github, join(work, '.omp', 'agents'), markers, data, join(dir, 'main-sessions')]) mkdirSync(path, {recursive: true});
   const bin = seedGitHub(github, {viewer: 'sim', ciDefault: spec.ci.default, ciFailMarker: spec.ci.failMarker,
     repos: [{...REPO, defaultBranch: 'main', requiredChecks: spec.requiredChecks, files: spec.files}],
-    issues: spec.issues.map(issue => ({repo: KEY, title: issue.title, body: `Simulated ${issue.title}.`, ...(issue.children ? {children: issue.children} : {})}))});
+    issues: spec.issues.map(issue => ({repo: KEY, title: issue.title, body: `Simulated ${issue.title}.`, ...(issue.children ? {children: issue.children} : {})})),
+    commentHold: spec.pm?.holdComment != null ? {release: join(markers, 'release-comment'), skip: spec.pm.holdComment} : null});
   const workflow = spec.workflow ?? SIM_WORKFLOW;
   // Every agent the workflow names is a scripted seat; the data directory's workflow.yml is the override convene reads (JSON is YAML).
   for (const agent of workflowAgents(workflow))
@@ -82,7 +89,7 @@ function setup(spec: Case): Run {
   const scenarioFile = join(dir, 'scenario.json');
   writeFileSync(scenarioFile, JSON.stringify(scenario, null, 1));
   writeFileSync(scenario.log, '');
-  return {name: spec.name, dir, github, bin, work, data, mainSessions: join(dir, 'main-sessions'), scenarioFile, scenario, workflow, rootIssue: spec.rootIssue, proc: null, starts: 0};
+  return {name: spec.name, dir, github, bin, work, data, mainSessions: join(dir, 'main-sessions'), scenarioFile, scenario, workflow, rootIssue: spec.rootIssue, pm: spec.pm !== undefined, proc: null, starts: 0};
 }
 
 function start(run: Run): void {
@@ -94,7 +101,8 @@ function start(run: Run): void {
   run.proc = Bun.spawn(['omp', '--mode', 'rpc', '--no-ui', '--no-extensions', '-e', join(ROOT, 'index.ts'), '-e', join(ROOT, 'tests/sim/extension.ts'),
     '--model', 'sim/main', '--session-dir', run.mainSessions, '--dispatch', `${KEY}#${run.rootIssue}`, '--config', config], {
     cwd: run.work, stdin: 'pipe', stdout, stderr,
-    env: {...process.env, PATH: `${run.bin}:${process.env.PATH}`, OMP_DISPATCH_DIR: run.data, OMP_DISPATCH_RECOMPUTE_SECONDS: '1', SIM_SCENARIO: run.scenarioFile},
+    // An empty PM setting keeps PM integration off whatever the operator's environment says.
+    env: {...process.env, PATH: `${run.bin}:${process.env.PATH}`, OMP_DISPATCH_DIR: run.data, OMP_DISPATCH_RECOMPUTE_SECONDS: '1', SIM_SCENARIO: run.scenarioFile, OMP_DISPATCH_PM_CONFIG: run.pm ? PM_CONFIG : ''},
   });
   closeSync(stdout); closeSync(stderr);
 }
@@ -252,6 +260,12 @@ async function commonChecks(run: Run, expectOnMain: Expect, expected?: Record<st
     }
   }
   for (const issue of sim.issues) if (issue.state !== 'CLOSED') failures.push(`issue #${issue.number} is still open`);
+  // Without PM integration, Dispatch leaves no PM record on GitHub.
+  if (!run.pm) {
+    const marked = sim.issues.flatMap(issue => issue.comments.filter(comment => comment.body.includes('<!-- pm:')).map(() => issue.number));
+    if (marked.length) failures.push(`PM is off, but issues ${marked.join(', ')} carry pm: comments`);
+    if (sim.project.items.length) failures.push(`PM is off, but the Project holds items ${JSON.stringify(sim.project.items)}`);
+  }
   for (const [path, content] of Object.entries(expectOnMain)) {
     const actual = gitIn(run, ['show', `main:${path}`]);
     if (actual.code !== 0 || `${actual.stdout}\n` !== content && actual.stdout !== content.trimEnd()) failures.push(`main:${path} is ${JSON.stringify(actual.stdout)}, expected ${JSON.stringify(content)}`);
@@ -261,6 +275,35 @@ async function commonChecks(run: Run, expectOnMain: Expect, expected?: Record<st
 
 function owners(sessions: SeatSession[], ticket: string, role = 'owner'): SeatSession[] {
   return sessions.filter(session => session.role === role && session.ticket === ticket);
+}
+
+/**
+ * PM records of a completed PM-on run: every work seat session has exactly one `impl` marker on its ticket's issue,
+ * naming that session, its file, this host and the agenda, and every ticket's Project Status went In Progress, then Done.
+ */
+async function pmChecks(run: Run): Promise<string[]> {
+  const failures: string[] = [];
+  const state = await agenda(run), sim = simState(run);
+  if (!state) return ['no agenda'];
+  const sessions = seatSessions(run, state.id);
+  for (const spec of run.scenario.tickets) {
+    const issue = sim.issues.find(item => item.number === spec.issue);
+    const impls = (issue?.comments ?? []).flatMap(comment => { const read = parseMarker(comment.id, comment.body); return read.kind === 'marker' && read.fact.kind === 'impl' ? [read.fact.json] : []; });
+    const workers = sessions.filter(session => session.ticket === spec.id && run.scenario.workRoles.includes(session.role));
+    if (!workers.length) failures.push(`${spec.id} has no work seat session`);
+    if (impls.length !== workers.length) failures.push(`${spec.id} has ${impls.length} impl markers for ${workers.length} work sessions`);
+    for (const worker of workers) {
+      const own = impls.filter(impl => impl.session === worker.id);
+      if (own.length !== 1) failures.push(`${spec.id} session ${worker.id} has ${own.length} impl markers`);
+      for (const impl of own) if (impl.file !== worker.file || impl.host !== hostname() || impl.agenda !== state.id) failures.push(`${spec.id} impl marker ${JSON.stringify(impl)} does not name ${worker.file} on ${hostname()} in agenda ${state.id}`);
+    }
+    const item = sim.project.items.find(entry => entry.number === spec.issue);
+    if (JSON.stringify(item?.history) !== JSON.stringify(['In Progress', 'Done'])) failures.push(`${spec.id} Project Status went ${JSON.stringify(item?.history)}, not In Progress then Done`);
+  }
+  if (run.scenario.parent !== null && sim.project.items.some(item => item.number === run.scenario.parent)) failures.push('the parent issue was given a Project Status');
+  const unconfirmed = state.effects.filter(effect => (effect.action.kind === 'comment' || effect.action.kind === 'setProjectField') && effect.state.kind !== 'confirmed');
+  if (unconfirmed.length) failures.push(`PM effects not source-confirmed: ${JSON.stringify(unconfirmed.map(effect => ({id: effect.id, kind: effect.action.kind, state: effect.state.kind})))}`);
+  return failures;
 }
 
 /* ------------------------------------------------------------ scenarios */
@@ -463,6 +506,38 @@ const cases: Case[] = [
     },
   },
   {
+    name: 'restart-pm',
+    pm: {holdComment: 1},
+    files: {'m.txt': '0\n'},
+    issues: [{title: 'M'}],
+    requiredChecks: [], ci: {default: 'SUCCESS', failMarker: null}, rootIssue: 1,
+    scenario: () => ({parent: null, closure: {}, tickets: [
+      // The gates reject round one. The rework Owner's impl comment reaches GitHub, but the process dies before its
+      // response arrives; resume leaves the comment uncertain, and the next GitHub read confirms it without escalating M.
+      ticket('M', 1, [commit({'m.txt': '1\n'}), commit({'m.verify': '1\n'})], {'m.txt': '1\n', 'm.verify': '1\n'}),
+    ]}),
+    async drive(run) {
+      await waitUntil(run, 'the rework impl comment executing', state => state?.effects.filter(effect => effect.action.kind === 'comment')[1]?.state.kind === 'executing');
+      await kill(run);
+      writeFileSync(join(run.dir, 'markers', 'release-comment'), '');
+      start(run);
+      await waitUntil(run, 'completion after resume', completed);
+    },
+    async check(run) {
+      const failures = [...await commonChecks(run, {'m.txt': '1\n', 'm.verify': '1\n'}), ...await pmChecks(run)];
+      const state = await agenda(run);
+      const held = state?.effects.filter(effect => effect.action.kind === 'comment')[1];
+      const m = ticketOf(state, 'M');
+      if (m?.rulings.length || m?.notes.some(note => note.kind === 'escalation')) failures.push(`the interrupted comment escalated M: ${JSON.stringify(m?.notes)}`);
+      if (held?.state.kind !== 'confirmed') failures.push(`the interrupted comment effect is ${held?.state.kind}, not source-confirmed`);
+      if (held?.attempt !== 1) failures.push(`the interrupted comment effect was sent ${held?.attempt} times`);
+      const sessions = owners(seatSessions(run, state!.id), 'M');
+      const posts = readFileSync(join(run.github, 'requests.jsonl'), 'utf8').split('\n').filter(line => line.includes('"method":"POST"') && /\/issues\/\d+\/comments"/.test(line));
+      if (sessions.length !== 3 || posts.length !== sessions.length) failures.push(`${posts.length} comment POSTs for ${sessions.length} Owner sessions; expected one each for the first, the interrupted and the resumed Owner`);
+      return failures;
+    },
+  },
+  {
     name: 'flow',
     // A workflow unlike the built-in one: renamed and added states, a security judge skipped on rework by an entry guard,
     // a security rejection routed to Main instead of rework, a post-merge judge only on a conditional branch, and its own parent machine.
@@ -537,6 +612,9 @@ const cases: Case[] = [
     },
   },
 ];
+// PM-on variant of tree: the same delivery, plus the PM records it must leave.
+const tree = cases.find(item => item.name === 'tree')!;
+cases.push({...tree, name: 'tree-pm', pm: {holdComment: null}, check: async run => [...await tree.check(run), ...await pmChecks(run)]});
 
 /* ------------------------------------------------------------ main */
 
