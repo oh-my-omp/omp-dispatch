@@ -253,6 +253,11 @@ export function createHostPort(options:HostOptions):HostPort {
               if(signal.aborted)throw new Error('Seat was cancelled while descendant work settled');
               await session.settleAsyncWork();
             }
+            if(!handedOff){
+              // A model request that finally fails is recorded on the last assistant message; prompt() returns normally.
+              const last=session.messages.filter(message=>message.role==='assistant').at(-1);
+              if(last?.role==='assistant'&&last.stopReason==='error')error=`the model request failed: ${last.errorMessage||'unknown error'}`;
+            }
             return handedOff?`Ticket ${input.ticketId} handed off.`:`Ticket ${input.ticketId} exited without handoff.`;
           }catch(cause){
             error=cause instanceof Error?cause.message:String(cause);
