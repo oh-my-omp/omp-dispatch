@@ -9,7 +9,7 @@
 import {appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmdirSync, writeFileSync, writeSync} from 'node:fs';
 import {join} from 'node:path';
 import {fileURLToPath} from 'node:url';
-import {z} from '@oh-my-pi/omptype/zod';
+import {z, type ZodLikeSchema} from '@oh-my-pi/omptype/zod';
 import {evaluate, QueryError, type Args, type Node, type Value} from './graphql.ts';
 
 const ciStateSchema = z.enum(['PENDING', 'SUCCESS', 'FAILURE']);
@@ -18,8 +18,11 @@ const repoSchema = z.object({owner: z.string(), name: z.string(), defaultBranch:
 export type SimRepo = z.infer<typeof repoSchema>;
 const eventSchema = z.object({kind: z.enum(['closed', 'reopened']), id: z.string(), createdAt: z.string()});
 type SimEvent = z.infer<typeof eventSchema>;
-const issueSchema = z.object({repo: z.string(), number: z.number(), title: z.string(), body: z.string(), state: z.enum(['OPEN', 'CLOSED']), author: z.string(), createdAt: z.string(), updatedAt: z.string(), events: z.array(eventSchema), children: z.array(z.number())});
+const commentSchema = z.object({id: z.number(), body: z.string(), author: z.string(), createdAt: z.string()});
+const issueSchema = z.object({repo: z.string(), number: z.number(), title: z.string(), body: z.string(), state: z.enum(['OPEN', 'CLOSED']), author: z.string(), createdAt: z.string(), updatedAt: z.string(), events: z.array(eventSchema), children: z.array(z.number()), comments: z.array(commentSchema)});
 type SimIssue = z.infer<typeof issueSchema>;
+/** One item of the simulated Project; `history` lists every Status it was set to, in order. */
+const projectItemSchema = z.object({id: z.string(), repo: z.string(), number: z.number(), status: z.string().nullable(), history: z.array(z.string())});
 const prSchema = z.object({repo: z.string(), number: z.number(), headBranch: z.string(), base: z.string(), title: z.string(), body: z.string(), author: z.string(), state: z.enum(['OPEN', 'CLOSED', 'MERGED']), lastHead: z.string(), mergeCommit: z.string().nullable(), mergedAt: z.string().nullable(), updatedAt: z.string()});
 type SimPr = z.infer<typeof prSchema>;
 const stateSchema = z.object({
@@ -36,6 +39,14 @@ const stateSchema = z.object({
   ciFailMarker: z.string().nullable(),
   /** PR heads GitHub has not finished computing mergeability for. */
   mergeableUnknown: z.array(z.string()),
+  nextComment: z.number(),
+  /** The single Project the simulation serves: `owner`/#`number`, single-select field `Status` with STATUS_OPTIONS. */
+  project: z.object({owner: z.string(), number: z.number(), items: z.array(projectItemSchema)}),
+  /**
+   * Once `skip` comments exist, the next created comment is recorded and its request then blocks until `release`
+   * exists, as if GitHub applied the write and the response was lost with the process that sent it.
+   */
+  commentHold: z.object({release: z.string(), skip: z.number()}).nullable(),
 });
 export type SimState = z.infer<typeof stateSchema>;
 const payloadSchema = z.record(z.string(), z.unknown());
@@ -71,7 +82,7 @@ export function withState<T>(dir: string, work: (state: SimState) => T): T {
 }
 
 /** Creates the remote repositories, issue tree and the `gh` shim; returns the directory to put first on PATH. */
-export function seedGitHub(dir: string, seed: {viewer: string; repos: (SimRepo & {files: Record<string, string>})[]; issues: {repo: string; title: string; body: string; children?: number[]}[]; ciDefault: CiState; ciFailMarker: string | null}): string {
+export function seedGitHub(dir: string, seed: {viewer: string; repos: (SimRepo & {files: Record<string, string>})[]; issues: {repo: string; title: string; body: string; children?: number[]}[]; ciDefault: CiState; ciFailMarker: string | null; commentHold: SimState['commentHold']}): string {
   mkdirSync(join(dir, 'bin'), {recursive: true});
   const repos: Record<string, SimRepo> = {};
   for (const repo of seed.repos) {
@@ -89,8 +100,9 @@ export function seedGitHub(dir: string, seed: {viewer: string; repos: (SimRepo &
     repos[key] = {owner: repo.owner, name: repo.name, defaultBranch: repo.defaultBranch, requiredChecks: repo.requiredChecks};
   }
   const created = now();
-  const state: SimState = {viewer: seed.viewer, nextNumber: 1, nextEvent: 1, repos, issues: [], prs: [], ci: {}, ciDefault: seed.ciDefault, ciFailMarker: seed.ciFailMarker, mergeableUnknown: []};
-  for (const issue of seed.issues) state.issues.push({repo: issue.repo, number: state.nextNumber++, title: issue.title, body: issue.body, state: 'OPEN', author: seed.viewer, createdAt: created, updatedAt: created, events: [], children: issue.children ?? []});
+  const state: SimState = {viewer: seed.viewer, nextNumber: 1, nextEvent: 1, repos, issues: [], prs: [], ci: {}, ciDefault: seed.ciDefault, ciFailMarker: seed.ciFailMarker, mergeableUnknown: [],
+    nextComment: 4_000_000_001, project: {owner: seed.viewer, number: 1, items: []}, commentHold: seed.commentHold};
+  for (const issue of seed.issues) state.issues.push({repo: issue.repo, number: state.nextNumber++, title: issue.title, body: issue.body, state: 'OPEN', author: seed.viewer, createdAt: created, updatedAt: created, events: [], children: issue.children ?? [], comments: []});
   writeFileSync(join(dir, 'state.json'), JSON.stringify(state, null, 1));
   writeFileSync(join(dir, 'requests.jsonl'), '');
   const shim = join(dir, 'bin', 'gh');
@@ -161,6 +173,10 @@ const connection = (nodes: Value[]): Node => node('Connection', {pageInfo: node(
 const login = (name: string) => node('Actor', {login: name});
 const nameNode = (repo: string) => node('Repository', {nameWithOwner: repo});
 const reference = (repo: string, number: number) => node('Reference', {number, repository: nameNode(repo)});
+const PROJECT_ID = 'PVT_sim', STATUS_FIELD = 'Status', STATUS_FIELD_ID = 'PVTSSF_sim_status';
+const STATUS_OPTIONS = ['Todo', 'In Progress', 'Done', 'Superseded'];
+const optionId = (name: string) => `opt_${name.replaceAll(' ', '_')}`;
+const issueNodeId = (repo: string, number: number) => `I_${repo}#${number}`;
 
 function buildRoot(dir: string, state: SimState): Node {
   const repoNode = (key: string): Node => {
@@ -197,7 +213,7 @@ function buildRoot(dir: string, state: SimState): Node {
     const lastOf = (kind: SimEvent['kind']) => issue.events.filter(event => event.kind === kind).slice(-1)
       .map(event => node(kind === 'closed' ? 'ClosedEvent' : 'ReopenedEvent', {id: event.id, createdAt: event.createdAt}));
     return node('Issue', {
-      number, repository: nameNode(key), title: issue.title, body: issue.body, updatedAt: issue.updatedAt, createdAt: issue.createdAt, state: issue.state, author: login(issue.author),
+      id: issueNodeId(key, number), number, repository: nameNode(key), title: issue.title, body: issue.body, updatedAt: issue.updatedAt, createdAt: issue.createdAt, state: issue.state, author: login(issue.author),
       subIssues: () => connection(issue.children.map(child => reference(key, child))),
       timelineItems: args => {
         const types = z.array(z.object({enum: z.string()})).parse(args.itemTypes).map(item => item.enum);
@@ -205,8 +221,17 @@ function buildRoot(dir: string, state: SimState): Node {
         return connection(lastOf(types[0] === 'CLOSED_EVENT' ? 'closed' : 'reopened'));
       },
       closedByPullRequestsReferences: () => connection(state.prs.filter(pr => pr.repo === key && closedIssues(pr).includes(number)).map(pr => reference(key, pr.number))),
-    }, {subIssues: PAGE_ARGS, timelineItems: ['last', 'itemTypes'], closedByPullRequestsReferences: ['first', 'includeClosedPrs', 'after']});
+      comments: () => connection(issue.comments.map(comment => node('IssueComment', {databaseId: comment.id, body: comment.body}))),
+      projectItems: () => connection(state.project.items.filter(item => item.repo === key && item.number === number).map(item => node('ProjectV2Item', {
+        id: item.id, project: projectNode(),
+        fieldValueByName: args => args.name === STATUS_FIELD && item.status !== null ? node('ProjectV2ItemFieldSingleSelectValue', {name: item.status}) : null,
+      }, {fieldValueByName: ['name']}))),
+    }, {subIssues: PAGE_ARGS, timelineItems: ['last', 'itemTypes'], closedByPullRequestsReferences: ['first', 'includeClosedPrs', 'after'], comments: PAGE_ARGS, projectItems: PAGE_ARGS});
   };
+  const projectNode = (): Node => node('ProjectV2', {
+    id: PROJECT_ID, number: state.project.number, owner: node('Organization', {login: state.project.owner}),
+    field: args => args.name === STATUS_FIELD ? node('ProjectV2SingleSelectField', {id: STATUS_FIELD_ID, options: STATUS_OPTIONS.map(name => node('ProjectV2SingleSelectFieldOption', {id: optionId(name), name}))}) : null,
+  }, {field: ['name']});
   const prNode = (key: string, number: number): Node | null => {
     const pr = state.prs.find(item => item.repo === key && item.number === number);
     if (!pr) return null;
@@ -231,7 +256,35 @@ function buildRoot(dir: string, state: SimState): Node {
   return node('Query', {
     viewer: login(state.viewer),
     repository: args => state.repos[`${args.owner}/${args.name}`] ? repoNode(`${args.owner}/${args.name}`) : null,
-  }, {repository: ['owner', 'name']});
+    repositoryOwner: args => args.login === state.project.owner ? node('Organization', {login: state.project.owner, projectV2: args => args.number === state.project.number ? projectNode() : null}, {projectV2: ['number']}) : null,
+  }, {repository: ['owner', 'name'], repositoryOwner: ['login']});
+}
+
+/** Project writes; each input is checked against the one simulated Project so a drifting port query fails loudly. */
+function buildMutation(state: SimState): Node {
+  const input = <T>(schema: ZodLikeSchema<T>, args: Args): T => {
+    const parsed = z.object({input: schema}).strict().safeParse(args);
+    if (!parsed.success) throw new QueryError(`Unsupported mutation input ${JSON.stringify(args)}: ${parsed.error.message}`);
+    return parsed.data.input;
+  };
+  return node('Mutation', {
+    addProjectV2ItemById: args => {
+      const {contentId} = input(z.object({projectId: z.literal(PROJECT_ID), contentId: z.string()}).strict(), args);
+      const issue = state.issues.find(item => issueNodeId(item.repo, item.number) === contentId);
+      if (!issue) throw new QueryError(`Unknown project content ${contentId}`);
+      let item = state.project.items.find(entry => entry.repo === issue.repo && entry.number === issue.number);
+      if (!item) { item = {id: `PVTI_${issue.number}`, repo: issue.repo, number: issue.number, status: null, history: []}; state.project.items.push(item); }
+      return node('AddProjectV2ItemByIdPayload', {item: node('ProjectV2Item', {id: item.id})});
+    },
+    updateProjectV2ItemFieldValue: args => {
+      const fields = input(z.object({projectId: z.literal(PROJECT_ID), itemId: z.string(), fieldId: z.literal(STATUS_FIELD_ID), value: z.object({singleSelectOptionId: z.string()}).strict()}).strict(), args);
+      const item = state.project.items.find(entry => entry.id === fields.itemId);
+      const status = STATUS_OPTIONS.find(name => optionId(name) === fields.value.singleSelectOptionId);
+      if (!item || !status) throw new QueryError(`Unknown project item ${fields.itemId} or option ${fields.value.singleSelectOptionId}`);
+      item.status = status; item.history.push(status);
+      return node('UpdateProjectV2ItemFieldValuePayload', {projectV2Item: node('ProjectV2Item', {id: item.id})});
+    },
+  }, {addProjectV2ItemById: ['input'], updateProjectV2ItemFieldValue: ['input']});
 }
 
 /* ------------------------------------------------------------ REST surface */
@@ -263,7 +316,7 @@ function rest(dir: string, state: SimState, method: string, endpoint: string, pa
     const status = ancestor === descendant ? 'identical' : forward ? 'ahead' : isAncestor(dir, key, descendant, ancestor) ? 'behind' : 'diverged';
     return reply(200, {status, base_commit: {sha: ancestor}, commits: []});
   }
-  const issuePath = /^issues\/(\d+)(\/sub_issues)?$/.exec(rest);
+  const issuePath = /^issues\/(\d+)(\/sub_issues|\/comments)?$/.exec(rest);
   if (issuePath) {
     const issue = state.issues.find(item => item.repo === key && item.number === Number(issuePath[1]));
     if (!issue) return reply(404, {message: 'Not Found'});
@@ -273,11 +326,16 @@ function rest(dir: string, state: SimState, method: string, endpoint: string, pa
       if (typeof payload.body === 'string') { issue.body = payload.body; issue.updatedAt = now(); }
       return reply(200, {number: issue.number});
     }
-    if (method === 'POST' && issuePath[2]) {
+    if (method === 'POST' && issuePath[2] === '/sub_issues') {
       const child = state.issues.find(item => 100_000 + item.number === payload.sub_issue_id);
       if (!child) return reply(422, {message: 'Unknown sub-issue'});
       if (!issue.children.includes(child.number)) issue.children.push(child.number);
       return reply(201, {number: issue.number});
+    }
+    if (method === 'POST' && issuePath[2] === '/comments' && typeof payload.body === 'string') {
+      const comment = {id: state.nextComment++, body: payload.body, author: state.viewer, createdAt: now()};
+      issue.comments.push(comment);
+      return reply(201, {id: comment.id, body: comment.body});
     }
   }
   if (method === 'POST' && rest === 'pulls') {
@@ -352,16 +410,23 @@ async function main(): Promise<number> {
     const endpoint = argv.find((arg, index) => index > 0 && !arg.startsWith('-') && argv[index - 1] !== '--method' && argv[index - 1] !== '-H')!;
     const raw = argv.includes('--input') ? await Bun.stdin.text() : '';
     const payload = raw.trim() ? payloadSchema.parse(JSON.parse(raw)) : {};
-    const answer = withState(dir, state => {
+    const {answer, hold} = withState(dir, state => {
       syncPullRefs(dir, state);
-      if (endpoint === 'graphql') {
-        try { return reply(200, {data: evaluate(String(payload.query), buildRoot(dir, state))}); }
-        catch (error) { if (error instanceof QueryError) return reply(500, {message: `Simulated GitHub cannot answer: ${error.message}`, unhandled: true}); throw error; }
-      }
-      return rest(dir, state, method, endpoint, payload) ?? reply(500, {message: `Simulated GitHub has no route for ${method} ${endpoint}`, unhandled: true});
+      const existing = state.issues.reduce((count, issue) => count + issue.comments.length, 0);
+      const evaluated = (): Reply => {
+        if (endpoint === 'graphql') {
+          try { return reply(200, {data: evaluate(String(payload.query), {query: buildRoot(dir, state), mutation: buildMutation(state)})}); }
+          catch (error) { if (error instanceof QueryError) return reply(500, {message: `Simulated GitHub cannot answer: ${error.message}`, unhandled: true}); throw error; }
+        }
+        return rest(dir, state, method, endpoint, payload) ?? reply(500, {message: `Simulated GitHub has no route for ${method} ${endpoint}`, unhandled: true});
+      };
+      return {answer: evaluated(), hold: state.commentHold?.skip === existing ? state.commentHold : null};
     });
     const unhandled = typeof answer.body === 'object' && answer.body !== null && 'unhandled' in answer.body;
     log({method, endpoint, status: answer.status, ...(unhandled ? {unhandled: true, detail: answer.body} : {}), ...(endpoint === 'graphql' ? {query: payload.query} : {payload})});
+    // The comment is already recorded; its response waits for the driver's release, outside the state lock.
+    if (hold && method === 'POST' && /\/issues\/\d+\/comments$/.test(endpoint) && answer.status === 201)
+      while (!existsSync(hold.release)) await Bun.sleep(100);
     writeSync(1, envelope(answer.status, answer.body));
     return 0;
   }

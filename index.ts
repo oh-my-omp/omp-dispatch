@@ -1,3 +1,4 @@
+import {hostname} from 'node:os';
 import {join,resolve} from 'node:path';
 import {getAgentDir,logger,z,type ExtensionAPI,type ExtensionContext} from '@oh-my-pi/pi-coding-agent';
 import {register} from '@oh-my-pi/pi-coding-agent/config/registry';
@@ -13,6 +14,7 @@ import {createHostPort} from './src/ports/host.ts';
 import {createProcessPort} from './src/ports/process.ts';
 import {configuredWorkflow} from './src/ports/workflow-settings.ts';
 import {tr} from './src/i18n.ts';
+import {loadPmConfig,type PmConfig} from './src/pm/config.ts';
 import {runtimeErrorText} from './src/runtime/error-text.ts';
 import type {HostPort} from './src/ports/contracts.ts';
 import {coordinatorBriefing,parseCoordinatorFlag,type CoordinatorIdentity} from './src/runtime/coordinator.ts';
@@ -22,11 +24,14 @@ const SLOT=Symbol.for('omp-dispatch.runtime.v4');
 type Identity={kind:'absent'}|{kind:'invalid';message:string}|({kind:'coordinator'}&CoordinatorIdentity);
 function requireText(value:unknown):void {if(value!==undefined&&(typeof value!=='string'||!value.trim()))throw new Error(tr('Dispatch setting must be a nonempty string','调度设置必须为非空字符串'));}
 function requireInterval(value:unknown):void {if(value!==undefined&&(typeof value!=='number'||!Number.isSafeInteger(value)||value<1||value>2_147_483))throw new Error(tr('Dispatch recompute interval must be positive whole seconds within the native timer range','调度重算间隔必须为原生定时器范围内的正整数秒'));}
+function requireString(value:unknown):void {if(value!==undefined&&typeof value!=='string')throw new Error(tr('Dispatch setting must be a string','调度设置必须为字符串'));}
 
 /** Main is one native session for the whole process; seats own their own SDK lifetimes. */
 class ProcessRuntime {
   private readonly interval=register({id:'dispatch.recomputeIntervalSeconds',type:'number',default:120,env:'OMP_DISPATCH_RECOMPUTE_SECONDS',validate:requireInterval});
   private readonly directory=register({id:'dispatch.dataDir',type:'string',default:join(getAgentDir(),'omp-dispatch'),env:'OMP_DISPATCH_DIR',validate:requireText});
+  /** The PM configuration repository root; empty leaves PM integration off. */
+  private readonly pmConfigDir=register({id:'dispatch.pmConfigDir',type:'string',default:'',env:'OMP_DISPATCH_PM_CONFIG',validate:requireString});
   private identity:Identity|null=null;
   private binding:{pi:ExtensionAPI;ctx:ExtensionContext}|null=null;
   private controller:DispatchController|null=null;
@@ -47,7 +52,7 @@ class ProcessRuntime {
   }
   /**
    * Main wakes only for a decision still open when its turn ends: a launchable ticket, an Escalated ticket or
-   * closure, or a finished agenda. While Main is busy it sees the agenda through its own calls, so a decision it
+   * closure, a failed PM record write, or a finished agenda. While Main is busy it sees the agenda through its own calls, so a decision it
    * settles within the same turn (launching what convene unlocked, resolving an escalation) never wakes it again.
    */
   private changed(turnEnded=false):void {
@@ -57,7 +62,7 @@ class ProcessRuntime {
     this.deferred=false;
     const fresh=this.attention.observe(agenda,(ticketId,role)=>host.active(ticketId,role));
     if(!fresh.length)return;
-    binding.pi.sendMessage({customType:'dispatch-attention',display:true,content:`Dispatch needs Main: ${fresh.join(', ')}. launch:<ticket> may be launched; escalated:<ticket>:<revision> awaits read and resolve; finish means every ticket and the closure are Done. Call dispatch status for the source-confirmed agenda; this notification is not a ticket snapshot.`},{triggerTurn:true,deliverAs:'nextTurn'});
+    binding.pi.sendMessage({customType:'dispatch-attention',display:true,content:`Dispatch needs Main: ${fresh.join(', ')}. launch:<ticket> may be launched; escalated:<ticket>:<revision> awaits read and resolve; failed:<ticket>:<effect> is a failed PM record write that blocks finish until resolve settles it with retry, adopt or cancel; finish means every ticket and the closure are Done. Call dispatch status for the source-confirmed agenda; this notification is not a ticket snapshot.`},{triggerTurn:true,deliverAs:'nextTurn'});
   }
   mainTurnEnded(ctx:ExtensionContext):void {
     if(this.deferred&&this.binding?.ctx.sessionManager===ctx.sessionManager)this.changed(true);
@@ -68,6 +73,16 @@ class ProcessRuntime {
     if(ctx.agent.id!==MAIN_AGENT_ID||ctx.agent.kind!=='main'||!root||root.sessionManager!==ctx.sessionManager)throw new Error('Dispatch requires the actual native Main');
     this.started=true;this.binding={pi,ctx};
     const directory=resolve(ctx.cwd,this.directory.get(root.settings));
+    const pmDirectory=this.pmConfigDir.get(root.settings).trim();
+    let pm:PmConfig|null=null;
+    if(pmDirectory){
+      const loaded=await loadPmConfig(resolve(ctx.cwd,pmDirectory));
+      if(!loaded.ok){
+        const message=`${tr('Dispatch PM configuration is invalid; the coordinator does not start','调度 PM 配置无效，协调者不启动')}:\n${loaded.error}`;
+        ctx.ui.notify(message,'error');throw new Error(message);
+      }
+      pm=loaded.value;
+    }
     this.host=createHostPort({dataDir:directory,
       ticketRevision:ticketId=>this.controller?.ticketRevision(ticketId)??null,
       execute:async(caller,input)=>{
@@ -81,7 +96,9 @@ class ProcessRuntime {
       },
       onSeatError:(ticketId,message)=>this.report({kind:'host',error:{kind:'unavailable',message:`Ticket ${ticketId} seat: ${message}`}}),
     });
-    this.controller=new DispatchController({files:createAgendaFiles(directory),github:createGitHubPort(),host:this.host,process:createProcessPort(),cwd:ctx.cwd,
+    this.controller=new DispatchController({files:createAgendaFiles(directory),
+      github:createGitHubPort({pm:pm?{owner:pm.repos.pm.project.owner,number:pm.repos.pm.project.number,statusField:pm.project.fields.status.name}:null}),host:this.host,process:createProcessPort(),cwd:ctx.cwd,
+      pm:pm?{host:hostname(),pid:process.pid,status:{inProgress:pm.project.fields.status.options.inProgress,done:pm.project.fields.status.options.done}}:null,
       // Read at each convene: a configured file must exist; otherwise the data directory may override the built-in workflow.
       workflow:()=>configuredWorkflow(ctx.cwd,directory),
       intervalSeconds:this.interval.get(root.settings),onChange:()=>this.changed(),onError:error=>this.report(error)});

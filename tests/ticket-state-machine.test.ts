@@ -78,7 +78,7 @@ function buildFacts(input:{
 }
 
 function issueSnapshot(state:'open'|'closed',lastClose:IssueSnapshot['lastClose'],body=CONTRACT):IssueSnapshot {
-  return {ref:ISSUE,body,bodyHash:sha256(body),updatedAt:1_000,state,lastClose,lastReopen:null,children:[]};
+  return {ref:ISSUE,body,bodyHash:sha256(body),updatedAt:1_000,state,lastClose,lastReopen:null,children:[],pm:null};
 }
 
 function repoSnapshot(head:string):RepoSnapshot {
