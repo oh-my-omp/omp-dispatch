@@ -7,7 +7,7 @@ const runFile=promisify(execFile);
 
 /**
  * Reads start times from `ps -o lstart=`, whose whole-second text names one process together with its pid.
- * The C locale and TZ=UTC0 keep the text the same for every reader on this host; macOS ignores TZ and reports system time.
+ * The C locale and TZ=UTC0 make every reader on this host see the same text for the same process.
  */
 export function createProcessPort():ProcessPort {
   const start=async(pid:number):Promise<Result<ProcessStart,PortError>>=>{
