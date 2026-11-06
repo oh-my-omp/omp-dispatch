@@ -5,7 +5,7 @@
   "type": "module",
   "license": "MIT",
   "keywords": ["pi-package", "pi-extension", "omp"],
-  "files": ["index.ts", "src/", "agents/", "README.md", "LICENSE"],
+  "files": ["index.ts", "active-tools.ts", "src/", "agents/", "README.md", "LICENSE"],
   "bin": {
     "omp-dispatch-launcher": "./src/launcher/cli.ts"
   },
