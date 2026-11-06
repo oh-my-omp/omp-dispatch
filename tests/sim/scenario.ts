@@ -59,6 +59,11 @@ export const scenarioSchema = z.object({
   parentRoles: z.array(z.string()),
   /** The workflow's work roles, played by the scripted Owner. */
   workRoles: z.array(z.string()),
+  /**
+   * A marker Main waits for before it settles a `failed:` decision: it then calls finish, which must be refused, and
+   * resolves the effect with `retry`. Without it Main leaves `failed:` decisions alone.
+   */
+  retryFailed: z.string().optional(),
   /** JSON lines of every scripted model call, for the driver's assertions. */
   log: z.string(),
 });

@@ -43,10 +43,12 @@ const stateSchema = z.object({
   /** The single Project the simulation serves: `owner`/#`number`, single-select field `Status` with STATUS_OPTIONS. */
   project: z.object({owner: z.string(), number: z.number(), items: z.array(projectItemSchema)}),
   /**
-   * Once `skip` comments exist, the next created comment is recorded and its request then blocks until `release`
-   * exists, as if GitHub applied the write and the response was lost with the process that sent it.
+   * Once `skip` comments exist, the next comment request takes this single-shot hold: it touches `arrived` and waits
+   * for `release`. `afterWrite` records the comment first, as if GitHub applied the write and the response was lost
+   * with the process that sent it; `beforeWrite` records it only on release, as a request still in flight that
+   * reaches GitHub after its sender died.
    */
-  commentHold: z.object({release: z.string(), skip: z.number()}).nullable(),
+  commentHold: z.object({skip: z.number(), at: z.enum(['beforeWrite', 'afterWrite']), arrived: z.string(), release: z.string()}).nullable(),
 });
 export type SimState = z.infer<typeof stateSchema>;
 const payloadSchema = z.record(z.string(), z.unknown());
@@ -410,23 +412,30 @@ async function main(): Promise<number> {
     const endpoint = argv.find((arg, index) => index > 0 && !arg.startsWith('-') && argv[index - 1] !== '--method' && argv[index - 1] !== '-H')!;
     const raw = argv.includes('--input') ? await Bun.stdin.text() : '';
     const payload = raw.trim() ? payloadSchema.parse(JSON.parse(raw)) : {};
-    const {answer, hold} = withState(dir, state => {
+    const commentPost = method === 'POST' && /\/issues\/\d+\/comments$/.test(endpoint);
+    // The hold is taken once, by the comment request that finds `skip` comments recorded.
+    const hold = commentPost ? withState(dir, state => {
+      const taken = state.commentHold?.skip === state.issues.reduce((count, issue) => count + issue.comments.length, 0) ? state.commentHold : null;
+      if (taken) state.commentHold = null;
+      return taken;
+    }) : null;
+    // Outside the state lock: the driver observes `arrived`, kills the sender, and only then releases.
+    const held = async (taken: NonNullable<SimState['commentHold']>) => {
+      writeFileSync(taken.arrived, '');
+      while (!existsSync(taken.release)) await Bun.sleep(100);
+    };
+    if (hold?.at === 'beforeWrite') await held(hold);
+    const answer = withState(dir, state => {
       syncPullRefs(dir, state);
-      const existing = state.issues.reduce((count, issue) => count + issue.comments.length, 0);
-      const evaluated = (): Reply => {
-        if (endpoint === 'graphql') {
-          try { return reply(200, {data: evaluate(String(payload.query), {query: buildRoot(dir, state), mutation: buildMutation(state)})}); }
-          catch (error) { if (error instanceof QueryError) return reply(500, {message: `Simulated GitHub cannot answer: ${error.message}`, unhandled: true}); throw error; }
-        }
-        return rest(dir, state, method, endpoint, payload) ?? reply(500, {message: `Simulated GitHub has no route for ${method} ${endpoint}`, unhandled: true});
-      };
-      return {answer: evaluated(), hold: state.commentHold?.skip === existing ? state.commentHold : null};
+      if (endpoint === 'graphql') {
+        try { return reply(200, {data: evaluate(String(payload.query), {query: buildRoot(dir, state), mutation: buildMutation(state)})}); }
+        catch (error) { if (error instanceof QueryError) return reply(500, {message: `Simulated GitHub cannot answer: ${error.message}`, unhandled: true}); throw error; }
+      }
+      return rest(dir, state, method, endpoint, payload) ?? reply(500, {message: `Simulated GitHub has no route for ${method} ${endpoint}`, unhandled: true});
     });
     const unhandled = typeof answer.body === 'object' && answer.body !== null && 'unhandled' in answer.body;
     log({method, endpoint, status: answer.status, ...(unhandled ? {unhandled: true, detail: answer.body} : {}), ...(endpoint === 'graphql' ? {query: payload.query} : {payload})});
-    // The comment is already recorded; its response waits for the driver's release, outside the state lock.
-    if (hold && method === 'POST' && /\/issues\/\d+\/comments$/.test(endpoint) && answer.status === 201)
-      while (!existsSync(hold.release)) await Bun.sleep(100);
+    if (hold?.at === 'afterWrite') await held(hold);
     writeSync(1, envelope(answer.status, answer.body));
     return 0;
   }
