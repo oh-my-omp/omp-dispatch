@@ -2,6 +2,7 @@ import {join,resolve} from 'node:path';
 import {getAgentDir,logger,z,type ExtensionAPI,type ExtensionContext} from '@oh-my-pi/pi-coding-agent';
 import {register} from '@oh-my-pi/pi-coding-agent/config/registry';
 import {AgentRegistry,MAIN_AGENT_ID} from '@oh-my-pi/pi-coding-agent/registry/agent-registry';
+import {applyActiveTools} from './active-tools.ts';
 import {launcherCommand} from './src/launcher/commands.ts';
 import {buildPublicGrammar} from './src/domain/public-grammar.ts';
 import {parseToolParameters} from './src/domain/parse.ts';
@@ -85,7 +86,7 @@ class ProcessRuntime {
       intervalSeconds:this.interval.get(root.settings),onChange:()=>this.changed(),onError:error=>this.report(error)});
     const caller=this.host.bind(ctx);if(!caller.ok||caller.value.kind!=='main')throw new Error('Cannot bind Main to the coordinator');
     this.controller.setMain(caller.value);
-    await pi.setActiveTools([...new Set([...pi.getActiveTools(),'dispatch'])]);
+    await applyActiveTools(pi,[...pi.getActiveTools(),'dispatch']);
     const saved=await this.controller.startup(caller.value);
     if(!saved.ok)this.report(saved.error);
     const agenda=saved.ok&&'active' in saved.value?(saved.value.active.length?`active: ${saved.value.active.join(', ')}`:'no saved active agenda'):JSON.stringify(saved);
