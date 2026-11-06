@@ -21,7 +21,7 @@ let callCounter = 0;
 type Message = Context['messages'][number];
 type Step = {call: {name: string; args: Record<string, unknown>}} | {text: string};
 type Played = {op: string | null; result: string};
-/** The `{ok, value}` envelope the roundtable tool returns, with the few fields the script branches on. */
+/** The `{ok, value}` envelope the dispatch tool returns, with the few fields the script branches on. */
 const replySchema = z.object({ok: z.boolean(), value: z.object({
   launchable: z.array(z.string()).optional(),
   ticket: z.object({state: z.string(), revision: z.number(), rulings: z.array(z.unknown())}).optional(),
@@ -84,7 +84,7 @@ function* startPlan(trigger: string): MainPlan {
 }
 
 function* attentionPlan(trigger: string): MainPlan {
-  const keys = /Roundtable needs Main: (.*?)\. launch:/.exec(trigger)?.[1]?.split(', ') ?? [];
+  const keys = /Dispatch needs Main: (.*?)\. launch:/.exec(trigger)?.[1]?.split(', ') ?? [];
   for (const key of keys) {
     const [kind = '', id = ''] = key.split(':');
     if (kind === 'launch') yield {input: {op: 'launch', ticketId: id}};
@@ -99,19 +99,19 @@ function* attentionPlan(trigger: string): MainPlan {
 }
 
 function mainStep(messages: Message[]): {step: Step; note: string} {
-  const index = lastUser(messages, /persistent Roundtable Main coordinator|Roundtable needs Main:/);
+  const index = lastUser(messages, /persistent Dispatch Main coordinator|Dispatch needs Main:/);
   if (index < 0) return {step: {text: 'Nothing for Main to decide.'}, note: 'no trigger'};
   const trigger = text(messages[index]!);
-  const plan = /Roundtable needs Main:/.test(trigger) ? attentionPlan(trigger) : startPlan(trigger);
-  const history = played(messages, index + 1, 'roundtable');
+  const plan = /Dispatch needs Main:/.test(trigger) ? attentionPlan(trigger) : startPlan(trigger);
+  const history = played(messages, index + 1, 'dispatch');
   let next = plan.next(parseReply(''));
   for (const item of history) {
     if (next.done) break;
     next = plan.next(parseReply(item.result));
   }
   // The note names the notification and its position, so the driver can group one turn's calls per notification.
-  const note = `${index}:${/Roundtable needs Main: (.*?)\. launch:/.exec(trigger)?.[1] ?? 'start'}`;
-  return next.done ? {step: {text: 'Waiting for the next roundtable decision.'}, note} : {step: {call: {name: 'roundtable', args: next.value}}, note};
+  const note = `${index}:${/Dispatch needs Main: (.*?)\. launch:/.exec(trigger)?.[1] ?? 'start'}`;
+  return next.done ? {step: {text: 'Waiting for the next dispatch decision.'}, note} : {step: {call: {name: 'dispatch', args: next.value}}, note};
 }
 
 /* ------------------------------------------------------------------ seats */
@@ -153,20 +153,20 @@ function ownerStep(messages: Message[], spec: TicketSpec, brief: string): {step:
   const ticket = ticketOf(brief);
   const revision = continued ? Number(continued[1]) : ticket.revision;
   // Handoffs before the latest prompt: a forked rework session inherits its predecessor's accepted handoffs.
-  const handoffs = played(messages.slice(0, latest), 0, 'roundtable').filter(item => (item.op === 'submit' || item.op === 'escalate') && parseReply(item.result).ok).length;
+  const handoffs = played(messages.slice(0, latest), 0, 'dispatch').filter(item => (item.op === 'submit' || item.op === 'escalate') && parseReply(item.result).ok).length;
   const abandoned = continued ? 0 : (ticket.notes ?? []).filter(note => JSON.stringify(note).includes('ended without a handoff')).length;
   const round = handoffs + abandoned;
   const owner: OwnerRound = spec.owner[Math.min(round, spec.owner.length - 1)]!;
   const step = messages.slice(latest + 1).filter(message => message.role === 'assistant').length;
   const note = `round ${round} step ${step} revision ${revision}`;
   if (owner.kind === 'quit') return {step: {text: 'I cannot finish this ticket.'}, note};
-  if (owner.kind === 'escalate') return {step: step === 0 ? {call: {name: 'roundtable', args: {input: {op: 'escalate', ticketId: spec.id, revision, kind: owner.escalation, reason: owner.reason}}}} : {text: 'Escalated.'}, note};
+  if (owner.kind === 'escalate') return {step: step === 0 ? {call: {name: 'dispatch', args: {input: {op: 'escalate', ticketId: spec.id, revision, kind: owner.escalation, reason: owner.reason}}}} : {text: 'Escalated.'}, note};
   const bash = played(messages, latest + 1, 'bash');
   if (step === 0) return {step: {call: {name: 'bash', args: {command: commitScript(spec, owner.write, owner.remove ?? [], `round ${round}`)}}}, note};
   if (step === 1) {
     const head = [...(bash[0]?.result ?? '').matchAll(/\b([0-9a-f]{40})\b/g)].at(-1)?.[1];
     if (!head) return {step: {text: `Commit failed: ${bash[0]?.result ?? 'no output'}`}, note};
-    return {step: {call: {name: 'roundtable', args: {input: {op: 'submit', ticketId: spec.id, revision, branch: `sim-${spec.id}`, head, title: `Sim ${spec.id}`, body: `Closes #${spec.issue}`}}}}, note};
+    return {step: {call: {name: 'dispatch', args: {input: {op: 'submit', ticketId: spec.id, revision, branch: `sim-${spec.id}`, head, title: `Sim ${spec.id}`, body: `Closes #${spec.issue}`}}}}, note};
   }
   if (step === 2 && owner.after?.kind === 'block') return {step: {call: {name: 'bash', args: {command: `while [ ! -f ${quote(owner.after.marker)} ]; do sleep 0.2; done`, timeout: 0}}}, note};
   if (step === 2 && owner.after?.kind === 'push') return {step: {call: {name: 'bash', args: {command: `while [ ! -f ${quote(owner.after.waitFor)} ]; do sleep 0.2; done\n${commitScript(spec, owner.after.write, [], `round ${round} follow-up`)}`, timeout: 0}}}, note};
@@ -182,7 +182,7 @@ function gateStep(messages: Message[], role: string, ticketId: string, brief: st
   if (step === 0) return {step: {call: {name: 'bash', args: {command: inspect(expect, hold), timeout: 0}}}, note: 'inspect'};
   if (step === 1) {
     const judged = verdict(expect, played(messages, 0, 'bash')[0]?.result ?? '');
-    return {step: {call: {name: 'roundtable', args: {input: {op: 'verdict', ticketId, revision: ticket.revision, role, ok: judged.ok, note: judged.note}}}}, note: judged.note};
+    return {step: {call: {name: 'dispatch', args: {input: {op: 'verdict', ticketId, revision: ticket.revision, role, ok: judged.ok, note: judged.note}}}}, note: judged.note};
   }
   return {step: {text: 'Verdict recorded.'}, note: 'done'};
 }
@@ -196,7 +196,7 @@ function respond(model: Model<Api>, context: Context, options?: SimpleStreamOpti
   if (model.id === 'main') decided = mainStep(messages);
   else {
     const brief = text(messages[messages.findIndex(message => message.role === 'user')]!);
-    const seat = /You are the ([\w-]+) seat for roundtable ticket (\S+?)\. /.exec(brief);
+    const seat = /You are the ([\w-]+) seat for dispatch ticket (\S+?)\. /.exec(brief);
     if (!seat) throw new Error(`Seat brief not recognised: ${brief.slice(0, 200)}`);
     const [role, ticketId] = [seat[1]!, seat[2]!];
     who = {kind: 'seat', role, ticket: ticketId};

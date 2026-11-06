@@ -55,7 +55,7 @@ export function createHostPort(options:HostOptions):HostPort {
     const discovery=await discoverAgents(cwd,undefined,parent.effectiveExtensionRoots);
     const agent=getAgent([...discovery.agents,...parent.getSessionAgents()],name);
     if(!agent||cfgTaskDisabledAgents.get(parent.settings).includes(name))throw new Error(`Configured seat agent is unavailable: ${name}`);
-    if(agent.blocking)throw new Error(`Roundtable requires a nonblocking seat agent: ${name}`);
+    if(agent.blocking)throw new Error(`Dispatch requires a nonblocking seat agent: ${name}`);
     return agent;
   }
   /**
@@ -77,7 +77,7 @@ export function createHostPort(options:HostOptions):HostPort {
       if(spec.kind==='base')commit=await git(['-C',bare,'rev-parse','--verify',`refs/remotes/origin/${spec.target.base}^{commit}`]);
       else {
         // A fork PR head lives only under the base repository's pull ref, not its branches.
-        if(spec.pull!==null)await git(['-C',bare,'fetch','--quiet','origin',`+refs/pull/${spec.pull}/head:refs/roundtable/pull/${spec.pull}`]);
+        if(spec.pull!==null)await git(['-C',bare,'fetch','--quiet','origin',`+refs/pull/${spec.pull}/head:refs/dispatch/pull/${spec.pull}`]);
         commit=spec.sha;
       }
       const tree={bare,path:join(worktreesDir,agendaId,seatId)};
@@ -117,8 +117,8 @@ export function createHostPort(options:HostOptions):HostPort {
       const fork=input.workspace.kind==='fork'?input.workspace.sessionFile:null;
       try {
         const parent=main();
-        if(!parent.asyncJobManager)throw new Error('Roundtable requires the native async job manager');
-        if(parent.getPlanModeState()?.enabled)throw new Error('Roundtable seats require an executing Main');
+        if(!parent.asyncJobManager)throw new Error('Dispatch requires the native async job manager');
+        if(parent.getPlanModeState()?.enabled)throw new Error('Dispatch seats require an executing Main');
         const agent=await seatAgent(parent,input.cwd,input.agent);
         const sessionDir=join(sessionsDir,input.agendaId);
         await mkdir(sessionDir,{recursive:true,mode:0o700});
@@ -139,8 +139,8 @@ export function createHostPort(options:HostOptions):HostPort {
         const sessionFile=manager.getSessionFile();if(!sessionFile)throw new Error('Native seat session must be persistent');
         let inheritedContract:unknown,previousHandoff:unknown;
         for(const entry of manager.getEntries())if(entry.type==='custom'){
-          if(entry.customType==='roundtable-session-contract')inheritedContract=entry.data;
-          if(entry.customType==='roundtable-handoff')previousHandoff=entry.data;
+          if(entry.customType==='dispatch-session-contract')inheritedContract=entry.data;
+          if(entry.customType==='dispatch-handoff')previousHandoff=entry.data;
         }
         const savedContract=contractSchema.safeParse(inheritedContract);
         if(fork&&!savedContract.success)throw new Error('Owner session is missing its original prompt/tool contract');
@@ -149,7 +149,7 @@ export function createHostPort(options:HostOptions):HostPort {
         let handedOff=false;
         const caller:Caller={kind:'seat',agentId:id,sessionId:manager.getSessionId(),sessionFile,ticketId:input.ticketId,revision:input.revision,role:input.role};
         const nativeManager=manager;
-        const tool:ToolDefinition={name:'roundtable',label:tr('Roundtable','圆桌'),description:'Read or hand off only your bound ticket. A successful submit/verdict/escalate ends this seat.',parameters:buildPublicGrammar(z).toolParametersSchema,
+        const tool:ToolDefinition={name:'dispatch',label:tr('Dispatch','调度'),description:'Read or hand off only your bound ticket. A successful submit/verdict/escalate ends this seat.',parameters:buildPublicGrammar(z).toolParametersSchema,
             async execute(_id,params){
               if(handedOff)return {content:[{type:'text',text:'This seat has already handed off.'}],details:null,isError:true};
               const current=registry.get(id);
@@ -160,14 +160,14 @@ export function createHostPort(options:HostOptions):HostPort {
               if(response.ok&&['submit','verdict','escalate'].includes(parsed.value.input.op)){
                 handedOff=true;
                 if(input.seat==='work'&&'ticket' in response.value&&'sessions' in response.value.ticket){
-                  nativeManager.appendCustomEntry('roundtable-handoff',{ticketId:input.ticketId,notes:response.value.ticket.notes.length,rulings:response.value.ticket.rulings.length});
+                  nativeManager.appendCustomEntry('dispatch-handoff',{ticketId:input.ticketId,notes:response.value.ticket.notes.length,rulings:response.value.ticket.rulings.length});
                 }
               }
               return {content:[{type:'text',text:JSON.stringify(response)}],details:response,isError:!response.ok};
             },
         };
         // A seat is a full native session: Main's prepared extensions and extension roots, the workspace's settings,
-        // custom tools and MCP, and delegation per its agent definition. Only the bound roundtable tool is added.
+        // custom tools and MCP, and delegation per its agent definition. Only the bound dispatch tool is added.
         const settings=(await parent.settings.cloneForCwd(workspace)).overlay({
           // Seats run headless: the ticket launch is the authorization boundary and no UI can answer approvals.
           'tools.approvalMode':'yolo',
@@ -175,7 +175,7 @@ export function createHostPort(options:HostOptions):HostPort {
           'compaction.midTurnEnabled':true,
         });
         const spawns=agent.spawns===undefined||agent.spawns==='*'?'*':agent.spawns.join(',');
-        const agentTools=agent.tools&&[...new Set([...agent.tools,'task','wait','roundtable'])];
+        const agentTools=agent.tools&&[...new Set([...agent.tools,'task','wait','dispatch'])];
         const override=cfgTaskAgentModelOverrides.get(settings)[input.agent];
         const modelPattern=parent.model?`${parent.model.provider}/${parent.model.id}`:undefined;
         const modelSelection=resolveAgentModelSelection({settings,
@@ -186,8 +186,8 @@ export function createHostPort(options:HostOptions):HostPort {
         const cacheKey=manager.getHeader()?.providerPromptCacheKey??manager.getHeader()?.id;
         // Main's MCP manager is shared like a native subagent's; its tools follow reloads through proxies.
         const mcpManager=MCPManager.instance();
-        mcpFollower=mcpManager?followMCPTools(mcpManager,new Set(['roundtable'])):undefined;
-        const mcpTools=mcpManager?createMCPProxyTools(mcpManager).filter(proxy=>proxy.name!=='roundtable'):[];
+        mcpFollower=mcpManager?followMCPTools(mcpManager,new Set(['dispatch'])):undefined;
+        const mcpTools=mcpManager?createMCPProxyTools(mcpManager).filter(proxy=>proxy.name!=='dispatch'):[];
         const created=await createAgentSession({cwd:workspace,sessionManager:manager,authStorage:parent.modelRegistry.authStorage,modelRegistry:parent.modelRegistry,
           credentialSourceSessionId:parent.sessionManager.getSessionId(),settings,
           ...(!fork&&modelSelection.patterns?{modelPattern:modelSelection.patterns}:{}),
@@ -196,7 +196,7 @@ export function createHostPort(options:HostOptions):HostPort {
             ?{systemPrompt:savedContract.data.systemPrompt,toolNames:savedContract.data.tools,mountedToolNames:savedContract.data.mountedTools}
             :{appendSystemPrompt:agent.systemPrompt,...(agentTools?{toolNames:agentTools}:{})}),
           // The SDK registers custom tools after extension tools, so this bound tool replaces the inactive
-          // roundtable tool the extension itself registers inside the seat.
+          // dispatch tool the extension itself registers inside the seat.
           customTools:[tool],enableMCP:true,
           ...(mcpManager?{mcpManager,...(mcpTools.length?{mcpTools}:{})}:{}),
           // An empty list would bind no extensions and prune Main's extension-provided model sources.
@@ -216,18 +216,18 @@ export function createHostPort(options:HostOptions):HostPort {
         while(extensionSends.length)await Promise.all(extensionSends.splice(0));
         // Extensions settle the active set on session_start (omp-unified-exec replaces bash with exec_command).
         const tools=created.session.getEnabledToolNames();
-        if(!tools.includes('roundtable'))throw new Error('Seat session did not enable its roundtable tool');
+        if(!tools.includes('dispatch'))throw new Error('Seat session did not enable its dispatch tool');
         if(fork){
           // Like a native fork, the rework seat must not inherit its predecessor's finished todo list.
           created.session.setTodoPhases([]);
           manager.appendCustomEntry(USER_TODO_EDIT_CUSTOM_TYPE,{phases:[]});
         }else{
           // The base prompt (before any per-turn extension rewrite) and tool presentation a rework fork restores for an identical prefix.
-          manager.appendCustomEntry('roundtable-session-contract',{systemPrompt:created.session.systemPrompt,tools,mountedTools:created.session.getMountedXdevToolNames()});
+          manager.appendCustomEntry('dispatch-session-contract',{systemPrompt:created.session.systemPrompt,tools,mountedTools:created.session.getMountedXdevToolNames()});
           manager.appendSessionInit({systemPrompt:created.session.systemPrompt,task:input.prompt,tools,agent:agent.name,readOnly:input.seat!=='work',spawns});
         }
         const prompt=fork&&handoff?.success
-          ? `Continue ticket ${input.ticketId} at revision ${input.revision}. Only the incremental handoff follows. Call roundtable read if the current contract or PR is needed.\n${JSON.stringify({notes:input.ticket.notes.slice(handoff.data.notes),rulings:input.ticket.rulings.slice(handoff.data.rulings)})}`
+          ? `Continue ticket ${input.ticketId} at revision ${input.revision}. Only the incremental handoff follows. Call dispatch read if the current contract or PR is needed.\n${JSON.stringify({notes:input.ticket.notes.slice(handoff.data.notes),rulings:input.ticket.rulings.slice(handoff.data.rulings)})}`
           : input.prompt;
         // A work seat's checkout outlives the seat for rework forks until finish; a judge checkout ends with its seat.
         const session=created.session,disposable=input.seat==='work'?null:tree;
@@ -237,7 +237,7 @@ export function createHostPort(options:HostOptions):HostPort {
         const unsubscribe=session.subscribe(event=>{
           if(event.type!=='tool_execution_end'||handedOff)return;
           const revision=options.ticketRevision(input.ticketId);
-          if(revision!==null&&revision!==input.revision)session.agent.abort('Roundtable seat revision was superseded');
+          if(revision!==null&&revision!==input.revision)session.agent.abort('Dispatch seat revision was superseded');
         });
         const completion=Promise.withResolvers<void>();
         seat.done=completion.promise;

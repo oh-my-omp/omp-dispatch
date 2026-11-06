@@ -1,4 +1,4 @@
-// State-flow simulation of omp-roundtable. Each scenario runs the real `omp`
+// State-flow simulation of omp-dispatch. Each scenario runs the real `omp`
 // binary in RPC mode with the real extension (index.ts), the real controller,
 // host, git worktrees, native sessions and forks. Only two things are
 // simulated: the model (tests/sim/extension.ts plays Main and every seat) and
@@ -66,7 +66,7 @@ type Case = {
 /* ------------------------------------------------------------ process */
 
 function setup(spec: Case): Run {
-  const dir = mkdtempSync(`/tmp/rt-sim-${spec.name}-`);
+  const dir = mkdtempSync(`/tmp/dispatch-sim-${spec.name}-`);
   const github = join(dir, 'github'), work = join(dir, 'work'), markers = join(dir, 'markers'), data = join(dir, 'data');
   for (const path of [github, join(work, '.omp', 'agents'), markers, data, join(dir, 'main-sessions')]) mkdirSync(path, {recursive: true});
   const bin = seedGitHub(github, {viewer: 'sim', ciDefault: spec.ci.default, ciFailMarker: spec.ci.failMarker,
@@ -75,7 +75,7 @@ function setup(spec: Case): Run {
   const workflow = spec.workflow ?? SIM_WORKFLOW;
   // Every agent the workflow names is a scripted seat; the data directory's workflow.yml is the override convene reads (JSON is YAML).
   for (const agent of workflowAgents(workflow))
-    writeFileSync(join(work, '.omp', 'agents', `${agent}.md`), `---\nname: ${agent}\ndescription: Scripted roundtable seat for the state-flow simulation\nmodel: sim/seat\n---\n\nFollow the roundtable brief.\n`);
+    writeFileSync(join(work, '.omp', 'agents', `${agent}.md`), `---\nname: ${agent}\ndescription: Scripted dispatch seat for the state-flow simulation\nmodel: sim/seat\n---\n\nFollow the dispatch brief.\n`);
   writeFileSync(join(data, 'workflow.yml'), JSON.stringify(encodeWorkflow(workflow), null, 1));
   const scenario: Scenario = {name: spec.name, repo: REPO, log: join(dir, 'model.jsonl'), parentRoles: parentSeatRoles(workflow), workRoles: workRoles(workflow), ...spec.scenario(markers)};
   const scenarioFile = join(dir, 'scenario.json');
@@ -88,9 +88,9 @@ function start(run: Run): void {
   run.starts++;
   const stdout = openSync(join(run.dir, `omp-${run.starts}.stdout.jsonl`), 'a'), stderr = openSync(join(run.dir, `omp-${run.starts}.stderr.log`), 'a');
   run.proc = Bun.spawn(['omp', '--mode', 'rpc', '--no-ui', '--no-extensions', '-e', join(ROOT, 'index.ts'), '-e', join(ROOT, 'tests/sim/extension.ts'),
-    '--model', 'sim/main', '--session-dir', run.mainSessions, '--roundtable', `${KEY}#${run.rootIssue}`], {
+    '--model', 'sim/main', '--session-dir', run.mainSessions, '--dispatch', `${KEY}#${run.rootIssue}`], {
     cwd: run.work, stdin: 'pipe', stdout, stderr,
-    env: {...process.env, PATH: `${run.bin}:${process.env.PATH}`, OMP_ROUNDTABLE_DIR: run.data, OMP_ROUNDTABLE_RECOMPUTE_SECONDS: '1', SIM_SCENARIO: run.scenarioFile},
+    env: {...process.env, PATH: `${run.bin}:${process.env.PATH}`, OMP_DISPATCH_DIR: run.data, OMP_DISPATCH_RECOMPUTE_SECONDS: '1', SIM_SCENARIO: run.scenarioFile},
   });
   closeSync(stdout); closeSync(stderr);
 }
@@ -144,9 +144,9 @@ function modelLog(run: Run): LogEntry[] {
   return readFileSync(run.scenario.log, 'utf8').split('\n').filter(Boolean).map(line => logSchema.parse(JSON.parse(line)));
 }
 
-/** The roundtable input of a logged tool call, or null for text and other tools. */
-function roundtableInput(entry: LogEntry): z.infer<typeof inputSchema>['input'] | null {
-  if (entry.step.name !== 'roundtable') return null;
+/** The dispatch input of a logged tool call, or null for text and other tools. */
+function dispatchInput(entry: LogEntry): z.infer<typeof inputSchema>['input'] | null {
+  if (entry.step.name !== 'dispatch') return null;
   const parsed = inputSchema.safeParse(entry.step.args);
   return parsed.success ? parsed.data.input : null;
 }
@@ -161,7 +161,7 @@ function seatSessions(run: Run, agendaId: string): SeatSession[] {
     const raw = readFileSync(join(dir, name), 'utf8');
     const lines = raw.split('\n').filter(Boolean).map(line => sessionLineSchema.parse(JSON.parse(line)));
     const header = lines.find(line => line.type === 'session');
-    const seat = /You are the ([\w-]+) seat for roundtable ticket (\S+?)\. /.exec(raw);
+    const seat = /You are the ([\w-]+) seat for dispatch ticket (\S+?)\. /.exec(raw);
     return {file: join(dir, name), id: typeof header?.id === 'string' ? header.id : '', parent: typeof header?.parentSession === 'string' ? header.parentSession : null,
       role: seat?.[1] ?? '?', ticket: seat?.[2] ?? '?', lines};
   });
@@ -170,7 +170,7 @@ function seatSessions(run: Run, agendaId: string): SeatSession[] {
 const callSchema = z.object({type: z.literal('toolCall'), id: z.string(), name: z.string(), arguments: z.object({input: z.object({op: z.string(), note: z.string().optional()}).passthrough()}).passthrough()}).passthrough();
 const messageLineSchema = z.object({message: z.object({role: z.string(), content: z.unknown(), toolCallId: z.string().optional()}).passthrough()}).passthrough();
 
-/** Verdicts a gate seat actually submitted and the roundtable accepted, read from the seat transcripts. */
+/** Verdicts a gate seat actually submitted and the dispatch tool accepted, read from the seat transcripts. */
 function acceptedVerdicts(sessions: SeatSession[]): {ticket: string; role: string; note: string}[] {
   const out: {ticket: string; role: string; note: string}[] = [];
   for (const session of sessions) {
@@ -179,7 +179,7 @@ function acceptedVerdicts(sessions: SeatSession[]): {ticket: string; role: strin
       if (message.role !== 'assistant' || !Array.isArray(message.content)) continue;
       for (const block of message.content) {
         const call = callSchema.safeParse(block);
-        if (!call.success || call.data.name !== 'roundtable' || call.data.arguments.input.op !== 'verdict') continue;
+        if (!call.success || call.data.name !== 'dispatch' || call.data.arguments.input.op !== 'verdict') continue;
         const result = messages.find(item => item.role === 'toolResult' && item.toolCallId === call.data.id);
         if (result && JSON.stringify(result.content).includes('\\"ok\\":true')) out.push({ticket: session.ticket, role: session.role, note: call.data.arguments.input.note ?? ''});
       }
@@ -201,8 +201,8 @@ async function commonChecks(run: Run, expectOnMain: Expect, expected?: Record<st
   const unhandled = readFileSync(join(run.github, 'requests.jsonl'), 'utf8').split('\n').filter(line => line.includes('"unhandled":true'));
   if (unhandled.length) failures.push(`simulated GitHub got ${unhandled.length} unmodelled requests, first: ${unhandled[0]!.slice(0, 400)}`);
   const log = modelLog(run);
-  // Main puts every ticket on the table exactly once and never names a later stage.
-  const launches = log.filter(entry => entry.kind === 'main').map(roundtableInput).filter(input => input?.op === 'launch');
+  // Main launches every ticket exactly once and never names a later stage.
+  const launches = log.filter(entry => entry.kind === 'main').map(dispatchInput).filter(input => input?.op === 'launch');
   for (const ticket of run.scenario.tickets) {
     const count = launches.filter(input => input?.ticketId === ticket.id).length;
     if (count !== 1) failures.push(`Main launched ${ticket.id} ${count} times`);
@@ -218,7 +218,7 @@ async function commonChecks(run: Run, expectOnMain: Expect, expected?: Record<st
       if (key.startsWith('launch:') && launched.has(key.slice(7))) failures.push(`Main was woken for ${key} after launching it`);
       if (key.startsWith('escalated:') && resolved.has(key.slice(10))) failures.push(`Main was woken for ${key} after resolving it`);
     }
-    for (const input of entries.map(roundtableInput)) {
+    for (const input of entries.map(dispatchInput)) {
       if (input?.op === 'launch' && input.ticketId) launched.add(input.ticketId);
       if (input?.op === 'resolve' && input.ticketId) resolved.add(`${input.ticketId}:${input.revision}`);
     }
@@ -301,11 +301,11 @@ const cases: Case[] = [
         if (reset(first) || !reset(second)) failures.push(`${id} rework Owner did not reset its inherited todo list`);
       }
       for (const gate of sessions.filter(session => session.role !== 'owner')) if (gate.parent) failures.push(`${gate.ticket} ${gate.role} session inherited history`);
-      // Every seat is a full native session: it may delegate and holds its bound roundtable tool.
+      // Every seat is a full native session: it may delegate and holds its bound dispatch tool.
       for (const session of sessions) {
         const init = session.lines.find(line => line.type === 'session_init');
         const tools = Array.isArray(init?.tools) ? init.tools : [];
-        for (const name of ['task', 'roundtable']) if (!tools.includes(name)) failures.push(`${session.ticket} ${session.role} seat lacks ${name}: ${JSON.stringify(tools)}`);
+        for (const name of ['task', 'dispatch']) if (!tools.includes(name)) failures.push(`${session.ticket} ${session.role} seat lacks ${name}: ${JSON.stringify(tools)}`);
         if (init?.spawns !== '*') failures.push(`${session.ticket} ${session.role} seat spawns ${JSON.stringify(init?.spawns)}, not "*"`);
       }
       if (ticketOf(state, 'E')?.terminal?.kind !== 'noCode') failures.push('E did not finish as noCode');
@@ -429,7 +429,7 @@ const cases: Case[] = [
     },
     async check(run) {
       const failures = await commonChecks(run, {'k.txt': '1\n', 'k.verify': '1\n'});
-      if (!modelLog(run).some(entry => entry.kind === 'main' && roundtableInput(entry)?.op === 'resume')) failures.push('Main did not resume the saved agenda');
+      if (!modelLog(run).some(entry => entry.kind === 'main' && dispatchInput(entry)?.op === 'resume')) failures.push('Main did not resume the saved agenda');
       const state = await agenda(run);
       const sessions = seatSessions(run, state!.id);
       if (sessions.some(session => session.role === 'audit')) failures.push('the resumed agenda seated a role from the rewritten workflow file');

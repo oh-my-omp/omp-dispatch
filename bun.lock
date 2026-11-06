@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "omp-roundtable",
+      "name": "omp-dispatch",
       "dependencies": {
         "@oh-my-pi/omptype": "^18.12.6",
       },

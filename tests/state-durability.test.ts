@@ -20,7 +20,7 @@ function agenda():Agenda {
 
 describe('durable ticket agenda files',()=>{
   test('exact retries retain their version; conflicting writes and old envelopes are rejected',async()=>{
-    const root=await mkdtemp(join(tmpdir(),'roundtable-state-'));
+    const root=await mkdtemp(join(tmpdir(),'dispatch-state-'));
     try {
       const files=createAgendaFiles(root),state=agenda();
       expect(await files.save(null,state)).toEqual({ok:true,value:null});
@@ -40,7 +40,7 @@ describe('durable ticket agenda files',()=>{
   });
 
   test('saving fsyncs the owned directory without opening ancestor directories',async()=>{
-    const root=await mkdtemp(join(tmpdir(),'roundtable-fsync-'));
+    const root=await mkdtemp(join(tmpdir(),'dispatch-fsync-'));
     try {
       const driver=join(root,'trace.ts'),source=resolve('src/ports/state.ts');
       await writeFile(driver,`import {syncBuiltinESMExports} from 'node:module';

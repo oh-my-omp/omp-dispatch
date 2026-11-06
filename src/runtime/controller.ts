@@ -8,7 +8,7 @@ import type {AgendaFiles,GitHubPort,HostPort,SeatExit,SeatHandle,SeatLaunch,Seat
 import {createSourceReader,type SourceReceipt} from './source.ts';
 
 export type RuntimeError={kind:'domain';error:DomainError}|{kind:'storage';error:StateError}|{kind:'source'|'host';error:PortError}|{kind:'workflow';error:WorkflowError};
-/** Main's view: which tickets it may put on the table, and which seats the relay currently runs. */
+/** Main's view: which tickets it may launch, and which seats the relay currently runs. */
 export type AgendaView={agenda:Agenda;launchable:string[];seated:{ticketId:string;roles:Role[]}[]};
 export type ControllerOutput=AgendaView|{active:string[]}|{ticket:Agenda['tickets'][number]|NonNullable<Agenda['closure']>}|{launched:SeatHandle[]};
 /** `workflow` reads the workflow a new agenda will freeze; an attached agenda never consults it. */
@@ -16,7 +16,7 @@ export type ControllerOptions={files:AgendaFiles;github:GitHubPort;host:HostPort
 function domain(kind:DomainError['kind'],message:string):{ok:false;error:RuntimeError}{return {ok:false,error:{kind:'domain',error:{kind,message}}};}
 
 /** The controller is the sole writer of its agenda. GitHub observations are never optimistic writes. */
-export class RoundtableController {
+export class DispatchController {
   readonly runId=randomUUID();
   private readonly source;
   private state:Agenda|null=null;
@@ -124,7 +124,7 @@ export class RoundtableController {
       }
       const committed=await this.save(changed.value,this.state.version);if(!committed.ok)return committed;
       if(operation.op==='launch'){
-        // Putting a ticket on the table seats its current stage at once; later stages follow from the relay.
+        // Launching a ticket seats its current stage at once; later stages follow from the relay.
         const relayed=await this.relay();if(!relayed.ok)return relayed;
         this.kick();return {ok:true,value:{launched:relayed.value}};
       }

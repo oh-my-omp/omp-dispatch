@@ -5,7 +5,7 @@ import {join} from 'node:path';
 import type {Caller,Facts,PortError,PrSnapshot,Result,Role,Workflow} from '../src/domain/model.ts';
 import type {GitHubPort,HostPort,PrWrite,SeatLaunch} from '../src/ports/contracts.ts';
 import {createAgendaFiles} from '../src/ports/state.ts';
-import {RoundtableController} from '../src/runtime/controller.ts';
+import {DispatchController} from '../src/runtime/controller.ts';
 import {Attention} from '../src/runtime/attention.ts';
 import {bodyHash} from '../src/domain/identity.ts';
 import {YAML} from 'bun';
@@ -18,12 +18,12 @@ const defaultWorkflow=parsedWorkflow.value;
 // A fake host and a mutable GitHub source drive the real controller, so these tests observe which seats the
 // relay starts, at which exact commit, and when Main is woken. Native sessions and git live in the host port.
 
-const repository={owner:'test',name:'roundtable'};
+const repository={owner:'test',name:'dispatch'};
 const target={repo:repository,base:'main'};
 const BASE='a'.repeat(40),HEAD='b'.repeat(40),REWORK='c'.repeat(40),MERGE='d'.repeat(40);
 const issueA={repo:repository,number:1},issueB={repo:repository,number:2};
 const prRef={repo:repository,number:10};
-const closes=(number:number)=>`Closes test/roundtable#${number}`;
+const closes=(number:number)=>`Closes test/dispatch#${number}`;
 function success<T>(value:T):Result<T,PortError>{return {ok:true,value};}
 function unexpected():never {throw new Error('Unexpected port call');}
 
@@ -63,36 +63,36 @@ function harness(root:string,workflow:Workflow=defaultWorkflow) {
     launch:async input=>{launches.push(input);live.set(`${input.ticketId}/${input.role}`,input);return success({agentId:`${input.role}-${launches.length}`,sessionFile:join(root,`${input.role}-${launches.length}.jsonl`),jobId:`job-${launches.length}`});},
   };
   const attention=new Attention(),wakes:string[][]=[],errors:unknown[]=[];
-  let controller:RoundtableController|null=null;
+  let controller:DispatchController|null=null;
   // Mirrors ProcessRuntime.changed: every durable change and every Main call is observed.
   function observe():void {
     const agenda=controller?.snapshot();if(!agenda)return;
     const fresh=attention.observe(agenda,host.active);if(fresh.length)wakes.push(fresh);
   }
-  controller=new RoundtableController({files:createAgendaFiles(root),github,host,cwd:root,workflow:async()=>({ok:true,value:workflow}),intervalSeconds:3600,onChange:observe,onError:error=>errors.push(error)});
-  const roundtable=controller;
-  const main:Caller={kind:'main',agentId:'Main',sessionId:'main',sessionFile:null};roundtable.setMain(main);
+  controller=new DispatchController({files:createAgendaFiles(root),github,host,cwd:root,workflow:async()=>({ok:true,value:workflow}),intervalSeconds:3600,onChange:observe,onError:error=>errors.push(error)});
+  const dispatch=controller;
+  const main:Caller={kind:'main',agentId:'Main',sessionId:'main',sessionFile:null};dispatch.setMain(main);
   // run() is the entry the kick timer uses; calling it directly drains effects and relays deterministically.
-  async function drain():Promise<void> {for(let round=0;round<4;round++)await roundtable.run();}
+  async function drain():Promise<void> {for(let round=0;round<4;round++)await dispatch.run();}
   return {
-    source,setBase,launches,wakes,errors,github,host,controller:roundtable,
-    async asMain(input:Parameters<RoundtableController['execute']>[1]) {const result=await roundtable.execute(main,input);observe();return result;},
-    async asSeat(ticketId:string,role:Role,input:Parameters<RoundtableController['execute']>[1]) {
+    source,setBase,launches,wakes,errors,github,host,controller:dispatch,
+    async asMain(input:Parameters<DispatchController['execute']>[1]) {const result=await dispatch.execute(main,input);observe();return result;},
+    async asSeat(ticketId:string,role:Role,input:Parameters<DispatchController['execute']>[1]) {
       const seat=live.get(`${ticketId}/${role}`);if(!seat)throw new Error(`No live ${role} seat for ${ticketId}`);
       const caller:Caller={kind:'seat',agentId:`${role}-agent`,sessionId:`${role}-session`,sessionFile:join(root,`${ticketId}-${role}-${seat.revision}.jsonl`),ticketId,role,revision:seat.revision};
-      return roundtable.execute(caller,input);
+      return dispatch.execute(caller,input);
     },
     exit(ticketId:string,role:Role,handedOff:boolean,error:string|null=null):void {
       const seat=live.get(`${ticketId}/${role}`);if(!seat)throw new Error(`No live ${role} seat for ${ticketId}`);
-      live.delete(`${ticketId}/${role}`);roundtable.seatExited({ticketId,role,revision:seat.revision},handedOff,error);observe();
+      live.delete(`${ticketId}/${role}`);dispatch.seatExited({ticketId,role,revision:seat.revision},handedOff,error);observe();
     },
-    revision(id:string):number {return roundtable.snapshot()!.tickets.find(ticket=>ticket.id===id)!.revision;},
+    revision(id:string):number {return dispatch.snapshot()!.tickets.find(ticket=>ticket.id===id)!.revision;},
     drain,
   };
 }
 
 test('one launch per ticket: the relay seats every later stage at its exact commit and wakes Main only for decisions',async()=>{
-  const root=await mkdtemp(join(tmpdir(),'roundtable-relay-'));
+  const root=await mkdtemp(join(tmpdir(),'dispatch-relay-'));
   const h=harness(root);
   try {
     expect((await h.asMain({op:'convene',parent:null,tickets:[
@@ -101,7 +101,7 @@ test('one launch per ticket: the relay seats every later stage at its exact comm
     ]})).ok).toBe(true);
     expect(h.wakes).toEqual([['launch:A']]);
 
-    // A named role must be one the ticket's current stage offers; a rejected launch leaves the ticket off the table.
+    // A named role must be one the ticket's current stage offers; a rejected launch leaves the ticket unlaunched.
     expect(await h.asMain({op:'launch',ticketId:'A',role:'review'})).toMatchObject({ok:false,error:{error:{kind:'invalidTransition'}}});
     expect(h.launches).toHaveLength(0);
     const launched=await h.asMain({op:'launch',ticketId:'A',role:'owner'});
@@ -130,7 +130,7 @@ test('one launch per ticket: the relay seats every later stage at its exact comm
     h.exit('A','review',true);
     await h.drain();
     expect(h.launches).toHaveLength(3);
-    h.exit('A','accept',false,'Roundtable seat revision was superseded');
+    h.exit('A','accept',false,'Dispatch seat revision was superseded');
     await h.drain();
     expect(h.launches[3]).toMatchObject({role:'owner',revision:5,workspace:{kind:'fork',sessionFile:join(root,'A-owner-1.jsonl')}});
     expect(h.controller.snapshot()!.tickets[0]!.state).toBe('Coding');
@@ -172,7 +172,7 @@ test('one launch per ticket: the relay seats every later stage at its exact comm
 });
 
 test('a seat that exits without a handoff escalates its current revision instead of being relaunched',async()=>{
-  const root=await mkdtemp(join(tmpdir(),'roundtable-abandon-'));
+  const root=await mkdtemp(join(tmpdir(),'dispatch-abandon-'));
   const h=harness(root);
   try {
     expect((await h.asMain({op:'convene',parent:null,tickets:[{id:'A',issue:issueA,target,dependsOn:[],adoptPr:null}]})).ok).toBe(true);
@@ -193,7 +193,7 @@ test('a seat that exits without a handoff escalates its current revision instead
 });
 
 test('a seat that ends without a handoff while a refresh is in flight is not re-seated at its revision',async()=>{
-  const root=await mkdtemp(join(tmpdir(),'roundtable-reseat-'));
+  const root=await mkdtemp(join(tmpdir(),'dispatch-reseat-'));
   const h=harness(root);
   try {
     expect((await h.asMain({op:'convene',parent:null,tickets:[{id:'A',issue:issueA,target,dependsOn:[],adoptPr:null}]})).ok).toBe(true);
@@ -209,7 +209,7 @@ test('a seat that ends without a handoff while a refresh is in flight is not re-
 });
 
 test('the relay uses each configured role agent and brief from Owner through parent closure',async()=>{
-  const root=await mkdtemp('/tmp/roundtable-custom-relay-');
+  const root=await mkdtemp('/tmp/dispatch-custom-relay-');
   const workflow=structuredClone(defaultWorkflow);
   const coding=workflow.ticket.states.Coding!,reviewing=workflow.ticket.states.Reviewing!,verifying=workflow.ticket.states.Verifying!,parent=workflow.parent.states.Reviewing!;
   if(coding.kind!=='work'||reviewing.kind!=='judge'||verifying.kind!=='judge'||parent.kind!=='judge')throw new Error('Expected built-in seats');
@@ -249,16 +249,16 @@ test('the relay uses each configured role agent and brief from Owner through par
 });
 
 test('resume uses the frozen workflow without calling the current workflow loader',async()=>{
-  const root=await mkdtemp('/tmp/roundtable-frozen-resume-');
+  const root=await mkdtemp('/tmp/dispatch-frozen-resume-');
   const workflow=structuredClone(defaultWorkflow),coding=workflow.ticket.states.Coding!;
   if(coding.kind!=='work')throw new Error('Expected work state');
   coding.agent='original-builder';coding.brief='Use the originally approved implementation brief.';
   const h=harness(root,workflow);
-  let resumed:RoundtableController|null=null,loads=0;
+  let resumed:DispatchController|null=null,loads=0;
   try {
     expect((await h.asMain({op:'convene',parent:null,tickets:[{id:'A',issue:issueA,target,dependsOn:[],adoptPr:null}]})).ok).toBe(true);
     const id=h.controller.snapshot()!.id;await h.controller.shutdown();
-    resumed=new RoundtableController({files:createAgendaFiles(root),github:h.github,host:h.host,cwd:root,workflow:async()=>{loads++;throw new Error('Current workflow is unavailable');},intervalSeconds:3600,onChange:()=>{},onError:error=>h.errors.push(error)});
+    resumed=new DispatchController({files:createAgendaFiles(root),github:h.github,host:h.host,cwd:root,workflow:async()=>{loads++;throw new Error('Current workflow is unavailable');},intervalSeconds:3600,onChange:()=>{},onError:error=>h.errors.push(error)});
     const main:Caller={kind:'main',agentId:'successor',sessionId:'successor-main',sessionFile:null};resumed.setMain(main);
     expect((await resumed.execute(main,{op:'resume',agenda:id,operatorConfirmedOriginalSessionEnded:true})).ok).toBe(true);
     expect((await resumed.execute(main,{op:'launch',ticketId:'A'})).ok).toBe(true);

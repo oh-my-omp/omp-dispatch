@@ -11,7 +11,7 @@ import {run} from './exec.ts';
 import {LAUNCHER_PORT} from './link.ts';
 import {diagnosticText} from './diagnostics.ts';
 
-export const LAUNCHER_LABEL='com.ohmyomp.roundtable-launcher';
+export const LAUNCHER_LABEL='com.ohmyomp.dispatch-launcher';
 const cliPath=fileURLToPath(new URL('./cli.ts',import.meta.url));
 const plistPath=join(homedir(),'Library','LaunchAgents',`${LAUNCHER_LABEL}.plist`);
 const logPath=(suffix:'out'|'err'):string=>join(homedir(),'Library','Logs',`${LAUNCHER_LABEL}.${suffix}.log`);

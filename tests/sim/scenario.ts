@@ -1,7 +1,7 @@
 // The scenario contract shared by the driver (which seeds the simulated GitHub
 // and judges the outcome) and the scripted model (which plays Main and every
 // seat). The script reacts only to what omp actually sends it: briefs, tool
-// results and roundtable notifications; it never reads roundtable state files.
+// results and dispatch notifications; it never reads dispatch state files.
 
 import {z} from '@oh-my-pi/omptype/zod';
 

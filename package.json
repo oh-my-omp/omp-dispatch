@@ -1,13 +1,13 @@
 {
-  "name": "omp-roundtable",
+  "name": "omp-dispatch",
   "version": "0.1.37",
-  "description": "Roundtable delivery for Oh My Pi: tickets move along a configurable workflow state machine, with durable local protocol state, isolated seats, source-confirmed effects, and native scheduling.",
+  "description": "Dispatch delivery for Oh My Pi: tickets move along a configurable workflow state machine, with durable local protocol state, isolated seats, source-confirmed effects, and native scheduling.",
   "type": "module",
   "license": "MIT",
   "keywords": ["pi-package", "pi-extension", "omp"],
   "files": ["index.ts", "src/", "agents/", "README.md", "LICENSE"],
   "bin": {
-    "omp-roundtable-launcher": "./src/launcher/cli.ts"
+    "omp-dispatch-launcher": "./src/launcher/cli.ts"
   },
   "omp": {
     "extensions": ["./index.ts"],
@@ -15,7 +15,7 @@
       "workflowFile": {
         "type": "string",
         "description": "Workflow file path, relative to the coordinator working directory",
-        "env": "OMP_ROUNDTABLE_WORKFLOW"
+        "env": "OMP_DISPATCH_WORKFLOW"
       }
     }
   },

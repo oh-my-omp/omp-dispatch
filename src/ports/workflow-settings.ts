@@ -6,9 +6,9 @@ import type {WorkflowError} from './contracts.ts';
 
 /** A new agenda reads current plugin settings; an attached agenda keeps its frozen workflow. */
 export async function configuredWorkflow(cwd:string,dataDir:string):Promise<Result<Workflow,WorkflowError>> {
-  const settings=await getPluginSettings('omp-roundtable',cwd);
-  const file:unknown=process.env.OMP_ROUNDTABLE_WORKFLOW??settings.workflowFile;
+  const settings=await getPluginSettings('omp-dispatch',cwd);
+  const file:unknown=process.env.OMP_DISPATCH_WORKFLOW??settings.workflowFile;
   if(file===undefined)return loadWorkflow({kind:'dataDir',path:join(dataDir,'workflow.yml')});
-  if(typeof file!=='string'||!file.trim())return {ok:false,error:{source:'omp-roundtable.workflowFile',reason:'Roundtable workflowFile must be a nonempty string'}};
+  if(typeof file!=='string'||!file.trim())return {ok:false,error:{source:'omp-dispatch.workflowFile',reason:'Dispatch workflowFile must be a nonempty string'}};
   return loadWorkflow({kind:'configured',path:resolve(cwd,file)});
 }

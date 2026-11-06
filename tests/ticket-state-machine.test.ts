@@ -11,7 +11,7 @@ const defaultWorkflow=unwrap(parseWorkflow(YAML.parse(await Bun.file(new URL('..
 // These typed in-memory source snapshots exercise domain transitions only.
 // GitHub subprocess pagination and real TUI delivery have separate integration coverage.
 
-const REPO:Repo={owner:'RiriAgent',name:'rt-lifecycle'};
+const REPO:Repo={owner:'RiriAgent',name:'dispatch-lifecycle'};
 const ISSUE:IssueRef={repo:REPO,number:189};
 const PR:IssueRef={repo:REPO,number:99};
 const TARGET:Target={repo:REPO,base:'main'};
@@ -28,10 +28,10 @@ const BASE='4'.repeat(40);
 const AT=1_000;
 const MERGED_AT=3_000;
 const CLOSED_AT=4_000;
-const OWNER_SESSION='/tmp/roundtable/T1-owner.json';
-const REVIEW_SESSION='/tmp/roundtable/T1-review.json';
-const ACCEPT_SESSION='/tmp/roundtable/T1-accept.json';
-const POST_MERGE_SESSION='/tmp/roundtable/T1-postmerge.json';
+const OWNER_SESSION='/tmp/dispatch/T1-owner.json';
+const REVIEW_SESSION='/tmp/dispatch/T1-review.json';
+const ACCEPT_SESSION='/tmp/dispatch/T1-accept.json';
+const POST_MERGE_SESSION='/tmp/dispatch/T1-postmerge.json';
 
 function sha256(value:string):string{return createHash('sha256').update(value).digest('hex');}
 

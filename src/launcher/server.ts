@@ -23,7 +23,7 @@ function header(request:IncomingMessage,name:string):string|undefined {
 function renderPage(outcome:LauncherOutcome,url:string):{status:number;title:string;body:string} {
   switch(outcome.kind){
     case 'launched':
-      return {status:200,title:tr('launched','已启动'),body:tr(`<p>Tern is running <code>omp --roundtable</code> for <em>${escapeHtml(url)}</em> in a new tab.</p>`,`<p>Tern 已在新标签页中为 <em>${escapeHtml(url)}</em> 运行 <code>omp --roundtable</code>。</p>`)};
+      return {status:200,title:tr('launched','已启动'),body:tr(`<p>Tern is running <code>omp --dispatch</code> for <em>${escapeHtml(url)}</em> in a new tab.</p>`,`<p>Tern 已在新标签页中为 <em>${escapeHtml(url)}</em> 运行 <code>omp --dispatch</code>。</p>`)};
     case 'focused':
       return {status:200,title:tr('focused','已聚焦'),body:tr(`<p>Tern already holds live coordinator block <code>${escapeHtml(outcome.block)}</code> for this issue; it is focused now and no second process was started.</p>`,`<p>Tern 已有此议题的活动协调者区块 <code>${escapeHtml(outcome.block)}</code>；现已聚焦，未启动第二个进程。</p>`)};
     case 'rejected':
@@ -34,7 +34,7 @@ function renderPage(outcome:LauncherOutcome,url:string):{status:number;title:str
 }
 
 function pageDocument(page:{title:string;body:string}):string {
-  return `<!doctype html><html lang="${language()}"><head><meta charset="utf-8"><title>${tr('omp-roundtable launcher','圆桌启动器')}: ${escapeHtml(page.title)}</title></head><body><h1>${escapeHtml(page.title)}</h1>${page.body}</body></html>`;
+  return `<!doctype html><html lang="${language()}"><head><meta charset="utf-8"><title>${tr('omp-dispatch launcher','调度启动器')}: ${escapeHtml(page.title)}</title></head><body><h1>${escapeHtml(page.title)}</h1>${page.body}</body></html>`;
 }
 
 export async function serveLauncher(options:LauncherOptions={}):Promise<Launcher> {

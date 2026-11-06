@@ -3,7 +3,7 @@ import {type LauncherStatus,installLauncher,launcherLogPaths,launcherStatus,unin
 import {LAUNCHER_PORT} from './link.ts';
 import {tr} from '../i18n.ts';
 
-export function launcherUsage():string {return tr('Usage: omp-roundtable-launcher install | uninstall | status','用法：omp-roundtable-launcher install | uninstall | status');}
+export function launcherUsage():string {return tr('Usage: omp-dispatch-launcher install | uninstall | status','用法：omp-dispatch-launcher install | uninstall | status');}
 
 export function describeLauncher(state:LauncherStatus):string {
   const logs=launcherLogPaths();
@@ -24,11 +24,11 @@ export async function launcherCommand(args:readonly string[]):Promise<Result<str
   const command=args[0]??'status';
   if(command==='install'){
     const result=await installLauncher();
-    return result.ok?{ok:true,value:`${tr('Roundtable launcher installed.','圆桌启动器已安装。')}\n${tr('interpreter:','解释器：')} ${result.value.interpreter}\n${describeLauncher(result.value.status)}`}:{ok:false,error:result.error.message};
+    return result.ok?{ok:true,value:`${tr('Dispatch launcher installed.','调度启动器已安装。')}\n${tr('interpreter:','解释器：')} ${result.value.interpreter}\n${describeLauncher(result.value.status)}`}:{ok:false,error:result.error.message};
   }
   if(command==='uninstall'){
     const result=await uninstallLauncher();
-    return result.ok?{ok:true,value:`${tr('Roundtable launcher uninstalled.','圆桌启动器已卸载。')}\n${describeLauncher(result.value)}`}:{ok:false,error:result.error.message};
+    return result.ok?{ok:true,value:`${tr('Dispatch launcher uninstalled.','调度启动器已卸载。')}\n${describeLauncher(result.value)}`}:{ok:false,error:result.error.message};
   }
   if(command==='status'){
     const result=await launcherStatus();

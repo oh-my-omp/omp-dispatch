@@ -24,7 +24,7 @@ describe('three-step interface language',()=>{
   ];
   for(const [name,env,expected] of vectors)test(name,async()=>expect(await resolveLanguage(env)).toBe(expected));
   test('omomp file no longer affects the language',async()=>{
-    const root=await mkdtemp('/tmp/roundtable-language-ignored-');
+    const root=await mkdtemp('/tmp/dispatch-language-ignored-');
     try {
       await writeFile(join(root,'omomp.yml'),'omomp-lang:\n  language: zh\n');
       expect(await resolveLanguage({LANG:'en_US.UTF-8'},root)).toBe('en');

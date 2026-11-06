@@ -1,4 +1,4 @@
-# Roundtable workflow: the state machines every ticket and the parent closure move through.
+# Dispatch workflow: the state machines every ticket and the parent closure move through.
 # An agenda freezes the workflow it was convened with; edits apply to the next convene.
 #
 # State kinds:
@@ -24,7 +24,7 @@ ticket:
     Coding:
       kind: work
       role: owner
-      agent: roundtable-owner
+      agent: dispatch-owner
       brief: Implement the issue contract and current Main rulings.
       on: {submitted: Publishing, escalated: escalate}
     Publishing:
@@ -42,10 +42,10 @@ ticket:
       subject: pullRequest
       judges:
         - role: review
-          agent: roundtable-reviewer
+          agent: dispatch-reviewer
           brief: Independently verify the complete current contract against this checkout, not just prior findings.
         - role: accept
-          agent: roundtable-reviewer
+          agent: dispatch-reviewer
           brief: Independently verify the complete current contract against this checkout, not just prior findings.
       observe: {checksFailed: Coding, conflict: Coding, behind: Coding, drift: AwaitingChecks}
       on: {passed: Merging, rejected: Coding, escalated: escalate}
@@ -60,7 +60,7 @@ ticket:
       subject: mergeCommit
       judges:
         - role: postMerge
-          agent: roundtable-reviewer
+          agent: dispatch-reviewer
           brief: Independently verify the complete current contract against this checkout, not just prior findings.
       on: {passed: Closing, rejected: escalate, escalated: escalate}
     Closing:
@@ -77,7 +77,7 @@ parent:
       kind: judge
       judges:
         - role: closure
-          agent: roundtable-reviewer
+          agent: dispatch-reviewer
           brief: Verify the target branch delivers the complete parent issue across every child ticket.
       on: {passed: Closing, rejected: escalate, escalated: escalate}
     Closing:

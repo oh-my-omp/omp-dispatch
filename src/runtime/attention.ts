@@ -3,7 +3,7 @@ import {awaitsLaunch,delivered,parentDefinition} from '../domain/engine.ts';
 import {ESCALATED,parentSeatRoles,ticketSeatRoles} from '../domain/workflow.ts';
 
 /**
- * The decisions only Main can make, one key each: a ticket it may put on the table, an Escalated ticket or
+ * The decisions only Main can make, one key each: a ticket it may launch, an Escalated ticket or
  * closure awaiting its ruling (keyed by revision, so a re-escalation is new), and a finished agenda awaiting
  * `finish`. Seats running and effects in flight are not decisions.
  */

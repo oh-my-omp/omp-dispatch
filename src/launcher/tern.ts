@@ -39,7 +39,7 @@ export function liveCoordinatorBlock(listing:string,reference:string):string|nul
   for(const session of read.data.sessions)for(const tab of session.tabs)for(const block of tab.blocks){
     if(block.live!==true||block.exited!==null&&block.exited!==undefined)continue;
     const tokens=coordinatorTokens(block.args??[]);
-    const carries=tokens.some((token,index)=>token==='--roundtable'&&tokens[index+1]===reference)||tokens.includes(`--roundtable=${reference}`);
+    const carries=tokens.some((token,index)=>token==='--dispatch'&&tokens[index+1]===reference)||tokens.includes(`--dispatch=${reference}`);
     if(carries)return String(block.id);
   }
   return null;
@@ -78,6 +78,6 @@ export async function launch(target:LaunchTarget,exec:Runner=run):Promise<Launch
     const focused=await exec('tern',['focus',holder],{});
     return focused.code===0?{kind:'focused',block:holder}:{kind:'frontendFailed',output:`tern focus ${holder}: ${describe(focused)}`};
   }
-  const tab=await exec('tern',['new','tab','--cwd',target.cwd,'--','omp','--roundtable',target.reference],{});
+  const tab=await exec('tern',['new','tab','--cwd',target.cwd,'--','omp','--dispatch',target.reference],{});
   return tab.code===0?{kind:'launched'}:{kind:'frontendFailed',output:`tern new tab: ${describe(tab)}`};
 }

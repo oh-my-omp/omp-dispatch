@@ -62,7 +62,7 @@ describe('workflow validation',()=>{
     for(const text of [source+'extra: true\n',source.replace('  initial: Coding','  extra: true\n  initial: Coding'),source.replace('      role: owner','      extra: true\n      role: owner'),source.replace('        - role: review','        - extra: true\n          role: review')])expect(parseWorkflow(YAML.parse(text)).ok).toBe(false);
   });
   test('parseWorkflow rejects empty work and judge agents',()=>{
-    for(const name of ['roundtable-owner','roundtable-reviewer'])expect(parseWorkflow(YAML.parse(source.replace(name,'""'))).ok).toBe(false);
+    for(const name of ['dispatch-owner','dispatch-reviewer'])expect(parseWorkflow(YAML.parse(source.replace(name,'""'))).ok).toBe(false);
   });
   test('parseWorkflow accepts empty judge states in both machines',()=>{
     const workflow=structuredClone(defaultWorkflow);
@@ -73,12 +73,12 @@ describe('workflow validation',()=>{
 
 describe('workflow file source selection',()=>{
   test('a missing dataDir workflow loads the built-in state machines',async()=>{
-    const root=await mkdtemp('/tmp/roundtable-workflow-');
+    const root=await mkdtemp('/tmp/dispatch-workflow-');
     try {expect(await loadWorkflow({kind:'dataDir',path:join(root,'workflow.yml')})).toEqual({ok:true,value:defaultWorkflow});}
     finally {await rm(root,{recursive:true,force:true});}
   });
   test('an existing dataDir workflow overrides the built-in workflow',async()=>{
-    const root=await mkdtemp('/tmp/roundtable-workflow-');
+    const root=await mkdtemp('/tmp/dispatch-workflow-');
     try {
       const path=join(root,'workflow.yml'),workflow=structuredClone(defaultWorkflow);
       const coding=workflow.ticket.states.Coding!;if(coding.kind!=='work')throw new Error('Expected work');
@@ -88,21 +88,21 @@ describe('workflow file source selection',()=>{
     }finally {await rm(root,{recursive:true,force:true});}
   });
   test('a missing configured workflow reports its path rather than falling back',async()=>{
-    const root=await mkdtemp('/tmp/roundtable-workflow-');
+    const root=await mkdtemp('/tmp/dispatch-workflow-');
     try {
       const path=join(root,'required.yml');
       expect(await loadWorkflow({kind:'configured',path})).toMatchObject({ok:false,error:{source:path,reason:expect.stringContaining('does not exist')}});
     }finally {await rm(root,{recursive:true,force:true});}
   });
   test('an EISDIR dataDir workflow errors instead of falling back',async()=>{
-    const root=await mkdtemp('/tmp/roundtable-workflow-');
+    const root=await mkdtemp('/tmp/dispatch-workflow-');
     try {
       const path=join(root,'workflow.yml');await mkdir(path);
       expect(await loadWorkflow({kind:'dataDir',path})).toMatchObject({ok:false,error:{source:path}});
     }finally {await rm(root,{recursive:true,force:true});}
   });
   for(const [name,text] of [['invalid YAML','ticket: [unterminated'],['invalid schema','ticket: {}\nparent: {}\n']] as const)test(`an existing dataDir workflow with ${name} errors instead of using defaults`,async()=>{
-    const root=await mkdtemp('/tmp/roundtable-workflow-');
+    const root=await mkdtemp('/tmp/dispatch-workflow-');
     try {
       const path=join(root,'workflow.yml');await writeFile(path,text);
       const result=await loadWorkflow({kind:'dataDir',path});

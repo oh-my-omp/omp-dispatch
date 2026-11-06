@@ -368,7 +368,7 @@ export function closureRoles(state:Agenda):Role[] {
   const gate=closure.gates[closure.state];
   return gate?pendingRoles(definition.judges,gate.verdicts):[];
 }
-/** A ticket Main has not put on the table yet, whose dependencies are all delivered. */
+/** A ticket Main has not launched yet, whose dependencies are all delivered. */
 export function awaitsLaunch(state:Agenda,ticket:Ticket):boolean {
   const definition=ticketDefinition(state.workflow,ticket);
   return !ticket.started&&definition!==null&&definition.kind!=='final'&&dependenciesDone(state,ticket);
@@ -635,9 +635,9 @@ export function applyOperation(state:Agenda,operation:PortInput,caller:Caller,fa
   const ticket=next.tickets.find(ticket=>ticket.id===operation.ticketId),closure=next.closure?.id===operation.ticketId?next.closure:null;
   if(!ticket&&!closure)return reject('notFound','Unknown ticket');
   if(operation.op==='launch'){
-    if(!main)return reject('unauthorized','Only the attached Main puts a ticket on the table');
+    if(!main)return reject('unauthorized','Only the attached Main launches a ticket');
     if(!ticket)return reject('invalidTransition','The parent closure seats are relayed automatically once every ticket is delivered');
-    if(ticket.started)return reject('invalidTransition','This ticket is already on the table; the roundtable relays its seats until it is delivered or Escalated');
+    if(ticket.started)return reject('invalidTransition','This ticket is already launched; Dispatch relays its seats until it is delivered or Escalated');
     const definition=ticketDefinition(next.workflow,ticket);
     if(!definition||definition.kind==='final')return reject('invalidTransition','Resolve an Escalated ticket before launching it; a delivered ticket needs no seat');
     if(!dependenciesDone(next,ticket))return reject('invalidTransition','Every dependency must be delivered before this ticket is launched');
@@ -645,7 +645,7 @@ export function applyOperation(state:Agenda,operation:PortInput,caller:Caller,fa
     if(operation.role&&!availableRoles(next,ticket).includes(operation.role))return reject('invalidTransition',`This ticket's current state does not offer a ${operation.role} seat`);
     ticket.started=true;next.version++;return {ok:true,value:next};
   }
-  if(!('revision' in operation)||operation.revision!==(ticket?.revision??closure?.revision))return reject('staleRevision',caller.kind==='seat'?'This seat revision has been superseded. Exit; the roundtable relays a fresh seat.':'Read the current ticket revision');
+  if(!('revision' in operation)||operation.revision!==(ticket?.revision??closure?.revision))return reject('staleRevision',caller.kind==='seat'?'This seat revision has been superseded. Exit; Dispatch relays a fresh seat.':'Read the current ticket revision');
   const seat=caller.kind==='seat'&&caller.ticketId===operation.ticketId&&caller.revision===operation.revision;
   if(operation.op==='resolve'){
     if(!main)return reject('unauthorized','Only the attached Main may resolve');
