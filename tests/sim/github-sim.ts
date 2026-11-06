@@ -44,11 +44,11 @@ const stateSchema = z.object({
   project: z.object({owner: z.string(), number: z.number(), items: z.array(projectItemSchema)}),
   /**
    * Once `skip` comments exist, the next comment request takes this single-shot hold: it touches `arrived` and waits
-   * for `release`. `afterWrite` records the comment first, as if GitHub applied the write and the response was lost
-   * with the process that sent it; `beforeWrite` records it only on release, as a request still in flight that
-   * reaches GitHub after its sender died.
+   * for `release` or `drop`. `afterWrite` records the comment first, as if GitHub applied the write and the response
+   * was lost with the process that sent it. `beforeWrite` records it only on `release`, as a request still in flight
+   * that reaches GitHub after its sender died; on `drop` the request never reaches GitHub and nothing is recorded.
    */
-  commentHold: z.object({skip: z.number(), at: z.enum(['beforeWrite', 'afterWrite']), arrived: z.string(), release: z.string()}).nullable(),
+  commentHold: z.object({skip: z.number(), at: z.enum(['beforeWrite', 'afterWrite']), arrived: z.string(), release: z.string(), drop: z.string()}).nullable(),
 });
 export type SimState = z.infer<typeof stateSchema>;
 const payloadSchema = z.record(z.string(), z.unknown());
@@ -419,12 +419,19 @@ async function main(): Promise<number> {
       if (taken) state.commentHold = null;
       return taken;
     }) : null;
-    // Outside the state lock: the driver observes `arrived`, kills the sender, and only then releases.
-    const held = async (taken: NonNullable<SimState['commentHold']>) => {
+    // Outside the state lock: the driver observes `arrived`, kills the sender, then releases or drops the request.
+    const held = async (taken: NonNullable<SimState['commentHold']>): Promise<'release' | 'drop'> => {
       writeFileSync(taken.arrived, '');
-      while (!existsSync(taken.release)) await Bun.sleep(100);
+      for (;;) {
+        if (existsSync(taken.release)) return 'release';
+        if (existsSync(taken.drop)) return 'drop';
+        await Bun.sleep(100);
+      }
     };
-    if (hold?.at === 'beforeWrite') await held(hold);
+    if (hold?.at === 'beforeWrite' && await held(hold) === 'drop') {
+      log({method, endpoint, dropped: true, payload});
+      return 1;
+    }
     const answer = withState(dir, state => {
       syncPullRefs(dir, state);
       if (endpoint === 'graphql') {
