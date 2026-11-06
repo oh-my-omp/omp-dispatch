@@ -4,15 +4,15 @@ import {abandonSeat,applyOperation,availableRoles,awaitsLaunch,closureRoles,conf
 import {canonical,sameRef} from '../domain/identity.ts';
 import {seatBrief} from '../domain/briefs.ts';
 import {parentSeatRoles,ticketSeatRoles,workflowAgents} from '../domain/workflow.ts';
-import type {AgendaFiles,GitHubPort,HostPort,SeatExit,SeatHandle,SeatLaunch,SeatWorkspace,StateError,WorkflowError} from '../ports/contracts.ts';
+import type {AgendaFiles,GitHubPort,HostPort,ProcessPort,SeatExit,SeatHandle,SeatLaunch,SeatWorkspace,StateError,WorkflowError} from '../ports/contracts.ts';
 import {createSourceReader,type SourceReceipt} from './source.ts';
 
-export type RuntimeError={kind:'domain';error:DomainError}|{kind:'storage';error:StateError}|{kind:'source'|'host';error:PortError}|{kind:'workflow';error:WorkflowError};
+export type RuntimeError={kind:'domain';error:DomainError}|{kind:'storage';error:StateError}|{kind:'source'|'host'|'process';error:PortError}|{kind:'workflow';error:WorkflowError};
 /** Main's view: which tickets it may launch, and which seats the relay currently runs. */
 export type AgendaView={agenda:Agenda;launchable:string[];seated:{ticketId:string;roles:Role[]}[]};
 export type ControllerOutput=AgendaView|{active:string[]}|{ticket:Agenda['tickets'][number]|NonNullable<Agenda['closure']>}|{launched:SeatHandle[]};
 /** `workflow` reads the workflow a new agenda will freeze; an attached agenda never consults it. */
-export type ControllerOptions={files:AgendaFiles;github:GitHubPort;host:HostPort;cwd:string;workflow:()=>Promise<Result<Workflow,WorkflowError>>;intervalSeconds:number;onChange:()=>void;onError:(error:RuntimeError)=>void};
+export type ControllerOptions={files:AgendaFiles;github:GitHubPort;host:HostPort;process:ProcessPort;cwd:string;workflow:()=>Promise<Result<Workflow,WorkflowError>>;intervalSeconds:number;onChange:()=>void;onError:(error:RuntimeError)=>void};
 function domain(kind:DomainError['kind'],message:string):{ok:false;error:RuntimeError}{return {ok:false,error:{kind:'domain',error:{kind,message}}};}
 
 /** The controller is the sole writer of its agenda. GitHub observations are never optimistic writes. */
@@ -47,7 +47,7 @@ export class DispatchController {
     const result=await this.options.files.save(this.pending.expected,this.pending.state);
     if(!result.ok)return {ok:false,error:{kind:'storage',error:result.error}};
     this.state=this.pending.state;this.pending=null;this.options.onChange();
-    if(this.state.lifecycle==='active'&&!this.timer){
+    if(this.state.lifecycle==='active'&&!this.timer&&!this.closed){
       this.timer=setInterval(()=>{void this.run().catch(error=>this.unexpected(error));},this.options.intervalSeconds*1000);this.timer.unref();
     }
     if(this.state.lifecycle==='completed'){clearInterval(this.timer??undefined);this.timer=null;}
@@ -79,6 +79,8 @@ export class DispatchController {
         if(this.state?.lifecycle==='active')return domain('ownershipBlocked','A live agenda is already attached');
         const list=await this.options.files.list();if(!list.ok)return {ok:false,error:{kind:'storage',error:list.error}};
         const active=list.value.filter(state=>state.lifecycle==='active');
+        const self=await this.options.process.current();if(!self.ok)return {ok:false,error:{kind:'process',error:self.error}};
+        const run={kind:'attached',id:this.runId,mainAgentId:caller.agentId,mainSessionId:caller.sessionId,pid:self.value.pid,startedAt:self.value.startedAt} as const;
         if(operation.op==='convene'){
           if(active.length)return domain('ownershipBlocked','Resume the saved active agenda instead of creating a second owner');
           const workflow=await this.options.workflow();if(!workflow.ok)return {ok:false,error:{kind:'workflow',error:workflow.error}};
@@ -87,12 +89,18 @@ export class DispatchController {
           if(!agents.ok)return {ok:false,error:{kind:'host',error:agents.error}};
           const facts=await this.source.read(null,operation,'convene');if(!facts.ok)return {ok:false,error:{kind:'source',error:facts.error}};
           const created=createAgenda(operation,workflow.value,facts.value,Date.now(),randomUUID());if(!created.ok)return {ok:false,error:{kind:'domain',error:created.error}};
-          created.value.run={kind:'attached',id:this.runId,mainAgentId:caller.agentId,mainSessionId:caller.sessionId};
+          created.value.run=run;
           const saved=await this.save(created.value,null);if(!saved.ok)return saved;
         }else{
           if(active.length!==1||active[0]?.id!==operation.agenda)return domain('ownershipBlocked','Exactly one matching saved active agenda is required');
           const saved=await this.options.files.load(operation.agenda);if(!saved.ok)return {ok:false,error:{kind:'storage',error:saved.error}};
-          const next=saved.value;next.version++;next.run={kind:'attached',id:this.runId,mainAgentId:caller.agentId,mainSessionId:caller.sessionId};
+          // The OS names a live holder: the same pid with the same start time. A reused pid has another start time.
+          const holder=saved.value.run;
+          if(holder.kind==='attached'){
+            const now=await this.options.process.start(holder.pid);if(!now.ok)return {ok:false,error:{kind:'process',error:now.error}};
+            if(now.value.kind==='running'&&now.value.startedAt===holder.startedAt)return domain('agenda_attached',`Agenda ${operation.agenda} is held by coordinator process pid ${holder.pid} started ${holder.startedAt}, which is still running`);
+          }
+          const next=saved.value;next.version++;next.run=run;
           // A durable executing intent after a restart is never called again.
           for(const effect of next.effects)if(effect.state.kind==='executing')failEffect(next,effect,{kind:'uncertainOutcome',message:'Previous process ended after executing intent; source reconciliation required'},true,Date.now());
           const committed=await this.save(next,saved.value.version-1);if(!committed.ok)return committed;
@@ -296,8 +304,15 @@ export class DispatchController {
     }
   }
   snapshot():Agenda|null{return this.state?structuredClone(this.state):null;}
+  /** The run ends with this process: its seats end first, then the agenda is written back to detached. */
   async shutdown():Promise<void> {
     this.closed=true;clearInterval(this.timer??undefined);clearTimeout(this.scheduled??undefined);this.timer=null;this.scheduled=null;
     await this.tail;await this.options.host.dispose();
+    await this.serial(async()=>{
+      const flushed=await this.flush();if(!flushed.ok){this.options.onError(flushed.error);return;}
+      const state=this.state;if(state?.run.kind!=='attached'||state.run.id!==this.runId)return;
+      const next=structuredClone(state);next.version++;next.run={kind:'detached'};
+      const saved=await this.save(next,state.version);if(!saved.ok)this.options.onError(saved.error);
+    });
   }
 }

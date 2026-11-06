@@ -33,8 +33,8 @@ describe('durable ticket agenda files',()=>{
       expect(await files.save(1,advanced)).toEqual({ok:true,value:null});
       const path=join(root,'state',`${state.id}.json`);
       const encoded:unknown=JSON.parse(await readFile(path,'utf8'));
-      expect(encoded).toMatchObject({format:7,state:{version:2}});
-      await writeFile(path,JSON.stringify({format:5,state}));
+      expect(encoded).toMatchObject({format:8,state:{version:2}});
+      await writeFile(path,JSON.stringify({format:7,state}));
       expect(await files.load(state.id)).toMatchObject({ok:false,error:{kind:'unsupportedFormat'}});
     }finally {await rm(root,{recursive:true,force:true});}
   });

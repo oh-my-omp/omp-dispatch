@@ -30,7 +30,7 @@ function decode(contents: string, id: AgendaId): StateResult<Agenda> {
     return failure('corruptState', `Agenda ${id}: invalid JSON`);
   }
   if (typeof value === 'object' && value !== null && 'format' in value
-    && typeof value.format === 'number' && Number.isInteger(value.format) && value.format !== 7) {
+    && typeof value.format === 'number' && Number.isInteger(value.format) && value.format !== 8) {
     return failure('unsupportedFormat', `Agenda ${id}: unsupported format ${value.format}`);
   }
   const parsed = envelopeSchema.safeParse(value);
@@ -109,7 +109,7 @@ export function createAgendaFiles(dataDir: string, metrics?: FileMetrics): Agend
     const state = parsed.value;
     const target = join(directory, `${state.id}.json`);
     // Capture the complete target once, before any I/O. Retrying never recomputes a transition.
-    const contents = `${JSON.stringify({ format: 7, state: encoded })}\n`;
+    const contents = `${JSON.stringify({ format: 8, state: encoded })}\n`;
     const previous = await load(state.id);
     if (!previous.ok && previous.error.kind !== 'notFound') return previous;
 

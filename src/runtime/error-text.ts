@@ -9,6 +9,7 @@ export function runtimeErrorText(error:RuntimeError):string {
     case 'storage':return tr(`Dispatch: durable state failed (${error.error.kind}). ${detail}`,`调度：持久状态操作失败（${error.error.kind}）。${detail}`);
     case 'source':return tr(`Dispatch: source request failed (${error.error.kind}). ${detail}`,`调度：源头请求失败（${error.error.kind}）。${detail}`);
     case 'host':return tr(`Dispatch: seat host failed (${error.error.kind}). ${detail}`,`调度：席位宿主操作失败（${error.error.kind}）。${detail}`);
+    case 'process':return tr(`Dispatch: process lookup failed (${error.error.kind}). ${detail}`,`调度：进程查询失败（${error.error.kind}）。${detail}`);
     case 'workflow':return tr(`Dispatch: workflow could not be loaded (${error.error.source}). ${detail}`,`调度：无法加载工作流（${error.error.source}）。${detail}`);
   }
 }

@@ -341,7 +341,7 @@ test('independent tickets are runnable while a dependent waits for source-confir
     {id:'C',issue:third,target:TARGET,dependsOn:[TICKET],adoptPr:null},
   ]},defaultWorkflow,source,AT,'agenda-parallel'),'convene parallel graph');
   const main:Caller={kind:'main',agentId:'Main',sessionId:'coordinator',sessionFile:null};
-  agenda.run={kind:'attached',id:'run',mainAgentId:main.agentId,mainSessionId:main.sessionId};
+  agenda.run={kind:'attached',id:'run',mainAgentId:main.agentId,mainSessionId:main.sessionId,pid:101,startedAt:'Sat Nov 7 06:00:00 2026'};
   expect(availableRoles(agenda,ticketOf(agenda))).toEqual(['owner']);
   expect(availableRoles(agenda,ticketOf(agenda,'B'))).toEqual(['owner']);
   expect(availableRoles(agenda,ticketOf(agenda,'C'))).toEqual([]);
@@ -379,7 +379,7 @@ test('parent membership remains valid after a topology ruling and closure reject
     {id:'other',issue:other,target:TARGET,dependsOn:[],adoptPr:null},
   ]},defaultWorkflow,facts,AT,'parent-agenda'),'parent convene');
   const main:Caller={kind:'main',agentId:'Main',sessionId:'parent-main',sessionFile:null};
-  agenda.run={kind:'attached',id:'run',mainAgentId:main.agentId,mainSessionId:main.sessionId};
+  agenda.run={kind:'attached',id:'run',mainAgentId:main.agentId,mainSessionId:main.sessionId,pid:101,startedAt:'Sat Nov 7 06:00:00 2026'};
   expect(applyOperation(agenda,{op:'resolve',ticketId:TICKET,revision:1,to:'Coding',ruling:'Remove still attached child.',remove:['other']},main,facts,AT)).toMatchObject({ok:false,error:{kind:'invalidTopology'}});
   expect(applyOperation(agenda,{op:'resolve',ticketId:TICKET,revision:1,to:'Coding',ruling:'Add parent as child.',add:[{id:'parent',issue:parent,target:TARGET,dependsOn:[],adoptPr:null}]},main,facts,AT)).toMatchObject({ok:false,error:{kind:'invalidTopology'}});
   for(const ticket of agenda.tickets){ticket.state='Done';ticket.terminal={kind:'noCode',bodyHash:ticket.contract.bodyHash,reason:'Already satisfied',at:AT};}
@@ -405,7 +405,7 @@ test('Main revoking noCode cancels its queued close before coding resumes',()=>{
   const facts=openSource();
   let agenda=conveneTicket();
   const main:Caller={kind:'main',agentId:'Main',sessionId:'revocation-main',sessionFile:null};
-  agenda.run={kind:'attached',id:'run',mainAgentId:main.agentId,mainSessionId:main.sessionId};
+  agenda.run={kind:'attached',id:'run',mainAgentId:main.agentId,mainSessionId:main.sessionId,pid:101,startedAt:'Sat Nov 7 06:00:00 2026'};
   agenda=unwrap(applyOperation(agenda,{op:'resolve',ticketId:TICKET,revision:1,to:'Closing',noCode:'Already satisfied.',ruling:'First inspection.'},main,facts,AT),'noCode');
   const close=effectOf(agenda,effect=>effect.action.kind==='setIssueState');
   expect(close.state.kind).toBe('ready');
@@ -634,7 +634,7 @@ test('parseAgenda rejects mergeCommit and parent verdicts outside their frozen r
 
 function attachedMain(agenda:Agenda):Extract<Caller,{kind:'main'}> {
   const main:Extract<Caller,{kind:'main'}>={kind:'main',agentId:'Main',sessionId:'state-machine-main',sessionFile:null};
-  agenda.run={kind:'attached',id:'run',mainAgentId:main.agentId,mainSessionId:main.sessionId};return main;
+  agenda.run={kind:'attached',id:'run',mainAgentId:main.agentId,mainSessionId:main.sessionId,pid:101,startedAt:'Sat Nov 7 06:00:00 2026'};return main;
 }
 function submitAgain(agenda:Agenda,facts:Facts):Agenda {
   const revision=ticketOf(agenda).revision;

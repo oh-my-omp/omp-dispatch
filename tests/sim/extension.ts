@@ -77,7 +77,7 @@ function* startPlan(trigger: string): MainPlan {
   const saved = /Saved agendas: active: ([0-9a-f-]{36})/.exec(trigger);
   const target = {repo, base: 'main'};
   const opened = saved
-    ? yield {input: {op: 'resume', agenda: saved[1], operatorConfirmedOriginalSessionEnded: true}}
+    ? yield {input: {op: 'resume', agenda: saved[1]}}
     : yield {input: {op: 'convene', parent: scenario.parent === null ? null : {repo, number: scenario.parent},
         tickets: scenario.tickets.map(ticket => ({id: ticket.id, issue: {repo, number: ticket.issue}, target, dependsOn: ticket.dependsOn, adoptPr: null}))}};
   for (const id of opened.value?.launchable ?? []) yield {input: {op: 'launch', ticketId: id}};
