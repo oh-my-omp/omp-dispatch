@@ -10,6 +10,7 @@ import {Attention} from '../src/runtime/attention.ts';
 import {bodyHash} from '../src/domain/identity.ts';
 import {YAML} from 'bun';
 import {parseWorkflow} from '../src/domain/workflow.ts';
+import {ProcessTable} from './process-fixture.ts';
 
 const parsedWorkflow=parseWorkflow(YAML.parse(await Bun.file(new URL('../src/default-workflow.yml',import.meta.url)).text()));
 if(!parsedWorkflow.ok)throw new Error(parsedWorkflow.error.reason);
@@ -69,13 +70,14 @@ function harness(root:string,workflow:Workflow=defaultWorkflow) {
     const agenda=controller?.snapshot();if(!agenda)return;
     const fresh=attention.observe(agenda,host.active);if(fresh.length)wakes.push(fresh);
   }
-  controller=new DispatchController({files:createAgendaFiles(root),github,host,cwd:root,workflow:async()=>({ok:true,value:workflow}),intervalSeconds:3600,onChange:observe,onError:error=>errors.push(error)});
+  const processes=new ProcessTable();
+  controller=new DispatchController({files:createAgendaFiles(root),github,host,process:processes.spawn(101,'Sat Nov 7 06:00:00 2026'),cwd:root,workflow:async()=>({ok:true,value:workflow}),intervalSeconds:3600,onChange:observe,onError:error=>errors.push(error)});
   const dispatch=controller;
   const main:Caller={kind:'main',agentId:'Main',sessionId:'main',sessionFile:null};dispatch.setMain(main);
   // run() is the entry the kick timer uses; calling it directly drains effects and relays deterministically.
   async function drain():Promise<void> {for(let round=0;round<4;round++)await dispatch.run();}
   return {
-    source,setBase,launches,wakes,errors,github,host,controller:dispatch,
+    source,setBase,launches,wakes,errors,github,host,processes,controller:dispatch,
     async asMain(input:Parameters<DispatchController['execute']>[1]) {const result=await dispatch.execute(main,input);observe();return result;},
     async asSeat(ticketId:string,role:Role,input:Parameters<DispatchController['execute']>[1]) {
       const seat=live.get(`${ticketId}/${role}`);if(!seat)throw new Error(`No live ${role} seat for ${ticketId}`);
@@ -258,9 +260,9 @@ test('resume uses the frozen workflow without calling the current workflow loade
   try {
     expect((await h.asMain({op:'convene',parent:null,tickets:[{id:'A',issue:issueA,target,dependsOn:[],adoptPr:null}]})).ok).toBe(true);
     const id=h.controller.snapshot()!.id;await h.controller.shutdown();
-    resumed=new DispatchController({files:createAgendaFiles(root),github:h.github,host:h.host,cwd:root,workflow:async()=>{loads++;throw new Error('Current workflow is unavailable');},intervalSeconds:3600,onChange:()=>{},onError:error=>h.errors.push(error)});
+    resumed=new DispatchController({files:createAgendaFiles(root),github:h.github,host:h.host,process:h.processes.spawn(102,'Sat Nov 7 06:05:00 2026'),cwd:root,workflow:async()=>{loads++;throw new Error('Current workflow is unavailable');},intervalSeconds:3600,onChange:()=>{},onError:error=>h.errors.push(error)});
     const main:Caller={kind:'main',agentId:'successor',sessionId:'successor-main',sessionFile:null};resumed.setMain(main);
-    expect((await resumed.execute(main,{op:'resume',agenda:id,operatorConfirmedOriginalSessionEnded:true})).ok).toBe(true);
+    expect((await resumed.execute(main,{op:'resume',agenda:id})).ok).toBe(true);
     expect((await resumed.execute(main,{op:'launch',ticketId:'A'})).ok).toBe(true);
     expect(loads).toBe(0);
     expect(h.launches[0]?.agent).toBe('original-builder');

@@ -41,7 +41,7 @@ export function buildPublicGrammar(z: PublicZ) {
   });
   const portInputSchema = z.union([
     conveneSchema,
-    object({op:z.literal('resume'),agenda:idSchema,operatorConfirmedOriginalSessionEnded:z.literal(true)}),
+    object({op:z.literal('resume'),agenda:idSchema}),
     object({op:z.literal('tickets')}),object({op:z.literal('status')}),
     object({op:z.literal('read'),ticketId:idSchema}),
     object({op:z.literal('launch'),ticketId:idSchema,role:roleSchema.optional()}),

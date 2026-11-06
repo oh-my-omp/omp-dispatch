@@ -10,6 +10,7 @@ import {Attention} from './src/runtime/attention.ts';
 import {createAgendaFiles} from './src/ports/state.ts';
 import {createGitHubPort} from './src/ports/github.ts';
 import {createHostPort} from './src/ports/host.ts';
+import {createProcessPort} from './src/ports/process.ts';
 import {configuredWorkflow} from './src/ports/workflow-settings.ts';
 import {tr} from './src/i18n.ts';
 import {runtimeErrorText} from './src/runtime/error-text.ts';
@@ -80,7 +81,7 @@ class ProcessRuntime {
       },
       onSeatError:(ticketId,message)=>this.report({kind:'host',error:{kind:'unavailable',message:`Ticket ${ticketId} seat: ${message}`}}),
     });
-    this.controller=new DispatchController({files:createAgendaFiles(directory),github:createGitHubPort(),host:this.host,cwd:ctx.cwd,
+    this.controller=new DispatchController({files:createAgendaFiles(directory),github:createGitHubPort(),host:this.host,process:createProcessPort(),cwd:ctx.cwd,
       // Read at each convene: a configured file must exist; otherwise the data directory may override the built-in workflow.
       workflow:()=>configuredWorkflow(ctx.cwd,directory),
       intervalSeconds:this.interval.get(root.settings),onChange:()=>this.changed(),onError:error=>this.report(error)});

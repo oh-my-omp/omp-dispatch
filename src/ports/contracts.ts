@@ -1,5 +1,5 @@
 import type {ExtensionContext} from '@oh-my-pi/pi-coding-agent';
-import type {Agenda,AgendaId,Caller,CheckAttempt,ClosureGate,CreatedIssueObservation,Facts,IssueRef,IssueSnapshot,Millis,PortError,PrRef,PrSnapshot,Repo,Result,Role,Sha,SourceScope,Target,Ticket} from '../domain/model.ts';
+import type {Agenda,AgendaId,Caller,CheckAttempt,ClosureGate,CoordinatorProcess,CreatedIssueObservation,Facts,IssueRef,IssueSnapshot,Millis,PortError,PrRef,PrSnapshot,Repo,Result,Role,Sha,SourceScope,Target,Ticket} from '../domain/model.ts';
 
 export type PrWrite = {headRepo:Repo;branch:string;head:Sha;target:Target;title:string;body:string};
 export type IssueWrite = {repo:Repo;title:string;body:string};
@@ -47,4 +47,12 @@ export interface HostPort {
   seated(ticketId:string,role:Role,revision:number):boolean;
   finish(agendaId:string):Promise<Result<null,PortError>>;
   dispose():Promise<void>;
+}
+/** What this host's OS reports for a pid: no process, or the start time of the process holding it now. */
+export type ProcessStart={kind:'absent'}|{kind:'running';startedAt:string};
+/** The OS's process table on the host that also holds the agenda state. */
+export interface ProcessPort {
+  /** The coordinator process this controller runs in. */
+  current():Promise<Result<CoordinatorProcess,PortError>>;
+  start(pid:number):Promise<Result<ProcessStart,PortError>>;
 }

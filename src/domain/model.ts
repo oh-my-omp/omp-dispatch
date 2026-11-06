@@ -151,9 +151,10 @@ export const effectSchema = object({id:idSchema,ticketId:idSchema,action:actionS
 export type Effect = z.infer<typeof effectSchema>;
 export const closureSchema = object({id:idSchema,revision,state:text,stamp:parentStampSchema,visits:visitsSchema,gates:z.record(z.string(),parentGateSchema),rulings:z.array(object({at:millisSchema,summary:text})),notes:z.array(text)});
 export type ClosureGate = z.infer<typeof closureSchema>;
-/** The persisted agenda; `workflow` is the file-shaped workflow, parsed by parseAgenda. */
-export const agendaSchema = object({id:agendaIdSchema,version:revision,nextId:revision,convenedAt:millisSchema,lifecycle:z.enum(['active','completed']),parent:issueRefSchema.nullable(),workflow:z.unknown(),tickets:z.array(ticketSchema),closure:closureSchema.nullable(),effects:z.array(effectSchema),run:z.union([object({kind:z.literal('detached')}),object({kind:z.literal('attached'),id:idSchema,mainAgentId:text,mainSessionId:text})]),summary:text.nullable()});
+/** The persisted agenda; `workflow` is the file-shaped workflow, parsed by parseAgenda. `run` stays attached only while its coordinator process lives; `pid` and `startedAt` together name that process, since a pid alone is reused. `startedAt` is the start time exactly as the OS reports it, compared only for equality. */
+export const agendaSchema = object({id:agendaIdSchema,version:revision,nextId:revision,convenedAt:millisSchema,lifecycle:z.enum(['active','completed']),parent:issueRefSchema.nullable(),workflow:z.unknown(),tickets:z.array(ticketSchema),closure:closureSchema.nullable(),effects:z.array(effectSchema),run:z.union([object({kind:z.literal('detached')}),object({kind:z.literal('attached'),id:idSchema,mainAgentId:text,mainSessionId:text,pid:revision,startedAt:text})]),summary:text.nullable()});
+export type CoordinatorProcess = Pick<Extract<z.infer<typeof agendaSchema>['run'],{kind:'attached'}>,'pid'|'startedAt'>;
 export type Agenda = Omit<z.infer<typeof agendaSchema>,'workflow'>&{workflow:Workflow};
 export type Caller = {agentId:string;sessionId:string;sessionFile:string|null;kind:'main'}|{agentId:string;sessionId:string;sessionFile:string;kind:'seat';ticketId:string;role:Role;revision:number};
-export type DomainError = {kind:'unauthorized'|'invalidTransition'|'staleRevision'|'sourceUnavailable'|'sourceChanged'|'notFound'|'ownershipBlocked'|'invalidTopology';message:string};
+export type DomainError = {kind:'unauthorized'|'invalidTransition'|'staleRevision'|'sourceUnavailable'|'sourceChanged'|'notFound'|'ownershipBlocked'|'invalidTopology'|'agenda_attached';message:string};
 export type ParseError = {path:string;reason:string};

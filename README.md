@@ -51,7 +51,9 @@ A delivery starts a coordinator on the event that makes the trigger condition tr
 
 Without the flag the extension registers nothing else: no active `dispatch` tool, no timers, no dispatch state.
 
-Main starts a new agenda with `convene`, supplying `parent` (or `null`) and `tickets`. Every ticket entry has an `id`, `issue`, `target`, `dependsOn` array, and `adoptPr` reference or `null`. All current parent sub-issues must be represented. Dependencies refer to ticket IDs; independent tickets have no edge. Main can change the topology and record exceptional rulings with `resolve`. A saved active agenda requires explicit `resume` and confirmation that the original coordinator process ended.
+Main starts a new agenda with `convene`, supplying `parent` (or `null`) and `tickets`. Every ticket entry has an `id`, `issue`, `target`, `dependsOn` array, and `adoptPr` reference or `null`. All current parent sub-issues must be represented. Dependencies refer to ticket IDs; independent tickets have no edge. Main can change the topology and record exceptional rulings with `resolve`. A saved active agenda is taken over with `resume` and its `agenda` id alone.
+
+An attached agenda records its coordinator process: the pid and the start time the operating system reports for it (`ps -o lstart`). A coordinator that exits normally writes the agenda back to detached. `resume` asks the operating system about the recorded pid: only a process with that pid and the same start time is the previous coordinator, so a crashed or killed coordinator, or a pid since reused by another process, does not block it. While the previous coordinator still runs, `resume` refuses with `agenda_attached`, naming its pid and start time, and the agenda stays with that process. The agenda state lives on this host, so the check covers coordinators on this host only.
 
 ## Workflow
 
@@ -175,7 +177,7 @@ Judge seats always receive new blank sessions; their histories are never reused 
 
 Accepted transitions and effect intents are durably saved under `<dispatch.dataDir>/state` before returning. Every external write first persists `executing`, performs the operation, then confirms its result through a fresh GitHub read. An unknown outcome becomes `uncertain` and is never automatically resent. Resume reconciles interrupted executing intents against GitHub rather than replaying them. Every effect records the state entry that requested it. A ready effect is cancelled once that entry is left, and a late confirmation records its result without moving a newer state. PR head, target, issue contract, PR body, or ruling changes invalidate approvals before any merge.
 
-State envelopes use `format: 7`, which carries the agenda's frozen workflow in file shape. Older formats are rejected without migration or deletion. State saves sync the owned state directory, not its ancestors. The extension never rewrites conversation history or injects per-turn hidden ticket context; ticket reads and visible notifications are ordinary messages.
+State envelopes use `format: 8`, which carries the agenda's frozen workflow in file shape and the attached coordinator's pid and start time. Older formats, including format 7 agendas whose attached run names no process, are rejected without migration or deletion. State saves sync the owned state directory, not its ancestors. The extension never rewrites conversation history or injects per-turn hidden ticket context; ticket reads and visible notifications are ordinary messages.
 
 ## State-flow simulation
 

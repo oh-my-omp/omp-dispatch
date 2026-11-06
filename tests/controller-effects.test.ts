@@ -9,6 +9,8 @@ import {DispatchController} from '../src/runtime/controller.ts';
 import {bodyHash} from '../src/domain/identity.ts';
 import {YAML} from 'bun';
 import {parseWorkflow} from '../src/domain/workflow.ts';
+import {parseToolParameters} from '../src/domain/parse.ts';
+import {ProcessTable} from './process-fixture.ts';
 
 const parsedWorkflow=parseWorkflow(YAML.parse(await Bun.file(new URL('../src/default-workflow.yml',import.meta.url)).text()));
 if(!parsedWorkflow.ok)throw new Error(parsedWorkflow.error.reason);
@@ -44,7 +46,8 @@ for(const operation of ['publishPr','merge'] as const)test(`an unknown ${operati
     createPr:operation==='publishPr'?unknownWrite:unexpected,mergePr:operation==='merge'?unknownWrite:unexpected,
   };
   const errors:unknown[]=[];
-  controller=new DispatchController({files,github,host,cwd:root,workflow,intervalSeconds:3600,onChange:()=>{},onError:error=>errors.push(error)});
+  const processes=new ProcessTable();
+  controller=new DispatchController({files,github,host,process:processes.spawn(101,'Sat Nov 7 06:00:00 2026'),cwd:root,workflow,intervalSeconds:3600,onChange:()=>{},onError:error=>errors.push(error)});
   const main:Caller={kind:'main',agentId:'Main',sessionId:'first-main',sessionFile:null};controller.setMain(main);
   try {
     const convened=await controller.execute(main,{op:'convene',parent:null,tickets:[{id:'one',issue,target:{repo:repository,base:'main'},dependsOn:[],adoptPr:operation==='merge'?prRef:null}]});
@@ -72,9 +75,9 @@ for(const operation of ['publishPr','merge'] as const)test(`an unknown ${operati
     expect(failed.tickets[0]?.state).toBe('Escalated');
     if(operation==='publishPr')expect(failed.tickets[0]?.sessions.owner).toBe(owner.sessionFile);
     await controller.shutdown();
-    controller=new DispatchController({files,github,host,cwd:root,workflow:async()=>{throw new Error('Resume must use the frozen workflow');},intervalSeconds:3600,onChange:()=>{},onError:error=>errors.push(error)});
+    controller=new DispatchController({files,github,host,process:processes.spawn(102,'Sat Nov 7 06:05:00 2026'),cwd:root,workflow:async()=>{throw new Error('Resume must use the frozen workflow');},intervalSeconds:3600,onChange:()=>{},onError:error=>errors.push(error)});
     const successor:Caller={kind:'main',agentId:'Main',sessionId:'second-main',sessionFile:null};controller.setMain(successor);
-    expect((await controller.execute(successor,{op:'resume',agenda:failed.id,operatorConfirmedOriginalSessionEnded:true})).ok).toBe(true);
+    expect((await controller.execute(successor,{op:'resume',agenda:failed.id})).ok).toBe(true);
     await controller.run();await controller.run();
     expect(calls).toBe(1);
     expect(controller.snapshot()?.effects[0]?.state.kind).toBe('uncertain');
@@ -94,7 +97,7 @@ test('Main can adopt a source-confirmed external merge below the target head in 
     contains:async(_repo,ancestor,descendant)=>{comparisons.push(`${ancestor}:${descendant}`);return success('contains');},
     openPrsByHead:async()=>success([]),branchHead:unexpected,issue:unexpected,pr:unexpected,issuesCreatedSince:unexpected,checkAttempt:unexpected,createIssue:unexpected,addSubIssue:unexpected,editIssueBody:unexpected,setIssueOpen:unexpected,editPr:unexpected,rerunCheck:unexpected,createPr:unexpected,mergePr:unexpected,
   };
-  const controller=new DispatchController({files:createAgendaFiles(root),github,host,cwd:root,workflow,intervalSeconds:3600,onChange:()=>{},onError:unexpected});
+  const controller=new DispatchController({files:createAgendaFiles(root),github,host,process:new ProcessTable().spawn(101,'Sat Nov 7 06:00:00 2026'),cwd:root,workflow,intervalSeconds:3600,onChange:()=>{},onError:unexpected});
   const main:Caller={kind:'main',agentId:'Main',sessionId:'external-main',sessionFile:null};controller.setMain(main);
   try {
     expect((await controller.execute(main,{op:'convene',parent:null,tickets:[{id:'one',issue,target:{repo:repository,base:'main'},dependsOn:[],adoptPr:null}]})).ok).toBe(true);
@@ -118,7 +121,7 @@ test('convene checks every configured agent and refuses the agenda when one cann
   const refusing:HostPort={...host,agents:async(_cwd,names)=>{checked.push([...names]);return {ok:false,error:{kind:'precondition',message:'Configured seat agent is unavailable: missing-agent'}};}};
   const github:GitHubPort={facts:unexpected,contains:unexpected,openPrsByHead:unexpected,branchHead:unexpected,issue:unexpected,pr:unexpected,issuesCreatedSince:unexpected,checkAttempt:unexpected,createIssue:unexpected,addSubIssue:unexpected,editIssueBody:unexpected,setIssueOpen:unexpected,editPr:unexpected,rerunCheck:unexpected,createPr:unexpected,mergePr:unexpected};
   const files=createAgendaFiles(root);
-  const controller=new DispatchController({files,github,host:refusing,cwd:root,workflow:async()=>({ok:true,value:custom}),intervalSeconds:3600,onChange:()=>{},onError:unexpected});
+  const controller=new DispatchController({files,github,host:refusing,process:new ProcessTable().spawn(101,'Sat Nov 7 06:00:00 2026'),cwd:root,workflow:async()=>({ok:true,value:custom}),intervalSeconds:3600,onChange:()=>{},onError:unexpected});
   const main:Caller={kind:'main',agentId:'Main',sessionId:'agents-main',sessionFile:null};controller.setMain(main);
   try {
     const convened=await controller.execute(main,{op:'convene',parent:null,tickets:[{id:'one',issue,target:{repo:repository,base:'main'},dependsOn:[],adoptPr:null}]});
@@ -127,4 +130,82 @@ test('convene checks every configured agent and refuses the agenda when one cann
     expect(controller.snapshot()).toBeNull();
     expect(await files.list()).toEqual({ok:true,value:[]});
   }finally {await controller.shutdown();await rm(root,{recursive:true,force:true});}
+});
+
+// Resume asks the host's process table whether the recorded coordinator still runs: same pid and same start time.
+const quietGithub:GitHubPort={facts:async()=>success(structuredClone(facts)),openPrsByHead:async()=>success([]),contains:unexpected,branchHead:unexpected,issue:unexpected,pr:unexpected,issuesCreatedSince:unexpected,checkAttempt:unexpected,createIssue:unexpected,addSubIssue:unexpected,editIssueBody:unexpected,setIssueOpen:unexpected,editPr:unexpected,rerunCheck:unexpected,createPr:unexpected,mergePr:unexpected};
+const ORIGINAL_START='Sat Nov 7 06:00:00 2026',SUCCESSOR_START='Sat Nov 7 06:05:00 2026';
+function coordinator(root:string,processes:ProcessTable,pid:number,startedAt:string):{controller:DispatchController;main:Extract<Caller,{kind:'main'}>} {
+  const controller=new DispatchController({files:createAgendaFiles(root),github:quietGithub,host,process:processes.spawn(pid,startedAt),cwd:root,workflow,intervalSeconds:3600,onChange:()=>{},onError:unexpected});
+  const main={kind:'main' as const,agentId:'Main',sessionId:`main-${pid}`,sessionFile:null};controller.setMain(main);
+  return {controller,main};
+}
+async function convened(root:string,processes:ProcessTable):Promise<{controller:DispatchController;id:string}> {
+  const {controller,main}=coordinator(root,processes,201,ORIGINAL_START);
+  const result=await controller.execute(main,{op:'convene',parent:null,tickets:[{id:'one',issue,target:{repo:repository,base:'main'},dependsOn:[],adoptPr:null}]});
+  if(!result.ok)throw new Error(JSON.stringify(result.error));
+  const id=controller.snapshot()!.id;
+  expect((await createAgendaFiles(root).load(id))).toMatchObject({ok:true,value:{run:{kind:'attached',pid:201,startedAt:ORIGINAL_START}}});
+  return {controller,id};
+}
+
+test('resume takes over an agenda whose coordinator process was killed',async()=>{
+  const root=await mkdtemp(join(tmpdir(),'dispatch-resume-killed-'));
+  const processes=new ProcessTable();
+  // A killed process never shuts down, so its agenda stays attached.
+  const {id}=await convened(root,processes);processes.kill(201);
+  const successor=coordinator(root,processes,202,SUCCESSOR_START);
+  try {
+    expect((await successor.controller.execute(successor.main,{op:'resume',agenda:id})).ok).toBe(true);
+    expect(await createAgendaFiles(root).load(id)).toMatchObject({ok:true,value:{run:{kind:'attached',pid:202,startedAt:SUCCESSOR_START,mainSessionId:'main-202'}}});
+  }finally {await successor.controller.shutdown();await rm(root,{recursive:true,force:true});}
+});
+
+test('resume refuses with agenda_attached while the coordinator process still runs, and the run stays with it',async()=>{
+  const root=await mkdtemp(join(tmpdir(),'dispatch-resume-live-'));
+  const processes=new ProcessTable();
+  const original=await convened(root,processes);
+  const rival=coordinator(root,processes,203,SUCCESSOR_START);
+  try {
+    const refused=await rival.controller.execute(rival.main,{op:'resume',agenda:original.id});
+    expect(refused).toMatchObject({ok:false,error:{kind:'domain',error:{kind:'agenda_attached'}}});
+    if(refused.ok||refused.error.kind!=='domain')throw new Error('Expected a domain refusal');
+    expect(refused.error.error.message).toContain('pid 201');
+    expect(refused.error.error.message).toContain(ORIGINAL_START);
+    expect(rival.controller.snapshot()).toBeNull();
+    expect(await createAgendaFiles(root).load(original.id)).toMatchObject({ok:true,value:{run:{kind:'attached',pid:201,startedAt:ORIGINAL_START}}});
+    expect((await original.controller.execute({kind:'main',agentId:'Main',sessionId:'main-201',sessionFile:null},{op:'status'})).ok).toBe(true);
+  }finally {await rival.controller.shutdown();await original.controller.shutdown();await rm(root,{recursive:true,force:true});}
+});
+
+test('resume takes over when the recorded pid now belongs to a process with another start time',async()=>{
+  const root=await mkdtemp(join(tmpdir(),'dispatch-resume-reused-'));
+  const processes=new ProcessTable();
+  const {id}=await convened(root,processes);
+  processes.kill(201);processes.spawn(201,'Sat Nov 7 07:00:00 2026');
+  const successor=coordinator(root,processes,204,SUCCESSOR_START);
+  try {
+    expect((await successor.controller.execute(successor.main,{op:'resume',agenda:id})).ok).toBe(true);
+    expect(await createAgendaFiles(root).load(id)).toMatchObject({ok:true,value:{run:{kind:'attached',pid:204}}});
+  }finally {await successor.controller.shutdown();await rm(root,{recursive:true,force:true});}
+});
+
+test('a coordinator that shuts down detaches its agenda, and resume then needs no process lookup of it',async()=>{
+  const root=await mkdtemp(join(tmpdir(),'dispatch-resume-detached-'));
+  const processes=new ProcessTable();
+  const original=await convened(root,processes);
+  await original.controller.shutdown();
+  expect(await createAgendaFiles(root).load(original.id)).toMatchObject({ok:true,value:{run:{kind:'detached'}}});
+  // The original process still runs after its session ended; only a detached run lets the successor in.
+  const successor=coordinator(root,processes,205,SUCCESSOR_START);
+  try {
+    expect((await successor.controller.execute(successor.main,{op:'resume',agenda:original.id})).ok).toBe(true);
+    expect(await createAgendaFiles(root).load(original.id)).toMatchObject({ok:true,value:{run:{kind:'attached',pid:205}}});
+  }finally {await successor.controller.shutdown();await rm(root,{recursive:true,force:true});}
+});
+
+test('resume input carries only op and agenda; any other field is refused',()=>{
+  const agenda='aaaabbbb-1111-4111-8111-111111111111';
+  expect(parseToolParameters({input:{op:'resume',agenda}}).ok).toBe(true);
+  expect(parseToolParameters({input:{op:'resume',agenda,confirmed:true}}).ok).toBe(false);
 });
