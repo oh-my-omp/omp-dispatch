@@ -3,9 +3,10 @@ import {mkdtemp,rm,writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
 
 const moduleUrl=new URL('../src/i18n.ts',import.meta.url).href;
-async function resolveLanguage(env:Record<string,string>):Promise<string> {
+async function resolveLanguage(env:Record<string,string>,agentDir?:string):Promise<string> {
   const childEnv={...process.env};
   for(const key of ['OMOMP_LANG','LC_ALL','LC_MESSAGES','LANG'])delete childEnv[key];
+  if(agentDir!==undefined)childEnv.PI_CODING_AGENT_DIR=agentDir;
   const child=Bun.spawnSync([process.execPath,'-e',`import {language} from ${JSON.stringify(moduleUrl)}; console.log(language());`],{env:{...childEnv,...env}});
   expect(child.exitCode).toBe(0);
   return child.stdout.toString().trim();
@@ -26,7 +27,7 @@ describe('three-step interface language',()=>{
     const root=await mkdtemp('/tmp/roundtable-language-ignored-');
     try {
       await writeFile(join(root,'omomp.yml'),'omomp-lang:\n  language: zh\n');
-      expect(await resolveLanguage({LANG:'en_US.UTF-8'})).toBe('en');
+      expect(await resolveLanguage({LANG:'en_US.UTF-8'},root)).toBe('en');
     }finally{await rm(root,{recursive:true,force:true});}
   });
   test('environment stays live across calls',async()=>{
