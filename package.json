@@ -16,6 +16,32 @@
         "type": "string",
         "description": "Workflow file path, relative to the coordinator working directory",
         "env": "OMP_DISPATCH_WORKFLOW"
+      },
+      "githubTrigger": {
+        "type": "enum",
+        "values": ["link", "label"],
+        "default": "link",
+        "description": "GitHub App trigger: link starts a coordinator once an issue carries a valid launcher link; label also requires a label from githubTriggerLabels"
+      },
+      "githubTriggerLabels": {
+        "type": "string",
+        "default": "",
+        "description": "Comma-separated labels for the label trigger; empty means any label"
+      },
+      "githubTriggerAssociations": {
+        "type": "string",
+        "default": "OWNER,MEMBER,COLLABORATOR",
+        "description": "Comma-separated issue author associations allowed to start a coordinator through the GitHub App"
+      },
+      "webhookHost": {
+        "type": "string",
+        "default": "127.0.0.1",
+        "description": "Host the GitHub App webhook listener binds; read when the launcher starts"
+      },
+      "webhookPort": {
+        "type": "number",
+        "default": 47592,
+        "description": "Port the GitHub App webhook listener binds; read when the launcher starts"
       }
     }
   },
@@ -34,5 +60,8 @@
   },
   "dependencies": {
     "@oh-my-pi/omptype": "^18.12.6"
+  },
+  "peerDependencies": {
+    "@oh-my-pi/pi-coding-agent": "*"
   }
 }

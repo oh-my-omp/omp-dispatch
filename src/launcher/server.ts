@@ -2,7 +2,7 @@ import {createServer} from 'node:http';
 import type {IncomingMessage,ServerResponse} from 'node:http';
 import {type Runner,run} from './exec.ts';
 import {LAUNCHER_PORT,isUserNavigation,resolveTarget} from './link.ts';
-import {type LaunchOutcome,launch} from './tern.ts';
+import {type LaunchOutcome,launchFrontend} from './frontends.ts';
 import {language,tr} from '../i18n.ts';
 import {diagnosticText} from './diagnostics.ts';
 
@@ -23,13 +23,13 @@ function header(request:IncomingMessage,name:string):string|undefined {
 function renderPage(outcome:LauncherOutcome,url:string):{status:number;title:string;body:string} {
   switch(outcome.kind){
     case 'launched':
-      return {status:200,title:tr('launched','已启动'),body:tr(`<p>Tern is running <code>omp --dispatch</code> for <em>${escapeHtml(url)}</em> in a new tab.</p>`,`<p>Tern 已在新标签页中为 <em>${escapeHtml(url)}</em> 运行 <code>omp --dispatch</code>。</p>`)};
-    case 'focused':
-      return {status:200,title:tr('focused','已聚焦'),body:tr(`<p>Tern already holds live coordinator block <code>${escapeHtml(outcome.block)}</code> for this issue; it is focused now and no second process was started.</p>`,`<p>Tern 已有此议题的活动协调者区块 <code>${escapeHtml(outcome.block)}</code>；现已聚焦，未启动第二个进程。</p>`)};
+      return {status:200,title:tr('launched','已启动'),body:tr(`<p>The frontend is running <code>omp --dispatch</code> for <em>${escapeHtml(url)}</em>.</p>`,`<p>前端已为 <em>${escapeHtml(url)}</em> 运行 <code>omp --dispatch</code>。</p>`)};
+    case 'existing':
+      return {status:200,title:tr('existing','已存在'),body:tr(`<p>A coordinator for this issue is already running; no second process was started: ${escapeHtml(outcome.detail)}.</p>`,`<p>此议题的协调者已在运行，未启动第二个进程：${escapeHtml(outcome.detail)}。</p>`)};
     case 'rejected':
       return {status:400,title:tr('rejected','已拒绝'),body:tr(`<p>Nothing was started: ${escapeHtml(outcome.reason)}.</p>`,`<p>未启动任何进程：${escapeHtml(outcome.reason)}。</p>`)};
     case 'frontendFailed':
-      return {status:502,title:tr('frontendFailed','前端失败'),body:`<p>${tr('Tern could not start the coordinator.','Tern 无法启动协调者。')}</p><pre>${escapeHtml(outcome.output)}</pre>`};
+      return {status:502,title:tr('frontendFailed','前端失败'),body:`<p>${tr('The frontend could not start the coordinator.','前端无法启动协调者。')}</p><pre>${escapeHtml(outcome.output)}</pre>`};
   }
 }
 
@@ -54,11 +54,11 @@ export async function serveLauncher(options:LauncherOptions={}):Promise<Launcher
     else {
       const target=await resolveTarget({pathname:url.pathname,search:url.search});
       if(!target.ok)outcome=target.error;
-      else {reference=target.value.reference;outcome=await launch(target.value,runner);}
+      else {reference=target.value.reference;outcome=await launchFrontend(target.value.frontend,target.value,runner);}
     }
     const page=renderPage(outcome,request.url??'/');
     log({...received,reference,outcome:outcome.kind,
-      detail:outcome.kind==='rejected'?outcome.reason:outcome.kind==='focused'?outcome.block:outcome.kind==='frontendFailed'?outcome.output:reference});
+      detail:outcome.kind==='rejected'?outcome.reason:outcome.kind==='existing'?outcome.detail:outcome.kind==='frontendFailed'?outcome.output:reference});
     response.writeHead(page.status,{'content-type':'text/html; charset=utf-8','cache-control':'no-store'});
     response.end(pageDocument(page));
   };

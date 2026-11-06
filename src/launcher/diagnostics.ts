@@ -1,8 +1,8 @@
 import {tr} from '../i18n.ts';
 
 export type LauncherDiagnostic=
-  |{kind:'linkPath'}|{kind:'issuePath'}|{kind:'frontend';frontend:string}|{kind:'issueReference';value:string}
-  |{kind:'missingCwd'}|{kind:'relativeCwd';cwd:string}|{kind:'missingDirectory';cwd:string}
+  |{kind:'linkPath'}|{kind:'issuePath'}|{kind:'issueReference';value:string}
+  |{kind:'missingSpec'}|{kind:'specJson'}|{kind:'specShape';detail:string}|{kind:'relativeCwd';cwd:string}|{kind:'missingDirectory';cwd:string}
   |{kind:'getOnly'}|{kind:'userNavigation'}|{kind:'unexpected'}|{kind:'listen';port:number;detail:string}
   |{kind:'notMac'}|{kind:'noInterpreter'}|{kind:'bootstrap';detail:string}
   |{kind:'notResponding';port:number;log:string}|{kind:'stillResponding';port:number}
@@ -11,11 +11,12 @@ export type LauncherDiagnostic=
 
 export function diagnosticText(error:LauncherDiagnostic):string {
   switch(error.kind){
-    case 'linkPath':return tr('The link path must be /<frontend>/<owner>/<repo>/issues/<number>','链接路径必须为 /<frontend>/<owner>/<repo>/issues/<number>');
+    case 'linkPath':return tr('The link path must be /<owner>/<repo>/issues/<number>','链接路径必须为 /<owner>/<repo>/issues/<number>');
     case 'issuePath':return tr('The link path must end in /issues/<number>','链接路径必须以 /issues/<number> 结尾');
-    case 'frontend':return tr(`Unsupported frontend ${JSON.stringify(error.frontend)}; this launcher only serves tern`,`不支持的前端 ${JSON.stringify(error.frontend)}；此启动器仅支持 tern`);
     case 'issueReference':return tr(`An issue reference must be <owner>/<repo>#<number>, not ${JSON.stringify(error.value)}`,`议题引用必须为 <owner>/<repo>#<number>，不能是 ${JSON.stringify(error.value)}`);
-    case 'missingCwd':return tr('The link must carry cwd=<absolute path>','链接必须带有 cwd=<absolute path>');
+    case 'missingSpec':return tr('The link must carry spec=<JSON {"cwd":"<absolute path>","frontend":{"kind":"<frontend>"}}>','链接必须带有 spec=<JSON {"cwd":"<absolute path>","frontend":{"kind":"<frontend>"}}>');
+    case 'specJson':return tr('The link spec is not valid JSON','链接的 spec 不是合法 JSON');
+    case 'specShape':return tr(`The link spec does not match {"cwd","frontend"}: ${error.detail}`,`链接的 spec 不符合 {"cwd","frontend"}：${error.detail}`);
     case 'relativeCwd':return tr(`cwd ${error.cwd} is not an absolute path`,`cwd ${error.cwd} 不是绝对路径`);
     case 'missingDirectory':return tr(`cwd ${error.cwd} is not an existing directory`,`cwd ${error.cwd} 不是已存在的目录`);
     case 'getOnly':return tr('Only a GET navigation is accepted','仅接受 GET 导航请求');

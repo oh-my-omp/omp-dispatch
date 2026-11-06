@@ -112,7 +112,7 @@ export default function dispatch(pi:ExtensionAPI):void {
   pi.registerTool({name:'dispatch',label:tr('Dispatch','调度'),description:'Main coordinates a durable ticket graph and launches each ticket once; Dispatch then relays its seats until Done or Escalated. Seats read one ticket and hand off with submit/verdict/escalate. GitHub writes are performed and freshly confirmed by the state machine.',parameters:buildPublicGrammar(z).toolParametersSchema,defaultInactive:true,
     async execute(_id,params,_signal,_update,ctx){const response=await runtime.execute(ctx,params);return {content:[{type:'text',text:JSON.stringify(response)}],details:response,isError:!response.ok};},
   });
-  pi.registerCommand('dispatch-launcher',{description:tr('Install, uninstall, or inspect the local Dispatch link launcher (install|uninstall|status)','安装、卸载或查看本地调度链接启动器（install|uninstall|status）'),async handler(args,ctx){const result=await launcherCommand(args.trim().split(/\s+/).filter(part=>part.length>0));ctx.ui.notify(result.ok?result.value:result.error,result.ok?'info':'error');}});
+  pi.registerCommand('dispatch-launcher',{description:tr('Install, uninstall, or inspect the local Dispatch launcher, or register its GitHub App (install|uninstall|status|github-app register --webhook-url <url>)','安装、卸载或查看本地调度启动器，或注册其 GitHub App（install|uninstall|status|github-app register --webhook-url <url>）'),async handler(args,ctx){const result=await launcherCommand(args.trim().split(/\s+/).filter(part=>part.length>0));ctx.ui.notify(result.ok?result.value:result.error,result.ok?'info':'error');}});
   pi.on('session_start',async(_event,ctx)=>{
     const identity=runtime.readIdentity(pi);
     if(identity.kind==='absent')return;

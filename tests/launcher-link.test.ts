@@ -1,10 +1,10 @@
 import {describe, expect, test} from 'bun:test';
-import {isUserNavigation,parseLinkPath,resolveTarget} from '../src/launcher/link.ts';
+import {isUserNavigation,launcherLinks,parseLinkPath,resolveTarget} from '../src/launcher/link.ts';
 import {type RunResult,type Runner} from '../src/launcher/exec.ts';
-import {connectedWindow,launch,liveCoordinatorBlock} from '../src/launcher/tern.ts';
+import {connectedWindow,launchTern,liveCoordinatorBlock} from '../src/launcher/tern.ts';
 
-// The launcher's whole behaviour is: read a link, decide, call Tern. These
-// checks drive that decision with a fake Tern and a real filesystem stat.
+// The launcher's whole behaviour is: read a link, decide, call a frontend.
+// These checks drive that decision with a fake Tern and a real filesystem stat.
 
 type Call={command:string;args:readonly string[];cwd:string|undefined};
 
@@ -29,20 +29,21 @@ const listing=(blocks:readonly {id:number;live:boolean;exited?:number|null;args:
 const inspection=(clients:readonly string[]):string=>JSON.stringify({clients:clients.map((kind,index)=>({conn:index+1,kind}))});
 const reference='Acme/dispatch#7';
 const liveBlock={id:42,live:true,args:['--dispatch',reference]};
-const target={frontend:'tern' as const,issue:{repo:{owner:'Acme',name:'dispatch'},number:7},reference,cwd:'/tmp'};
+const target={reference,cwd:'/tmp'};
 const windowed={
   'tern inspect --json':ok(inspection(['cli','window'])),
 };
+const spec=(value:unknown):string=>`?spec=${encodeURIComponent(JSON.stringify(value))}`;
 
 describe('link contract',()=>{
-  test('accepts one frontend, one owner/repo and one issue number',()=>{
-    const parsed=parseLinkPath('/tern/Acme/dispatch/issues/7');
+  test('accepts one owner/repo and one issue number',()=>{
+    const parsed=parseLinkPath('/Acme/dispatch/issues/7');
     expect(parsed.ok).toBe(true);
     if(parsed.ok)expect(parsed.value).toEqual({repo:{owner:'Acme',name:'dispatch'},number:7});
   });
 
-  test('rejects every path that is not one tern issue link',()=>{
-    for(const path of ['/wezterm/Acme/dispatch/issues/7','/tern/Acme/dispatch/pulls/7','/tern/Acme/dispatch/issues/abc','/tern/Acme/dispatch/issues/0','/tern/Acme/dispatch','/tern/Acme/dispatch/issues/7/extra']){
+  test('rejects every path that is not one issue link',()=>{
+    for(const path of ['/tern/Acme/dispatch/issues/7','/Acme/dispatch/pulls/7','/Acme/dispatch/issues/abc','/Acme/dispatch/issues/0','/Acme/dispatch','/Acme/dispatch/issues/7/extra']){
       const parsed=parseLinkPath(path);
       expect(parsed.ok).toBe(false);
       if(!parsed.ok)expect(parsed.error.kind).toBe('rejected');
@@ -56,19 +57,39 @@ describe('link contract',()=>{
     expect(isUserNavigation({mode:undefined,user:undefined})).toBe(false);
   });
 
-  test('requires an existing absolute cwd and decodes it from the query',async()=>{
-    const accepted=await resolveTarget({pathname:'/tern/Acme/dispatch/issues/7',search:'?cwd=%2Ftmp'});
+  test('reads cwd and frontend from one JSON spec',async()=>{
+    const accepted=await resolveTarget({pathname:'/Acme/dispatch/issues/7',search:spec({cwd:'/tmp',frontend:{kind:'tern'}})});
     expect(accepted.ok).toBe(true);
-    if(accepted.ok){expect(accepted.value.cwd).toBe('/tmp');expect(accepted.value.reference).toBe(reference);}
-    for(const search of ['', '?cwd=relative/path','?cwd=%2Fnonexistent-omp-dispatch-check','?cwd=%2Fetc%2Fhosts']){
-      const refused=await resolveTarget({pathname:'/tern/Acme/dispatch/issues/7',search});
+    if(accepted.ok)expect(accepted.value).toEqual({issue:{repo:{owner:'Acme',name:'dispatch'},number:7},reference,cwd:'/tmp',frontend:{kind:'tern'}});
+  });
+
+  test('refuses a spec that is missing, malformed, names an unknown frontend, or points nowhere',async()=>{
+    for(const search of [
+      '',
+      '?cwd=%2Ftmp',
+      '?spec=%7Bnot-json',
+      spec({cwd:'/tmp'}),
+      spec({cwd:'/tmp',frontend:{kind:'wezterm'}}),
+      spec({cwd:'/tmp',frontend:{kind:'tern',profile:'x'}}),
+      spec({cwd:'/tmp',frontend:{kind:'tern'},extra:true}),
+      spec({cwd:'relative/path',frontend:{kind:'tern'}}),
+      spec({cwd:'/nonexistent-omp-dispatch-check',frontend:{kind:'tern'}}),
+      spec({cwd:'/etc/hosts',frontend:{kind:'tern'}}),
+    ]){
+      const refused=await resolveTarget({pathname:'/Acme/dispatch/issues/7',search});
       expect(refused.ok).toBe(false);
       if(!refused.ok)expect(refused.error.reason.length).toBeGreaterThan(0);
     }
   });
+
+  test('finds the launcher links inside a Markdown badge',()=>{
+    const link=`http://127.0.0.1:47591/Acme/dispatch/issues/7${spec({cwd:'/tmp',frontend:{kind:'tern'}})}`;
+    const body=`Intro\n[![Coordinate with Dispatch](https://example.com/badge.svg)](${link})\nhttp://127.0.0.1:9999/other and http://localhost:47591/Acme/dispatch/issues/7`;
+    expect(launcherLinks(body).map(url=>url.href)).toEqual([link]);
+  });
 });
 
-describe('coordinator discovery and launch decision',()=>{
+describe('Tern frontend: coordinator discovery and launch decision',()=>{
   test('matches only a live, unexited block already running the exact reference',()=>{
     expect(liveCoordinatorBlock(listing([liveBlock]),reference)).toBe('42');
     expect(liveCoordinatorBlock(listing([{...liveBlock,live:false}]),reference)).toBeNull();
@@ -95,8 +116,9 @@ describe('coordinator discovery and launch decision',()=>{
       'tern ls --json':ok(listing([liveBlock])),
       'tern focus 42':ok(''),
     });
-    const outcome=await launch(target,runner);
-    expect(outcome).toEqual({kind:'focused',block:'42'});
+    const outcome=await launchTern(target,runner);
+    expect(outcome.kind).toBe('existing');
+    if(outcome.kind==='existing')expect(outcome.detail).toContain('42');
     expect(calls.map(call=>call.args.join(' '))).toEqual(['inspect --json','ls --json','focus 42']);
   });
 
@@ -106,7 +128,7 @@ describe('coordinator discovery and launch decision',()=>{
       'tern ls --json':ok(listing([])),
       'tern new tab --cwd /tmp -- omp --dispatch Acme/dispatch#7':ok(''),
     });
-    const outcome=await launch(target,runner);
+    const outcome=await launchTern(target,runner);
     expect(outcome).toEqual({kind:'launched'});
     expect(calls.map(call=>call.args.join(' '))).toEqual(['inspect --json','ls --json','new tab --cwd /tmp -- omp --dispatch Acme/dispatch#7']);
   });
@@ -118,7 +140,7 @@ describe('coordinator discovery and launch decision',()=>{
       'tern /tmp':ok(''),
       'tern new tab --cwd /tmp -- omp --dispatch Acme/dispatch#7':ok(''),
     });
-    const outcome=await launch(target,runner);
+    const outcome=await launchTern(target,runner);
     expect(outcome).toEqual({kind:'launched'});
     expect(calls.map(call=>call.args.join(' '))).toEqual(['inspect --json','ls --json','/tmp','new tab --cwd /tmp -- omp --dispatch Acme/dispatch#7']);
   });
@@ -130,8 +152,8 @@ describe('coordinator discovery and launch decision',()=>{
       'tern /tmp':ok(''),
       'tern focus 42':ok(''),
     });
-    const outcome=await launch(target,runner);
-    expect(outcome).toEqual({kind:'focused',block:'42'});
+    const outcome=await launchTern(target,runner);
+    expect(outcome.kind).toBe('existing');
     expect(calls.map(call=>call.args.join(' '))).toEqual(['inspect --json','ls --json','/tmp','focus 42']);
   });
 
@@ -142,7 +164,7 @@ describe('coordinator discovery and launch decision',()=>{
       'tern /tmp':ok(''),
       'tern new tab --cwd /tmp -- omp --dispatch Acme/dispatch#7':ok(''),
     });
-    const outcome=await launch(target,runner);
+    const outcome=await launchTern(target,runner);
     expect(outcome).toEqual({kind:'launched'});
     expect(calls.filter(call=>call.args.join(' ')==='ls --json').length).toBe(2);
   });
@@ -153,7 +175,7 @@ describe('coordinator discovery and launch decision',()=>{
       'tern ls --json':ok(listing([])),
       'tern new tab --cwd /tmp -- omp --dispatch Acme/dispatch#7':failed('tern: no session to add a tab to'),
     });
-    const outcome=await launch(target,runner);
+    const outcome=await launchTern(target,runner);
     expect(outcome.kind).toBe('frontendFailed');
     if(outcome.kind==='frontendFailed')expect(outcome.output).toContain('tern: no session to add a tab to');
   });
@@ -164,7 +186,7 @@ describe('coordinator discovery and launch decision',()=>{
       'tern ls --json':failed('no session daemon'),
       'tern /tmp':failed('tern: cannot start the window'),
     });
-    const outcome=await launch(target,runner);
+    const outcome=await launchTern(target,runner);
     expect(outcome.kind).toBe('frontendFailed');
     if(outcome.kind==='frontendFailed')expect(outcome.output).toContain('tern: cannot start the window');
   });

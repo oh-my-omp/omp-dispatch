@@ -66,9 +66,9 @@ function interpreterOnPath():string|null {
   return null;
 }
 
-function portAnswers(timeoutMs:number):Promise<boolean> {
+export function portAnswers(timeoutMs:number,address:{host:string;port:number}={host:'127.0.0.1',port:LAUNCHER_PORT}):Promise<boolean> {
   const {promise,resolve}=Promise.withResolvers<boolean>();
-  const socket=connect({host:'127.0.0.1',port:LAUNCHER_PORT});
+  const socket=connect(address);
   const settle=(answer:boolean):void=>{socket.destroy();resolve(answer);};
   socket.setTimeout(timeoutMs,()=>settle(false));
   socket.once('connect',()=>settle(true));

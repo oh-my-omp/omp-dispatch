@@ -13,18 +13,37 @@ A 4½-minute walkthrough of one real take, every model on `openai-codex/gpt-6.1-
 A coordinator starts from the issue it delivers, never from a switch inside a session. The issue carries one link:
 
 ```
-http://127.0.0.1:47591/tern/<owner>/<repo>/issues/<number>?cwd=<absolute local checkout>
+http://127.0.0.1:47591/<owner>/<repo>/issues/<number>?spec=<percent-encoded JSON>
 ```
 
-GitHub strips inline `<svg>` from issue bodies, so the link is written as this repository's badge image wrapped in the link, not as a bare URL. `cwd` is percent-encoded as a query value; an unencoded space would end the Markdown link:
+`spec` is one JSON object, `{"cwd": "<absolute local checkout>", "frontend": {"kind": "<frontend>", ...}}`. `cwd` is where the coordinator runs; `frontend` names where its process runs, and every field besides `kind` belongs to that frontend. Unknown fields at either level are refused, so a frontend's options extend the link without changing its path or query grammar. The only frontend today is `{"kind": "tern"}`, which takes no options.
+
+GitHub strips inline `<svg>` from issue bodies, so the link is written as this repository's badge image wrapped in the link, not as a bare URL. The JSON is percent-encoded as a query value; a raw space or parenthesis would end the Markdown link. For `cwd` `/Users/me/src/repo` with Tern:
 
 ```markdown
-[![Coordinate with Dispatch](https://raw.githubusercontent.com/oh-my-omp/omp-dispatch/main/docs/badge/coordinate-with-dispatch.svg)](http://127.0.0.1:47591/tern/<owner>/<repo>/issues/<number>?cwd=<absolute local checkout>)
+[![Coordinate with Dispatch](https://raw.githubusercontent.com/oh-my-omp/omp-dispatch/main/docs/badge/coordinate-with-dispatch.svg)](http://127.0.0.1:47591/<owner>/<repo>/issues/<number>?spec=%7B%22cwd%22%3A%22%2FUsers%2Fme%2Fsrc%2Frepo%22%2C%22frontend%22%3A%7B%22kind%22%3A%22tern%22%7D%7D)
 ```
 
-Install the extension as an omp plugin (`omp plugin install omp-dispatch`), then install the link launcher once — from any omp session with `/dispatch-launcher install`, or from the package CLI with `omp-dispatch-launcher install`. `install` writes `~/Library/LaunchAgents/com.ohmyomp.dispatch-launcher.plist` and leaves `127.0.0.1:47591` answering; `uninstall` removes it and `status` reports it.
+Install the extension as an omp plugin (`omp plugin install omp-dispatch`), then install the launcher once — from any omp session with `/dispatch-launcher install`, or from the package CLI with `omp-dispatch-launcher install`. `install` writes `~/Library/LaunchAgents/com.ohmyomp.dispatch-launcher.plist` and leaves `127.0.0.1:47591` answering; `uninstall` removes it and `status` reports it together with the GitHub App and its webhook listener.
 
-The launcher holds no state of its own. It reads the link, calls Tern, and returns one page naming exactly one outcome: `launched` (a coordinator tab now runs `omp --dispatch <owner>/<repo>#<number>` in the link's `cwd`), `focused` (a live block already runs that exact reference and was focused instead), `rejected` (unsupported frontend, malformed path or number, a `cwd` that is not an existing absolute directory, or a request that is not a user's click navigation), or `frontendFailed` (Tern's own output). Tern's daemon outlives its window, so the launcher opens a window in the link's `cwd` first whenever no window client is connected: a block started without one would run invisibly. Only `Sec-Fetch-Mode: navigate` with `Sec-Fetch-User: ?1` is served, because any page can GET `127.0.0.1` and GitHub drops Referer on the https→http hop; the click is the operator's authorization. The port and the `tern` frontend are part of the published link contract.
+The launcher holds no state of its own. It reads the link, calls the named frontend, and returns one page naming exactly one outcome: `launched` (the frontend now runs `omp --dispatch <owner>/<repo>#<number>` in `cwd`), `existing` (the frontend already runs a coordinator for that exact reference and started nothing), `rejected` (malformed path or number, a missing, malformed or unknown `spec`, a `cwd` that is not an existing absolute directory, or a request that is not a user's click navigation), or `frontendFailed` (the frontend's own output). Only `Sec-Fetch-Mode: navigate` with `Sec-Fetch-User: ?1` is served, because any page can GET `127.0.0.1` and GitHub drops Referer on the https→http hop; the click is the operator's authorization. The port and the `spec` grammar are part of the published link contract.
+
+The Tern frontend opens a tab running the coordinator, or focuses the live block that already runs that exact reference. Tern's daemon outlives its window, so it opens a window in `cwd` first whenever no window client is connected: a block started without one would run invisibly.
+
+### GitHub App trigger
+
+The launcher can also start a coordinator without a click, when a GitHub App delivers an `issues` event. Register the App once with `omp-dispatch-launcher github-app register --webhook-url <https URL> [--org <organization>] [--name <app name>]` (or `/dispatch-launcher github-app register ...`). It opens GitHub's App manifest flow in the browser; after you confirm, GitHub's one-time code is converted into the App's credentials, written to `~/.config/omp-dispatch/github-app.json` with mode `0600`. The App asks for read access to issues and subscribes to `issues` events. Install it on the repositories whose issues may start a coordinator. Registering again replaces the file with a new App's credentials.
+
+The webhook listener runs inside the launcher on `webhookHost:webhookPort` (default `127.0.0.1:47592`) and serves only `POST /github/webhook`, accepting a delivery only when its `X-Hub-Signature-256` matches the App's webhook secret. It is a separate port from the link listener so that exposing it never exposes the click endpoint, whose header check a non-browser client could forge. The plugin does not provide that exposure: route your own HTTPS tunnel or reverse proxy to the listener, and pass its public URL as `--webhook-url`.
+
+A delivery starts a coordinator on the event that makes the trigger condition true, through the frontend and `cwd` of the link in the issue body; an issue without a valid link for itself never starts one. The condition needs an open issue whose author association is allowed, plus:
+
+| `githubTrigger` | Condition | Events that can make it true |
+|---|---|---|
+| `link` (default) | the body carries a valid launcher link for this issue | `opened`, `reopened`, `edited` when the edit adds the link |
+| `label` | the link, and a label from `githubTriggerLabels` (any label when empty) | the above, and `labeled` when the added label is the first match |
+
+`githubTriggerAssociations` (default `OWNER,MEMBER,COLLABORATOR`) lists the issue author associations GitHub reports that may start a coordinator; it describes the issue's author, not who labeled or edited it. The trigger settings and the App credentials are read on every delivery; `webhookHost` and `webhookPort` are read when the launcher starts, so changing them needs `install` again. Configure them like any plugin setting, for example `omp plugin config set omp-dispatch githubTrigger label`. The launcher reads the user-level plugin settings, not a project's `plugin-overrides.json`. Every delivery is answered with its decision once made (`launching`, `ignored` with the reason, or a rejection) and logged to the launcher's log; the frontend launch continues after the answer.
 
 ## The coordinator
 

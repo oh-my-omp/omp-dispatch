@@ -1,7 +1,11 @@
 import {z} from '@oh-my-pi/omptype/zod';
 import {type Runner,run} from './exec.ts';
-import type {LaunchTarget} from './link.ts';
+import type {CoordinatorTarget,LaunchOutcome} from './frontends.ts';
 import {diagnosticText} from './diagnostics.ts';
+import {tr} from '../i18n.ts';
+
+/** `{"kind":"tern"}`: Tern takes no options yet; unknown fields are refused rather than ignored. */
+export const ternSpec=z.object({kind:z.literal('tern')}).strict();
 
 /** `tern ls --json`, read only where a block can carry a coordinator command; every other field is ignored. */
 const listingSchema=z.object({
@@ -14,8 +18,6 @@ const listingSchema=z.object({
 
 /** `tern inspect --json`, read only for the connected clients; everything else is ignored. */
 const inspectionSchema=z.object({clients:z.array(z.object({kind:z.string().optional()}))});
-
-export type LaunchOutcome={kind:'launched'}|{kind:'focused';block:string}|{kind:'frontendFailed';output:string};
 
 function describe(result:{code:number;stdout:string;stderr:string}):string {return result.stderr.trim()||result.stdout.trim()||diagnosticText({kind:'exitCode',code:result.code});}
 
@@ -60,11 +62,11 @@ export function connectedWindow(inspection:string):boolean {
 }
 
 /**
- * Start or reveal the coordinator for one issue link. `omp` is taken from PATH,
- * as the operator's own shell would resolve it, and the extension arrives
+ * Start or reveal the coordinator for one issue in Tern. `omp` is taken from
+ * PATH, as the operator's own shell would resolve it, and the extension arrives
  * through the installed plugin rather than an `-e` flag that would load it twice.
  */
-export async function launch(target:LaunchTarget,exec:Runner=run):Promise<LaunchOutcome> {
+export async function launchTern(target:CoordinatorTarget,exec:Runner=run):Promise<LaunchOutcome> {
   const inspection=await exec('tern',['inspect','--json'],{});
   let listing=await exec('tern',['ls','--json'],{});
   if(listing.code!==0||!connectedWindow(inspection.stdout)){
@@ -76,7 +78,7 @@ export async function launch(target:LaunchTarget,exec:Runner=run):Promise<Launch
   const holder=liveCoordinatorBlock(listing.stdout,target.reference);
   if(holder!==null){
     const focused=await exec('tern',['focus',holder],{});
-    return focused.code===0?{kind:'focused',block:holder}:{kind:'frontendFailed',output:`tern focus ${holder}: ${describe(focused)}`};
+    return focused.code===0?{kind:'existing',detail:tr(`Tern block ${holder} already runs it and is focused now`,`Tern 区块 ${holder} 已在运行它，现已聚焦`)}:{kind:'frontendFailed',output:`tern focus ${holder}: ${describe(focused)}`};
   }
   const tab=await exec('tern',['new','tab','--cwd',target.cwd,'--','omp','--dispatch',target.reference],{});
   return tab.code===0?{kind:'launched'}:{kind:'frontendFailed',output:`tern new tab: ${describe(tab)}`};
