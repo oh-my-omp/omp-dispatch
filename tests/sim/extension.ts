@@ -25,7 +25,7 @@ type Played = {op: string | null; result: string};
 const replySchema = z.object({ok: z.boolean(), value: z.object({
   launchable: z.array(z.string()).optional(),
   ticket: z.object({state: z.string(), revision: z.number(), rulings: z.array(z.unknown())}).optional(),
-}).passthrough().optional()}).passthrough();
+}).passthrough().optional(), error: z.object({kind: z.string(), error: z.object({kind: z.string()}).passthrough().optional()}).passthrough().optional()}).passthrough();
 type Reply = z.infer<typeof replySchema>;
 // Ticket notes are objects with `text`; closure notes are plain strings.
 const briefTicketSchema = z.object({id: z.string(), revision: z.number(), notes: z.array(z.unknown()).optional()}).passthrough();
@@ -35,14 +35,14 @@ const text = (message: Message): string => typeof message.content === 'string' ?
   : message.content.map(block => block.type === 'text' ? block.text : '').join('');
 const quote = (value: string) => `'${value.replaceAll("'", `'\\''`)}'`;
 
-/** The tool calls made after `from`, paired with their results, in order. */
-function played(messages: Message[], from: number, tool: string): Played[] {
+/** The calls of `tool` (any tool when null) made after `from`, paired with their results, in order. */
+function played(messages: Message[], from: number, tool: string | null): Played[] {
   const out: Played[] = [];
   for (let index = from; index < messages.length; index++) {
     const message = messages[index]!;
     if (message.role !== 'assistant') continue;
     for (const block of message.content) {
-      if (block.type !== 'toolCall' || block.name !== tool) continue;
+      if (block.type !== 'toolCall' || tool !== null && block.name !== tool) continue;
       const result = messages.slice(index + 1).find(item => item.role === 'toolResult' && item.toolCallId === block.id);
       const input = block.arguments.input;
       const op = typeof input === 'object' && input !== null && 'op' in input && typeof input.op === 'string' ? input.op : null;
@@ -70,7 +70,8 @@ function parseReply(result: string): Reply {
 
 /* ------------------------------------------------------------------ Main */
 
-type Ask = {input: Record<string, unknown>};
+/** A dispatch call, or a shell command Main runs to wait for the driver. */
+type Ask = {input: Record<string, unknown>} | {shell: string};
 type MainPlan = Generator<Ask, void, Reply>;
 
 function* startPlan(trigger: string): MainPlan {
@@ -85,15 +86,25 @@ function* startPlan(trigger: string): MainPlan {
 
 function* attentionPlan(trigger: string): MainPlan {
   const keys = /Dispatch needs Main: (.*?)\. launch:/.exec(trigger)?.[1]?.split(', ') ?? [];
+  const finish = {input: {op: 'finish', summary: `Simulation ${scenario.name} delivered every ticket.`}};
   for (const key of keys) {
-    const [kind = '', id = ''] = key.split(':');
+    const [kind = '', id = '', effect = ''] = key.split(':');
     if (kind === 'launch') yield {input: {op: 'launch', ticketId: id}};
-    else if (kind === 'finish') yield {input: {op: 'finish', summary: `Simulation ${scenario.name} delivered every ticket.`}};
+    else if (kind === 'finish') yield finish;
     else if (kind === 'escalated') {
       const read = yield {input: {op: 'read', ticketId: id}};
       const ticket = read.value?.ticket;
       const ruling = scenario.tickets.find(item => item.id === id)?.rulings?.[ticket?.rulings.length ?? 0];
       if (ticket?.state === 'Escalated' && ruling) yield {input: {op: 'resolve', ticketId: id, revision: ticket.revision, ruling: ruling.ruling, to: ruling.to, ...(ruling.noCode ? {noCode: ruling.noCode} : {})}};
+    } else if (kind === 'failed' && scenario.retryFailed) {
+      yield {shell: `while [ ! -f ${quote(scenario.retryFailed)} ]; do sleep 0.2; done`};
+      // The failed record blocks finish; a seat still retiring refuses it first, so wait that out.
+      let finished = yield finish;
+      while (finished.error?.error?.kind === 'ownershipBlocked') { yield {shell: 'sleep 0.5'}; finished = yield finish; }
+      if (finished.ok) return;
+      const read = yield {input: {op: 'read', ticketId: id}};
+      const ticket = read.value?.ticket;
+      if (ticket) yield {input: {op: 'resolve', ticketId: id, revision: ticket.revision, ruling: `Retry the failed PM record ${effect}.`, to: ticket.state, effects: [{effectId: effect, disposition: 'retry'}]}};
     }
   }
 }
@@ -103,7 +114,7 @@ function mainStep(messages: Message[]): {step: Step; note: string} {
   if (index < 0) return {step: {text: 'Nothing for Main to decide.'}, note: 'no trigger'};
   const trigger = text(messages[index]!);
   const plan = /Dispatch needs Main:/.test(trigger) ? attentionPlan(trigger) : startPlan(trigger);
-  const history = played(messages, index + 1, 'dispatch');
+  const history = played(messages, index + 1, null);
   let next = plan.next(parseReply(''));
   for (const item of history) {
     if (next.done) break;
@@ -111,7 +122,9 @@ function mainStep(messages: Message[]): {step: Step; note: string} {
   }
   // The note names the notification and its position, so the driver can group one turn's calls per notification.
   const note = `${index}:${/Dispatch needs Main: (.*?)\. launch:/.exec(trigger)?.[1] ?? 'start'}`;
-  return next.done ? {step: {text: 'Waiting for the next dispatch decision.'}, note} : {step: {call: {name: 'dispatch', args: next.value}}, note};
+  if (next.done) return {step: {text: 'Waiting for the next dispatch decision.'}, note};
+  const ask = next.value;
+  return {step: {call: 'input' in ask ? {name: 'dispatch', args: ask} : {name: 'bash', args: {command: ask.shell, timeout: 0}}}, note};
 }
 
 /* ------------------------------------------------------------------ seats */
