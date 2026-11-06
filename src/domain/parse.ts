@@ -1,6 +1,6 @@
 import type {ZodLikeSchema} from '@oh-my-pi/omptype/zod';
 import {agendaSchema,toolParametersSchema,type Agenda,type ParseError,type Result,type ToolParameters} from './model.ts';
-import {ESCALATED,encodeWorkflow,parseWorkflow,verdictsMatch} from './workflow.ts';
+import {ASKING,ESCALATED,encodeWorkflow,parseWorkflow,verdictsMatch} from './workflow.ts';
 import {sameRef} from './identity.ts';
 
 function parse<T>(schema:ZodLikeSchema<T>,value:unknown):Result<T,ParseError> {
@@ -49,12 +49,15 @@ export function parseAgenda(value:unknown):Result<Agenda,ParseError> {
   for(const effect of agenda.effects){
     const ticket=agenda.tickets.some(ticket=>ticket.id===effect.ticketId),closure=effect.ticketId===agenda.closure?.id;
     if(!ticket&&!closure)return {ok:false,error:{path:'effects',reason:'Effect must belong to a ticket or closure'}};
-    if(effect.origin&&!(effect.origin.state in (ticket?workflow.value.ticket.states:workflow.value.parent.states)))return {ok:false,error:{path:'effects',reason:`Effect ${effect.id} was requested by ${effect.origin.state}, which the agenda workflow does not define`}};
+    // A ticket's question effects are requested by its built-in Asking entry; every other origin is a workflow state.
+    const states=ticket?workflow.value.ticket.states:workflow.value.parent.states;
+    if(effect.origin&&!(effect.origin.state in states)&&!(ticket&&effect.origin.state===ASKING))return {ok:false,error:{path:'effects',reason:`Effect ${effect.id} was requested by ${effect.origin.state}, which the agenda workflow does not define`}};
   }
   const ticketStates=workflow.value.ticket.states,parentStates=workflow.value.parent.states;
   for(const ticket of agenda.tickets){
     const fail=(reason:string):Result<Agenda,ParseError>=>({ok:false,error:{path:'tickets',reason:`Ticket ${ticket.id} ${reason}`}});
-    if(ticket.state!==ESCALATED&&!(ticket.state in ticketStates))return fail(`is in ${ticket.state}, which the agenda workflow does not define`);
+    if(ticket.state!==ESCALATED&&ticket.state!==ASKING&&!(ticket.state in ticketStates))return fail(`is in ${ticket.state}, which the agenda workflow does not define`);
+    if((ticket.state===ASKING)!==(ticket.ask!==null))return fail(ticket.ask?`records a question outside ${ASKING}`:`is ${ASKING} without its question`);
     for(const [name,gate] of Object.entries(ticket.gates)){
       const state=ticketStates[name];
       if(state?.kind!=='judge'||state.subject!==gate.stamp.kind||!verdictsMatch(state.judges,gate.verdicts))return fail(`holds a ${name} gate that does not match the agenda workflow`);

@@ -14,7 +14,7 @@ const workflow=parsedWorkflow.value;
 
 function agenda():Agenda {
   return {id:'aaaabbbb-1111-4111-8111-111111111111',version:1,nextId:1,convenedAt:1,lifecycle:'active',parent:null,workflow,closure:null,effects:[],run:{kind:'detached'},summary:null,tickets:[{
-    id:'one',revision:1,issue:{repo:{owner:'test',name:'repo'},number:1},target:{repo:{owner:'test',name:'repo'},base:'main'},dependsOn:[],contract:{revision:1,bodyHash:'0'.repeat(64),body:''},state:'Coding',sessions:{},visits:{Coding:1},started:false,pr:null,gates:{},rulings:[],notes:[],terminal:null,
+    id:'one',revision:1,issue:{repo:{owner:'test',name:'repo'},number:1},target:{repo:{owner:'test',name:'repo'},base:'main'},dependsOn:[],contract:{revision:1,bodyHash:'0'.repeat(64),body:''},state:'Coding',sessions:{},visits:{Coding:1},started:false,pr:null,gates:{},rulings:[],notes:[],terminal:null,ask:null,
   }]};
 }
 
@@ -33,8 +33,8 @@ describe('durable ticket agenda files',()=>{
       expect(await files.save(1,advanced)).toEqual({ok:true,value:null});
       const path=join(root,'state',`${state.id}.json`);
       const encoded:unknown=JSON.parse(await readFile(path,'utf8'));
-      expect(encoded).toMatchObject({format:8,state:{version:2}});
-      await writeFile(path,JSON.stringify({format:7,state}));
+      expect(encoded).toMatchObject({format:9,state:{version:2}});
+      await writeFile(path,JSON.stringify({format:8,state}));
       expect(await files.load(state.id)).toMatchObject({ok:false,error:{kind:'unsupportedFormat'}});
     }finally {await rm(root,{recursive:true,force:true});}
   });

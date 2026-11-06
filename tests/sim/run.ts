@@ -5,7 +5,7 @@
 // GitHub (tests/sim/github-sim.ts behind a `gh` shim on PATH, backed by real
 // bare repositories). Run: `bun run sim [scenario...]`.
 
-import {closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, writeFileSync} from 'node:fs';
+import {closeSync, cpSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, writeFileSync} from 'node:fs';
 import {hostname} from 'node:os';
 import {join, resolve} from 'node:path';
 import {YAML, type Subprocess} from 'bun';
@@ -16,6 +16,7 @@ import {encodeWorkflow, parseWorkflow, parentSeatRoles, workflowAgents, type Par
 import {createAgendaFiles} from '../../src/ports/state.ts';
 import {git, remotePath, seedGitHub, withState, type SimState} from './github-sim.ts';
 import type {Expect, Scenario, TicketSpec} from './scenario.ts';
+import {askCases} from './ask.ts';
 
 const ROOT = resolve(import.meta.dir, '../..');
 /** The PM configuration PM-on scenarios point `dispatch.pmConfigDir` at; its Project is the simulated `sim` #1. */
@@ -49,20 +50,22 @@ function judgeSubjects(workflow: Workflow): Map<string, 'pullRequest' | 'mergeCo
 }
 const workRoles = (workflow: Workflow) => [...new Set(Object.values(workflow.ticket.states).flatMap(state => state.kind === 'work' ? [state.role] : []))];
 
-type Run = {
+export type Run = {
   name: string; dir: string; github: string; bin: string; work: string; data: string; mainSessions: string;
-  scenarioFile: string; scenario: Scenario; workflow: Workflow; rootIssue: number; pm: boolean; proc: Subprocess<'pipe', number, number> | null; starts: number;
+  /** `pm` is the PM configuration directory the run points `dispatch.pmConfigDir` at, or null with PM integration off. */
+  scenarioFile: string; scenario: Scenario; workflow: Workflow; rootIssue: number; pm: string | null; proc: Subprocess<'pipe', number, number> | null; starts: number;
 };
-type Case = {
+export type Case = {
   name: string;
   /** The workflow the run's data directory supplies to convene; SIM_WORKFLOW when omitted. */
   workflow?: Workflow;
   /**
    * PM integration on, with PM_CONFIG. `holdComment` makes the simulated GitHub hold the comment request that finds
    * `skip` comments, `at` before or after recording it, touching `markers/comment-arrived` until `markers/release-comment`
-   * or `markers/drop-comment` exists.
+   * or `markers/drop-comment` exists. `guardiansURL` replaces the configuration's intent guardians address in a copy made
+   * for the run.
    */
-  pm?: {holdComment: Pick<NonNullable<SimState['commentHold']>, 'skip' | 'at'> | null};
+  pm?: {holdComment: Pick<NonNullable<SimState['commentHold']>, 'skip' | 'at'> | null; guardiansURL?: string};
   files: Record<string, string>;
   /** Issue titles in creation order; issue N is the Nth entry. The first may list children. */
   issues: {title: string; children?: number[]}[];
@@ -93,7 +96,14 @@ function setup(spec: Case): Run {
   const scenarioFile = join(dir, 'scenario.json');
   writeFileSync(scenarioFile, JSON.stringify(scenario, null, 1));
   writeFileSync(scenario.log, '');
-  return {name: spec.name, dir, github, bin, work, data, mainSessions: join(dir, 'main-sessions'), scenarioFile, scenario, workflow, rootIssue: spec.rootIssue, pm: spec.pm !== undefined, proc: null, starts: 0};
+  let pm: string | null = spec.pm ? PM_CONFIG : null;
+  if (spec.pm?.guardiansURL) {
+    pm = join(dir, 'pm-config');
+    cpSync(PM_CONFIG, pm, {recursive: true});
+    const delivery = join(pm, 'dispatch', 'delivery.yaml');
+    writeFileSync(delivery, readFileSync(delivery, 'utf8').replace(/^guardiansURL: .*$/m, `guardiansURL: ${spec.pm.guardiansURL}`));
+  }
+  return {name: spec.name, dir, github, bin, work, data, mainSessions: join(dir, 'main-sessions'), scenarioFile, scenario, workflow, rootIssue: spec.rootIssue, pm, proc: null, starts: 0};
 }
 
 function start(run: Run): void {
@@ -106,7 +116,7 @@ function start(run: Run): void {
     '--model', 'sim/main', '--session-dir', run.mainSessions, '--dispatch', `${KEY}#${run.rootIssue}`, '--config', config], {
     cwd: run.work, stdin: 'pipe', stdout, stderr,
     // An empty PM setting keeps PM integration off whatever the operator's environment says.
-    env: {...process.env, PATH: `${run.bin}:${process.env.PATH}`, OMP_DISPATCH_DIR: run.data, OMP_DISPATCH_RECOMPUTE_SECONDS: '1', SIM_SCENARIO: run.scenarioFile, OMP_DISPATCH_PM_CONFIG: run.pm ? PM_CONFIG : ''},
+    env: {...process.env, PATH: `${run.bin}:${process.env.PATH}`, OMP_DISPATCH_DIR: run.data, OMP_DISPATCH_RECOMPUTE_SECONDS: '1', SIM_SCENARIO: run.scenarioFile, OMP_DISPATCH_PM_CONFIG: run.pm ?? ''},
   });
   closeSync(stdout); closeSync(stderr);
 }
@@ -153,7 +163,7 @@ const completed = (state: Agenda | null) => state?.lifecycle === 'completed';
 
 const logSchema = z.object({at: z.number(), session: z.string().nullable(), kind: z.enum(['main', 'seat']), role: z.string().optional(), ticket: z.string().optional(), note: z.string(),
   step: z.object({name: z.string().optional(), args: z.record(z.string(), z.unknown()).optional(), text: z.string().optional()})});
-type LogEntry = z.infer<typeof logSchema>;
+export type LogEntry = z.infer<typeof logSchema>;
 const inputSchema = z.object({input: z.object({op: z.string(), ticketId: z.string().optional(), role: z.string().optional(), ok: z.boolean().optional(), note: z.string().optional(), revision: z.number().optional()}).passthrough()}).passthrough();
 
 function modelLog(run: Run): LogEntry[] {
@@ -168,7 +178,7 @@ function dispatchInput(entry: LogEntry): z.infer<typeof inputSchema>['input'] | 
 }
 
 const sessionLineSchema = z.object({type: z.string()}).passthrough();
-type SeatSession = {file: string; id: string; parent: string | null; role: string; ticket: string; lines: z.infer<typeof sessionLineSchema>[]};
+export type SeatSession = {file: string; id: string; parent: string | null; role: string; ticket: string; lines: z.infer<typeof sessionLineSchema>[]};
 
 function seatSessions(run: Run, agendaId: string): SeatSession[] {
   const dir = join(run.data, 'sessions', agendaId);
@@ -727,6 +737,7 @@ const cases: Case[] = [
 // PM-on variant of tree: the same delivery, plus the PM records it must leave.
 const tree = cases.find(item => item.name === 'tree')!;
 cases.push({...tree, name: 'tree-pm', pm: {holdComment: null}, check: async run => [...await tree.check(run), ...await pmChecks(run)]});
+cases.push(...askCases({agenda, waitUntil, start, kill, modelLog, seatSessions, simState}));
 
 /* ------------------------------------------------------------ main */
 

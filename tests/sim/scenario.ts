@@ -20,7 +20,8 @@ const ownerRoundSchema = z.union([
       z.object({kind: z.literal('push'), waitFor: z.string(), write: z.record(z.string(), z.string())}),
     ]).optional(),
   }),
-  z.object({kind: z.literal('escalate'), escalation: z.enum(['question', 'blocked', 'split', 'noCode']), reason: z.string()}),
+  /** `tier` goes with a question only. */
+  z.object({kind: z.literal('escalate'), escalation: z.enum(['question', 'blocked', 'split', 'noCode']), reason: z.string(), tier: z.enum(['simple', 'complex']).optional()}),
   /** Ends the seat with plain text and no handoff. */
   z.object({kind: z.literal('quit')}),
 ]);

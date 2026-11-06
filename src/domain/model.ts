@@ -2,7 +2,7 @@ import { z, type ZodLikeSchema } from '@oh-my-pi/omptype/zod';
 import { markerFactSchema } from '../pm/markers.ts';
 import { buildPublicGrammar } from './public-grammar.ts';
 
-export const {text,ordinal,revision,millisSchema,shaSchema,hashSchema,idSchema,agendaIdSchema,repoSchema,issueRefSchema,prRefSchema,shaRefSchema,targetSchema,roleSchema,entrySchema,conveneSchema,actionSchema,portInputSchema,toolParametersSchema} = buildPublicGrammar(z);
+export const {text,ordinal,revision,millisSchema,shaSchema,hashSchema,idSchema,agendaIdSchema,repoSchema,issueRefSchema,prRefSchema,shaRefSchema,targetSchema,roleSchema,tierSchema,entrySchema,conveneSchema,actionSchema,portInputSchema,toolParametersSchema} = buildPublicGrammar(z);
 const object = <const S extends Readonly<Record<string,ZodLikeSchema<unknown>>>>(shape:S) => z.object(shape).strict();
 export type Result<T,E> = {ok:true;value:T}|{ok:false;error:E};
 export type AgendaId = string;
@@ -22,6 +22,7 @@ export type ConveneInput = z.infer<typeof conveneSchema>;
 export type PortInput = z.infer<typeof portInputSchema>;
 export type ToolParameters = z.infer<typeof toolParametersSchema>;
 export type Role = z.infer<typeof roleSchema>;
+export type Tier = z.infer<typeof tierSchema>;
 import type {Workflow} from './workflow.ts';
 export type {Workflow};
 export type Action = z.infer<typeof actionSchema>;
@@ -123,7 +124,7 @@ export type NoteAuthor = z.infer<typeof noteAuthorSchema>;
 export const ticketSchema = object({
   id:idSchema,revision,issue:issueRefSchema,target:targetSchema,dependsOn:z.array(idSchema),
   contract:object({revision,bodyHash:hashSchema,body:z.string()}),
-  /** A state of the agenda's workflow, or `Escalated` while Main's ruling is due. */
+  /** A state of the agenda's workflow, `Escalated` while Main's ruling is due, or `Asking` while the intent guardians settle a worker's question. */
   state:text,started:z.boolean(),visits:visitsSchema,
   /** The latest accepted session of each work role; a later seat of that role forks it. */
   sessions:z.record(z.string(),text),
@@ -132,6 +133,11 @@ export const ticketSchema = object({
   rulings:z.array(object({at:millisSchema,summary:text})),
   notes:z.array(object({at:millisSchema,author:noteAuthorSchema,kind:z.enum(['finding','checks','conflict','escalation','sourceChange','ruling']),text})),
   terminal:terminalSchema.nullable(),
+  /**
+   * The worker question the ticket waits on, exactly while it is `Asking`: the decision item, its tier, the asking
+   * session's id and file, and the id of its `ask` comment once GitHub shows it.
+   */
+  ask:object({question:text,tier:tierSchema,session:text,file:text,comment:revision.nullable()}).nullable(),
 });
 export type Ticket = z.infer<typeof ticketSchema>;
 export const effectResultSchema = z.union([
@@ -144,6 +150,8 @@ export const effectResultSchema = z.union([
   object({kind:z.literal('rerun'),repo:repoSchema,workflowRunId:revision,attempt:revision}),
   object({kind:z.literal('commented'),issue:issueRefSchema,comment:revision}),
   object({kind:z.literal('projectFieldSet'),issue:issueRefSchema,field:z.literal('status'),option:text}),
+  /** The intent guardians accepted the decision item: 202 on its first request, 200 on a repeat for the same comment. */
+  object({kind:z.literal('answerRequested'),issue:issueRefSchema,comment:revision,status:z.union([z.literal(200),z.literal(202)])}),
 ]);
 export type EffectResult = z.infer<typeof effectResultSchema>;
 /** `origin` is the state entry that requested the effect; it advances only that entry. Main's resolve actions have none. */
@@ -164,7 +172,9 @@ export type Agenda = Omit<z.infer<typeof agendaSchema>,'workflow'>&{workflow:Wor
 export type Caller = {agentId:string;sessionId:string;sessionFile:string|null;kind:'main'}|{agentId:string;sessionId:string;sessionFile:string;kind:'seat';ticketId:string;role:Role;revision:number};
 /** Internal operation from the controller, never part of the public grammar: a work seat's native session has started. */
 export type WorkerStarted = {ticketId:string;revision:number;role:Role;sessionId:string;sessionFile:string};
-/** What the engine needs to record PM progress: this coordinator process and the configured Status option names. */
-export type PmContext = {host:string;pid:number;status:{inProgress:string;done:string}};
+/** How a work seat's question is asked under PM integration: the tier it defaults to and the tier help its brief carries. */
+export type PmAsk = {defaultTier:Tier;tierHelp:string};
+/** What the engine needs for PM integration: this coordinator process, the configured Status option names, and how a worker's question is asked. */
+export type PmContext = {host:string;pid:number;status:{inProgress:string;done:string};ask:PmAsk};
 export type DomainError = {kind:'unauthorized'|'invalidTransition'|'staleRevision'|'sourceUnavailable'|'sourceChanged'|'notFound'|'ownershipBlocked'|'invalidTopology'|'agenda_attached';message:string};
 export type ParseError = {path:string;reason:string};

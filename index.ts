@@ -11,6 +11,7 @@ import {Attention} from './src/runtime/attention.ts';
 import {createAgendaFiles} from './src/ports/state.ts';
 import {createGitHubPort} from './src/ports/github.ts';
 import {createHostPort} from './src/ports/host.ts';
+import {createGuardiansPort} from './src/ports/guardians.ts';
 import {createProcessPort} from './src/ports/process.ts';
 import {configuredWorkflow} from './src/ports/workflow-settings.ts';
 import {tr} from './src/i18n.ts';
@@ -52,7 +53,7 @@ class ProcessRuntime {
   }
   /**
    * Main wakes only for a decision still open when its turn ends: a launchable ticket, an Escalated ticket or
-   * closure, a failed PM record write, or a finished agenda. While Main is busy it sees the agenda through its own calls, so a decision it
+   * closure, a failed PM effect, or a finished agenda. While Main is busy it sees the agenda through its own calls, so a decision it
    * settles within the same turn (launching what convene unlocked, resolving an escalation) never wakes it again.
    */
   private changed(turnEnded=false):void {
@@ -62,7 +63,7 @@ class ProcessRuntime {
     this.deferred=false;
     const fresh=this.attention.observe(agenda,(ticketId,role)=>host.active(ticketId,role));
     if(!fresh.length)return;
-    binding.pi.sendMessage({customType:'dispatch-attention',display:true,content:`Dispatch needs Main: ${fresh.join(', ')}. launch:<ticket> may be launched; escalated:<ticket>:<revision> awaits read and resolve; failed:<ticket>:<effect> is a failed PM record write that blocks finish until resolve settles it with retry, adopt or cancel; finish means every ticket and the closure are Done. Call dispatch status for the source-confirmed agenda; this notification is not a ticket snapshot.`},{triggerTurn:true,deliverAs:'nextTurn'});
+    binding.pi.sendMessage({customType:'dispatch-attention',display:true,content:`Dispatch needs Main: ${fresh.join(', ')}. launch:<ticket> may be launched; escalated:<ticket>:<revision> awaits read and resolve; failed:<ticket>:<effect> is a failed PM effect (a record write, or the request asking the intent guardians to settle a worker question) that blocks finish until resolve settles it with retry, adopt or cancel; finish means every ticket and the closure are Done. Call dispatch status for the source-confirmed agenda; this notification is not a ticket snapshot.`},{triggerTurn:true,deliverAs:'nextTurn'});
   }
   mainTurnEnded(ctx:ExtensionContext):void {
     if(this.deferred&&this.binding?.ctx.sessionManager===ctx.sessionManager)this.changed(true);
@@ -98,7 +99,8 @@ class ProcessRuntime {
     });
     this.controller=new DispatchController({files:createAgendaFiles(directory),
       github:createGitHubPort({pm:pm?{owner:pm.repos.pm.project.owner,number:pm.repos.pm.project.number,statusField:pm.project.fields.status.name}:null}),host:this.host,process:createProcessPort(),cwd:ctx.cwd,
-      pm:pm?{host:hostname(),pid:process.pid,status:{inProgress:pm.project.fields.status.options.inProgress,done:pm.project.fields.status.options.done}}:null,
+      pm:pm?{context:{host:hostname(),pid:process.pid,status:{inProgress:pm.project.fields.status.options.inProgress,done:pm.project.fields.status.options.done},
+        ask:{defaultTier:pm.delivery.defaultTier,tierHelp:pm.delivery.tierHelp}},guardians:createGuardiansPort(pm.delivery.guardiansURL)}:null,
       // Read at each convene: a configured file must exist; otherwise the data directory may override the built-in workflow.
       workflow:()=>configuredWorkflow(ctx.cwd,directory),
       intervalSeconds:this.interval.get(root.settings),onChange:()=>this.changed(),onError:error=>this.report(error)});
@@ -128,7 +130,7 @@ const slots=globalThis as typeof globalThis&{[SLOT]?:ProcessRuntime};
 export default function dispatch(pi:ExtensionAPI):void {
   const runtime=slots[SLOT]??(slots[SLOT]=new ProcessRuntime());
   pi.registerFlag('dispatch',{description:tr('Start Main as coordinator for <owner>/<repo>#<number>','将 Main 启动为 <owner>/<repo>#<number> 的协调者'),type:'string'});
-  pi.registerTool({name:'dispatch',label:tr('Dispatch','调度'),description:'Main coordinates a durable ticket graph and launches each ticket once; Dispatch then relays its seats until Done or Escalated. Seats read one ticket and hand off with submit/verdict/escalate. GitHub writes are performed and freshly confirmed by the state machine.',parameters:buildPublicGrammar(z).toolParametersSchema,defaultInactive:true,
+  pi.registerTool({name:'dispatch',label:tr('Dispatch','调度'),description:'Main coordinates a durable ticket graph and launches each ticket once; Dispatch then relays its seats until Done, Escalated, or Asking (a work seat\'s question with the intent guardians). Seats read one ticket and hand off with submit/verdict/escalate. GitHub writes are performed and freshly confirmed by the state machine.',parameters:buildPublicGrammar(z).toolParametersSchema,defaultInactive:true,
     async execute(_id,params,_signal,_update,ctx){const response=await runtime.execute(ctx,params);return {content:[{type:'text',text:JSON.stringify(response)}],details:response,isError:!response.ok};},
   });
   pi.registerCommand('dispatch-launcher',{description:tr('Install, uninstall, or inspect the local Dispatch launcher, or register its GitHub App (install|uninstall|status|github-app register --webhook-url <url>)','安装、卸载或查看本地调度启动器，或注册其 GitHub App（install|uninstall|status|github-app register --webhook-url <url>）'),async handler(args,ctx){const result=await launcherCommand(args.trim().split(/\s+/).filter(part=>part.length>0));ctx.ui.notify(result.ok?result.value:result.error,result.ok?'info':'error');}});

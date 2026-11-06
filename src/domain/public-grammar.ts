@@ -22,6 +22,8 @@ export function buildPublicGrammar(z: PublicZ) {
   const roleSchema = z.string().regex(/^[A-Za-z][A-Za-z0-9_-]*$/);
   const entrySchema = object({id:idSchema,issue:issueRefSchema,target:targetSchema,dependsOn:z.array(idSchema),adoptPr:prRefSchema.nullable()});
   const conveneSchema = object({op:z.literal('convene'),parent:issueRefSchema.nullable(),tickets:z.array(entrySchema).min(1)});
+  /** The intent guardians' routing of a decision item: one implementation detail, or a decision across modules or contracts. */
+  const tierSchema = z.enum(['simple','complex']);
   const actionSchema = z.union([
     object({kind:z.literal('publishPr'),issue:issueRefSchema,headRepo:repoSchema,branch:text,head:shaSchema,target:targetSchema,pr:prRefSchema.nullable(),expectedBodyHash:hashSchema.nullable(),title:text,body:text}),
     object({kind:z.literal('merge'),issue:issueRefSchema,pr:prRefSchema,head:shaSchema,target:targetSchema,stampHash:hashSchema}),
@@ -31,9 +33,11 @@ export function buildPublicGrammar(z: PublicZ) {
     object({kind:z.literal('attachChild'),parent:issueRefSchema,child:issueRefSchema}),
     object({kind:z.literal('rerunChecks'),pr:prRefSchema,repo:repoSchema,workflowRunId:revision,previousAttempt:revision,head:shaSchema}),
     /** `body` is the whole comment, ending with its marker line; the marker's key field identifies the comment at source. */
-    object({kind:z.literal('comment'),issue:issueRefSchema,body:text,marker:object({kind:z.enum(['impl']),key:text})}),
+    object({kind:z.literal('comment'),issue:issueRefSchema,body:text,marker:object({kind:z.enum(['impl','ask']),key:text})}),
     /** `option` is the configured option name of the Project field. */
     object({kind:z.literal('setProjectField'),issue:issueRefSchema,field:z.literal('status'),option:text}),
+    /** Hands an `ask` comment's decision item to the intent guardians; `comment` is that comment's id. */
+    object({kind:z.literal('requestAnswer'),issue:issueRefSchema,comment:revision,question:text,tier:tierSchema}),
   ]);
   const effectResolutionSchema = object({effectId:idSchema,disposition:z.enum(['retry','adopt','cancel'])});
   const resolveSchema = object({op:z.literal('resolve'),ticketId:idSchema,revision,ruling:text,
@@ -51,10 +55,13 @@ export function buildPublicGrammar(z: PublicZ) {
     object({op:z.literal('launch'),ticketId:idSchema,role:roleSchema.optional()}),
     object({op:z.literal('submit'),ticketId:idSchema,revision,branch:text,head:shaSchema,title:text,body:text}),
     object({op:z.literal('verdict'),ticketId:idSchema,revision,role:roleSchema,ok:z.boolean(),note:text}),
-    object({op:z.literal('escalate'),ticketId:idSchema,revision,kind:z.enum(['question','blocked','split','noCode']),reason:text}),
+    object({op:z.literal('escalate'),ticketId:idSchema,revision,kind:z.literal('question'),reason:text,
+      /** How hard the decision item is; only a question carries it, and PM integration falls back to its configured default. */
+      tier:tierSchema.optional()}),
+    object({op:z.literal('escalate'),ticketId:idSchema,revision,kind:z.enum(['blocked','split','noCode']),reason:text}),
     resolveSchema,
     object({op:z.literal('finish'),summary:text}),
   ]);
   const toolParametersSchema = object({input:portInputSchema});
-  return {text,ordinal,revision,millisSchema,shaSchema,hashSchema,idSchema,agendaIdSchema,repoSchema,issueRefSchema,prRefSchema,shaRefSchema,targetSchema,roleSchema,entrySchema,conveneSchema,actionSchema,portInputSchema,toolParametersSchema};
+  return {text,ordinal,revision,millisSchema,shaSchema,hashSchema,idSchema,agendaIdSchema,repoSchema,issueRefSchema,prRefSchema,shaRefSchema,targetSchema,roleSchema,tierSchema,entrySchema,conveneSchema,actionSchema,portInputSchema,toolParametersSchema};
 }

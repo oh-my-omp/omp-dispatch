@@ -1,21 +1,22 @@
 import {randomUUID} from 'node:crypto';
 import type {Agenda,Caller,DomainError,Effect,EffectResult,Facts,PmContext,PortError,PortInput,Result,Role,Workflow} from '../domain/model.ts';
-import {abandonSeat,applyOperation,availableRoles,awaitsLaunch,closureRoles,confirmEffect,createAgenda,currentSeat,effectPrecondition,failEffect,reconcile,satisfiedResult,statusOnDone,ticketDefinition,workerStarted} from '../domain/engine.ts';
+import {REPLAYABLE,abandonSeat,applyOperation,availableRoles,awaitsLaunch,closureRoles,confirmEffect,createAgenda,currentSeat,effectPrecondition,failEffect,reconcile,satisfiedResult,statusOnDone,ticketDefinition,workerStarted} from '../domain/engine.ts';
 import {canonical,sameRef} from '../domain/identity.ts';
 import {seatBrief} from '../domain/briefs.ts';
 import {parentSeatRoles,ticketSeatRoles,workflowAgents} from '../domain/workflow.ts';
-import type {AgendaFiles,GitHubPort,HostPort,ProcessPort,SeatExit,SeatHandle,SeatLaunch,SeatWorkspace,StateError,WorkflowError} from '../ports/contracts.ts';
+import type {AgendaFiles,GitHubPort,GuardiansPort,HostPort,ProcessPort,SeatExit,SeatHandle,SeatLaunch,SeatWorkspace,StateError,WorkflowError} from '../ports/contracts.ts';
 import {createSourceReader,type SourceReceipt} from './source.ts';
 
 export type RuntimeError={kind:'domain';error:DomainError}|{kind:'storage';error:StateError}|{kind:'source'|'host'|'process';error:PortError}|{kind:'workflow';error:WorkflowError};
-/** Main's view: which tickets it may launch, and which seats the relay currently runs. */
-export type AgendaView={agenda:Agenda;launchable:string[];seated:{ticketId:string;roles:Role[]}[]};
+/** Main's view: which tickets it may launch, which wait on a worker's question to the intent guardians, and which seats the relay currently runs. */
+export type AgendaView={agenda:Agenda;launchable:string[];asking:{ticketId:string;question:string;comment:number|null}[];seated:{ticketId:string;roles:Role[]}[]};
 export type ControllerOutput=AgendaView|{active:string[]}|{ticket:Agenda['tickets'][number]|NonNullable<Agenda['closure']>}|{launched:SeatHandle[]};
 /**
  * `workflow` reads the workflow a new agenda will freeze; an attached agenda never consults it.
- * `pm` turns on PM integration: work seats record their sessions on their issues and Project Status follows delivery.
+ * `pm` turns on PM integration: work seats record their sessions on their issues, Project Status follows delivery,
+ * and a work seat's question goes to the intent guardians behind `guardians`.
  */
-export type ControllerOptions={files:AgendaFiles;github:GitHubPort;host:HostPort;process:ProcessPort;cwd:string;workflow:()=>Promise<Result<Workflow,WorkflowError>>;intervalSeconds:number;pm:PmContext|null;onChange:()=>void;onError:(error:RuntimeError)=>void};
+export type ControllerOptions={files:AgendaFiles;github:GitHubPort;host:HostPort;process:ProcessPort;cwd:string;workflow:()=>Promise<Result<Workflow,WorkflowError>>;intervalSeconds:number;pm:{context:PmContext;guardians:GuardiansPort}|null;onChange:()=>void;onError:(error:RuntimeError)=>void};
 function domain(kind:DomainError['kind'],message:string):{ok:false;error:RuntimeError}{return {ok:false,error:{kind:'domain',error:{kind,message}}};}
 
 /** The controller is the sole writer of its agenda. GitHub observations are never optimistic writes. */
@@ -59,7 +60,7 @@ export class DispatchController {
   private async save(state:Agenda,expected:number|null):Promise<Result<null,RuntimeError>> {
     if(this.pending)throw new Error('Unresolved durable write must be flushed before a new transition');
     // Every transition passes here, so a ticket's entry into Done queues its Status write in the same durable save.
-    if(this.options.pm&&this.state)statusOnDone(this.state,state,this.options.pm);
+    if(this.options.pm&&this.state)statusOnDone(this.state,state,this.options.pm.context);
     this.pending={state,expected};return this.flush();
   }
   private view():Result<ControllerOutput,RuntimeError> {
@@ -68,7 +69,8 @@ export class DispatchController {
     const ticketRoles=ticketSeatRoles(state.workflow),parentRoles=parentSeatRoles(state.workflow);
     const seated=[...state.tickets.map(ticket=>({ticketId:ticket.id,roles:ticketRoles})),...(state.closure?[{ticketId:state.closure.id,roles:parentRoles}]:[])]
       .map(({ticketId,roles})=>({ticketId,roles:roles.filter(role=>host.active(ticketId,role))})).filter(item=>item.roles.length>0);
-    return {ok:true,value:{agenda:structuredClone(state),launchable:state.tickets.filter(ticket=>awaitsLaunch(state,ticket)).map(ticket=>ticket.id),seated}};
+    const asking=state.tickets.flatMap(ticket=>ticket.ask?[{ticketId:ticket.id,question:ticket.ask.question,comment:ticket.ask.comment}]:[]);
+    return {ok:true,value:{agenda:structuredClone(state),launchable:state.tickets.filter(ticket=>awaitsLaunch(state,ticket)).map(ticket=>ticket.id),asking,seated}};
   }
   async startup(caller:Caller):Promise<Result<ControllerOutput,RuntimeError>> {
     if(caller.kind!=='main'||!this.visible(caller))return domain('unauthorized','Only the native coordinator may inspect saved agendas');
@@ -106,8 +108,11 @@ export class DispatchController {
             if(now.value.kind==='running'&&now.value.startedAt===holder.startedAt)return domain('agenda_attached',`Agenda ${operation.agenda} is held by coordinator process pid ${holder.pid} started ${holder.startedAt}, which is still running`);
           }
           const next=saved.value;next.version++;next.run=run;
-          // A durable executing intent after a restart is never called again.
-          for(const effect of next.effects)if(effect.state.kind==='executing')failEffect(next,effect,{kind:'uncertainOutcome',message:'Previous process ended after executing intent; source reconciliation required'},true,Date.now());
+          // A durable executing intent after a restart is never called again, unless its callee accepts a repeat.
+          for(const effect of next.effects)if(effect.state.kind==='executing'){
+            if(REPLAYABLE[effect.action.kind])effect.state={kind:'ready'};
+            else failEffect(next,effect,{kind:'uncertainOutcome',message:'Previous process ended after executing intent; source reconciliation required'},true,Date.now());
+          }
           const committed=await this.save(next,saved.value.version-1);if(!committed.ok)return committed;
         }
         this.kick();return this.view();
@@ -130,7 +135,7 @@ export class DispatchController {
         const live=retiring.some(ticket=>ticketRoles.some(role=>this.options.host.active(ticket.id,role)));
         if(live||operation.op==='finish'&&closure&&parentSeatRoles(this.state.workflow).some(role=>this.options.host.active(closure.id,role)))return domain('ownershipBlocked','Wait for retiring one-shot seat jobs to exit before finishing or removing their tickets');
       }
-      const changed=applyOperation(this.state,operation,caller,fresh.value,Date.now());if(!changed.ok)return {ok:false,error:{kind:'domain',error:changed.error}};
+      const changed=applyOperation(this.state,operation,caller,fresh.value,Date.now(),this.options.pm?.context.ask??null);if(!changed.ok)return {ok:false,error:{kind:'domain',error:changed.error}};
       if(operation.op==='finish'){
         const cleaned=await this.options.host.finish(this.state.id);
         if(!cleaned.ok)return {ok:false,error:{kind:'host',error:cleaned.error}};
@@ -196,7 +201,7 @@ export class DispatchController {
       revision=closure.revision;workspace={kind:'base',target:state.tickets[0]!.target};
     }else return null;
     return {agendaId:state.id,ticketId,revision,role,seat:seat.kind,agent:seat.agent,cwd:this.options.cwd,
-      prompt:seatBrief(state,ticketId,seat),ticket:ticket??closure!,workspace};
+      prompt:seatBrief(state,ticketId,seat,this.options.pm?.context.ask??null),ticket:ticket??closure!,workspace};
   }
   /**
    * Seats follow from ticket state alone: every started ticket and the parent closure receive their due seats
@@ -229,7 +234,7 @@ export class DispatchController {
         // A work seat's session now exists, so its id and file can be recorded on the ticket's issue.
         const pm=this.options.pm;
         if(!pm||input.seat!=='work')continue;
-        const started=workerStarted(this.state,{ticketId,revision:input.revision,role,sessionId:result.value.sessionId,sessionFile:result.value.sessionFile},pm,facts);
+        const started=workerStarted(this.state,{ticketId,revision:input.revision,role,sessionId:result.value.sessionId,sessionFile:result.value.sessionFile},pm.context,facts);
         if(!started.ok){this.options.onError({kind:'domain',error:started.error});continue;}
         const saved=await this.save(started.value,this.state.version);if(!saved.ok)return saved;
         continue;
@@ -276,8 +281,9 @@ export class DispatchController {
     if(effect.state.kind==='uncertain')return {ok:true,value:null};
     if(effect.state.kind==='executing'){
       const next=structuredClone(this.state),item=next.effects.find(item=>item.id===effect.id)!;
-      failEffect(next,item,{kind:'uncertainOutcome',message:'Executing intent has no source-confirmed result; explicit Main resolution is required'},true,Date.now());next.version++;
-      return this.save(next,this.state.version);
+      if(REPLAYABLE[item.action.kind])item.state={kind:'ready'};
+      else failEffect(next,item,{kind:'uncertainOutcome',message:'Executing intent has no source-confirmed result; explicit Main resolution is required'},true,Date.now());
+      next.version++;return this.save(next,this.state.version);
     }
     const premise=effectPrecondition(this.state,effect,facts);
     if(premise){
@@ -289,6 +295,13 @@ export class DispatchController {
     const started=await this.save(executing,this.state.version);if(!started.ok)return started;
     let called:Result<EffectResult|null,PortError>;
     try {called=await this.call(item);}catch(error){called={ok:false,error:{kind:'uncertainOutcome',message:error instanceof Error?error.message:String(error)}};}
+    // The callee's own response is the confirmation of a replayable effect; its failure is final, never uncertain.
+    if(REPLAYABLE[item.action.kind]){
+      const next=structuredClone(this.state),current=next.effects.find(effect=>effect.id===item.id)!;
+      if(called.ok&&called.value)confirmEffect(next,current,called.value,facts,Date.now());
+      else failEffect(next,current,called.ok?{kind:'invalidResponse',message:'The callee answered without a result'}:called.error,false,Date.now());
+      next.version++;return this.save(next,this.state.version);
+    }
     const receipt:SourceReceipt|undefined=called.ok&&called.value?{effectId:item.id,result:called.value}:undefined;
     const observed=await this.source.read(this.state,null,'effectConfirmation',receipt);
     const next=structuredClone(this.state),current=next.effects.find(effect=>effect.id===item.id)!;
@@ -317,6 +330,12 @@ export class DispatchController {
       case 'rerunChecks':{const result=await github.rerunCheck(action.repo,action.workflowRunId);return result.ok?{ok:true,value:null}:result;}
       case 'comment':{const result=await github.comment(action.issue,action.body);return result.ok?{ok:true,value:{kind:'commented',issue:action.issue,comment:result.value}}:result;}
       case 'setProjectField':{const result=await github.setProjectField(action.issue,action.field,action.option);return result.ok?{ok:true,value:null}:result;}
+      case 'requestAnswer':{
+        const guardians=this.options.pm?.guardians;
+        if(!guardians)return {ok:false,error:{kind:'precondition',message:'PM integration is off, so no intent guardians are configured'}};
+        const result=await guardians.requestAnswer({issue:action.issue,comment:action.comment,question:action.question,tier:action.tier});
+        return result.ok?{ok:true,value:{kind:'answerRequested',issue:action.issue,comment:action.comment,status:result.value}}:result;
+      }
     }
   }
   snapshot():Agenda|null{return this.state?structuredClone(this.state):null;}

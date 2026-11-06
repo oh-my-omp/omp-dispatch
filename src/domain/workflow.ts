@@ -4,6 +4,8 @@ import type {ChecksSnapshot,ParseError,PrSnapshot,Result,Role,Verdict} from './m
 export const ESCALATE='escalate';
 /** The built-in holding state an escalation enters; no workflow state may take its name. */
 export const ESCALATED='Escalated';
+/** The built-in holding state a work seat's question enters under PM integration; no workflow state may take its name. */
+export const ASKING='Asking';
 
 /** A predicate over source-confirmed facts and the machine's own visit counts. */
 export type Condition=
@@ -209,6 +211,7 @@ function states<S>(value:unknown,path:string,parse:(value:unknown,path:string)=>
   for(const [key,item] of Object.entries(raw)){
     name(key,`${path}.${key}`);
     if(key===ESCALATE||key===ESCALATED)throw new Invalid(`${path}.${key}`,`${key} is reserved for Main's escalation`);
+    if(key===ASKING)throw new Invalid(`${path}.${key}`,`${key} is reserved for a worker question the intent guardians settle`);
     result[key]=parse(item,`${path}.${key}`);
   }
   if(!Object.keys(result).length)throw new Invalid(path,'must define at least one state');

@@ -1,5 +1,5 @@
 import type {ExtensionContext} from '@oh-my-pi/pi-coding-agent';
-import type {Agenda,AgendaId,Caller,CheckAttempt,ClosureGate,CoordinatorProcess,CreatedIssueObservation,Facts,IssueRef,IssueSnapshot,Millis,PortError,PrRef,PrSnapshot,Repo,Result,Role,Sha,SourceScope,Target,Ticket} from '../domain/model.ts';
+import type {Agenda,AgendaId,Caller,CheckAttempt,ClosureGate,CoordinatorProcess,CreatedIssueObservation,Facts,IssueRef,IssueSnapshot,Millis,PortError,PrRef,PrSnapshot,Repo,Result,Role,Sha,SourceScope,Target,Ticket,Tier} from '../domain/model.ts';
 
 export type PrWrite = {headRepo:Repo;branch:string;head:Sha;target:Target;title:string;body:string};
 export type IssueWrite = {repo:Repo;title:string;body:string};
@@ -26,6 +26,13 @@ export interface GitHubPort {
   comment(issue:IssueRef,body:string):Promise<Result<number,PortError>>;
   /** Selects the configured option name on the issue's item in the configured Project, adding the item first when missing. */
   setProjectField(issue:IssueRef,field:'status',option:string):Promise<Result<null,PortError>>;
+}
+/** A worker's decision item, as the intent guardians receive it: the implementation issue and the id of its `ask` comment. */
+export type AskRequest = {issue:IssueRef;comment:number;question:string;tier:Tier};
+/** The intent guardians' HTTP API. */
+export interface GuardiansPort {
+  /** Asks the guardians to settle `request`; they answer 202 when they accept it and 200 when they already hold that comment. */
+  requestAnswer(request:AskRequest):Promise<Result<200|202,PortError>>;
 }
 export type StateError = {kind:'notFound'|'unsupportedFormat'|'corruptState'|'versionConflict'|'unavailable';message:string};
 /** A workflow that cannot be read or parsed; `source` is the file path the reason refers to. */
