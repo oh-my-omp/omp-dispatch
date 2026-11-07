@@ -178,6 +178,15 @@ export type ClosureGate = z.infer<typeof closureSchema>;
 export const agendaSchema = object({id:agendaIdSchema,version:revision,nextId:revision,convenedAt:millisSchema,lifecycle:z.enum(['active','completed']),parent:issueRefSchema.nullable(),workflow:z.unknown(),tickets:z.array(ticketSchema),closure:closureSchema.nullable(),effects:z.array(effectSchema),run:z.union([object({kind:z.literal('detached')}),object({kind:z.literal('attached'),id:idSchema,mainAgentId:text,mainSessionId:text,pid:revision,startedAt:text})]),summary:text.nullable()});
 export type CoordinatorProcess = Pick<Extract<z.infer<typeof agendaSchema>['run'],{kind:'attached'}>,'pid'|'startedAt'>;
 export type Agenda = Omit<z.infer<typeof agendaSchema>,'workflow'>&{workflow:Workflow};
+/**
+ * A value its holder reads but never writes. The controller's live agenda has this type: views, seat results and
+ * observers share it without a copy, and a transition writes only its own draft (`draftAgenda`).
+ */
+export type DeepReadonly<T> = T extends readonly (infer Item)[] ? readonly DeepReadonly<Item>[] : T extends object ? {readonly [Key in keyof T]:DeepReadonly<T[Key]>} : T;
+export type ReadonlyAgenda = DeepReadonly<Agenda>;
+/** A transition's own writable deep copy of the live agenda; the live agenda itself is never written. */
+export function draftAgenda(state:ReadonlyAgenda):Agenda;
+export function draftAgenda(state:unknown):unknown {return structuredClone(state);}
 export type Caller = {agentId:string;sessionId:string;sessionFile:string|null;kind:'main'}|{agentId:string;sessionId:string;sessionFile:string;kind:'seat';ticketId:string;role:Role;revision:number};
 /** Internal operation from the controller, never part of the public grammar: a work seat's native session has started. */
 export type WorkerStarted = {ticketId:string;revision:number;role:Role;sessionId:string;sessionFile:string};

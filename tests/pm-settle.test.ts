@@ -3,7 +3,7 @@ import {mkdtemp,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {YAML} from 'bun';
-import type {Agenda,Caller,Facts,PmContext,PortError,Result} from '../src/domain/model.ts';
+import {draftAgenda,type Agenda,type Caller,type Facts,type PmContext,type PortError,type Result} from '../src/domain/model.ts';
 import type {GitHubPort,HostPort,SeatLaunch} from '../src/ports/contracts.ts';
 import {encodeAgenda,parseAgenda} from '../src/domain/parse.ts';
 import {encodeWorkflow,parseWorkflow} from '../src/domain/workflow.ts';
@@ -118,7 +118,7 @@ test('a replaced ask ends the ticket in Replaced with no new seat, and Main can 
     expect(h.launches).toHaveLength(1);
     expect(state.effects.every(effect=>effect.state.kind==='confirmed'||effect.state.kind==='cancelled')).toBe(true);
     expect(new Attention().observe(state,h.host.active)).toEqual(['finish']);
-    expect(parseAgenda(JSON.parse(JSON.stringify(encodeAgenda(state)))).ok).toBe(true);
+    expect(parseAgenda(JSON.parse(JSON.stringify(encodeAgenda(draftAgenda(state))))).ok).toBe(true);
     const finished=await h.controller.execute(MAIN,{op:'finish',summary:'The issue was replaced.'});
     expect(finished.ok).toBe(true);
     expect(h.errors).toEqual([]);

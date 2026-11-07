@@ -1,5 +1,5 @@
 import {logger} from '@oh-my-pi/pi-coding-agent';
-import type {Agenda} from '../domain/model.ts';
+import type {ReadonlyAgenda} from '../domain/model.ts';
 
 /**
  * Exit decision for a `--dispatch` coordinator: its process is the inner layer of the pane the launcher
@@ -20,7 +20,7 @@ export class RuntimeExit {
    * when the change ended an accepted `finish` op, or when the relay's or the run's own observer saw the
    * agenda completed; the agenda itself must rest completed, so a rejected or failed finish never exits.
    */
-  commit(finished:boolean,agenda:Agenda|null):void {
+  commit(finished:boolean,agenda:ReadonlyAgenda|null):void {
     if(this.requested||!finished)return;
     if(!this.granted)return;
     if(!agenda||agenda.lifecycle!=='completed')return;

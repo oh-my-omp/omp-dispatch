@@ -1,5 +1,5 @@
 import type {ExtensionContext} from '@oh-my-pi/pi-coding-agent';
-import type {Agenda,AgendaId,Caller,CheckAttempt,ClosureGate,CoordinatorProcess,CreatedIssueObservation,Facts,IssueRef,IssueSnapshot,Millis,PortError,PrRef,PrSnapshot,Repo,Result,Role,Sha,SourceScope,Target,Ticket,Tier} from '../domain/model.ts';
+import type {Agenda,AgendaId,Caller,CheckAttempt,ClosureGate,CoordinatorProcess,DeepReadonly,CreatedIssueObservation,Facts,IssueRef,IssueSnapshot,Millis,PortError,PrRef,PrSnapshot,Repo,Result,Role,Sha,SourceScope,Target,Ticket,Tier} from '../domain/model.ts';
 
 export type PrWrite = {headRepo:Repo;branch:string;head:Sha;target:Target;title:string;body:string};
 export type IssueWrite = {repo:Repo;title:string;body:string};
@@ -51,7 +51,7 @@ export type SeatWorkspace={kind:'fork';sessionFile:string}|{kind:'base';target:T
  * blank session, disposable checkout). `resume` opens a work seat's first message when it resumes after its question
  * was answered: the configured resume prompt, then the answer.
  */
-export type SeatLaunch = {agendaId:string;ticketId:string;revision:number;role:Role;seat:'work'|'judge';agent:string;cwd:string;prompt:string;resume:string|null;ticket:Ticket|ClosureGate;workspace:SeatWorkspace};
+export type SeatLaunch = {agendaId:string;ticketId:string;revision:number;role:Role;seat:'work'|'judge';agent:string;cwd:string;prompt:string;resume:string|null;ticket:DeepReadonly<Ticket|ClosureGate>;workspace:SeatWorkspace};
 export type SeatHandle = {agentId:string;sessionId:string;sessionFile:string;jobId:string};
 export type SeatExit = {ticketId:string;role:Role;revision:number};
 export interface HostPort {

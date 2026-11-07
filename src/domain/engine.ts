@@ -1,4 +1,4 @@
-import type {Action,Agenda,Caller,ClosureGate,ConveneInput,DomainError,Effect,EffectResult,Entry,Facts,IssueRef,MergeCommitStamp,NoteAuthor,ParentStamp,PmAsk,PmContext,PortError,PortInput,PrSnapshot,PullRequestStamp,Result,Role,Ticket,Tier,WorkerStarted,Workflow} from './model.ts';
+import {draftAgenda,type Action,type Agenda,type Caller,type ClosureGate,type ConveneInput,type DeepReadonly,type DomainError,type Effect,type EffectResult,type Entry,type Facts,type IssueRef,type MergeCommitStamp,type NoteAuthor,type ParentStamp,type PmAsk,type PmContext,type PortError,type PortInput,type PrSnapshot,type PullRequestStamp,type ReadonlyAgenda,type Result,type Role,type Ticket,type Tier,type WorkerStarted,type Workflow} from './model.ts';
 import {bodyHash,canonical,contains,digest,exactClosingBody,nextId,sameRef,sameRepo,sameTarget,targetHead} from './identity.ts';
 import {formatMarker} from '../pm/markers.ts';
 import {settlement} from '../pm/settlement.ts';
@@ -9,7 +9,8 @@ const SYSTEM:NoteAuthor={kind:'system'},MAIN:NoteAuthor={kind:'main'};
 /** A machine that keeps entering states without waiting for a seat, an effect or a source change is misconfigured. */
 const HOPS=64;
 type NoteKind=Ticket['notes'][number]['kind'];
-type Holds=(condition:Condition)=>boolean;
+type Holds=(condition:DeepReadonly<Condition>)=>boolean;
+type ReadonlyTicket=DeepReadonly<Ticket>;
 function reject(kind:DomainError['kind'],message:string):{ok:false;error:DomainError}{return {ok:false,error:{kind,message}};}
 function note(ticket:Ticket,author:NoteAuthor,kind:NoteKind,text:string,at:number):void {ticket.notes.push({at,author,kind,text});}
 function escalateTicket(ticket:Ticket,text:string,at:number,kind:NoteKind):void {
@@ -23,15 +24,15 @@ export function enqueue(state:Agenda,ticketId:string,action:Action,origin:Effect
 
 /* ------------------------------------------------------------ definitions */
 
-export function ticketDefinition(workflow:Workflow,ticket:Ticket):TicketState|null {return ticket.state===ESCALATED||ticket.state===ASKING||ticket.state===REPLACED?null:workflow.ticket.states[ticket.state]??null;}
-export function parentDefinition(workflow:Workflow,closure:ClosureGate):ParentState|null {return closure.state===ESCALATED?null:workflow.parent.states[closure.state]??null;}
+export function ticketDefinition(workflow:DeepReadonly<Workflow>,ticket:ReadonlyTicket):DeepReadonly<TicketState>|null {return ticket.state===ESCALATED||ticket.state===ASKING||ticket.state===REPLACED?null:workflow.ticket.states[ticket.state]??null;}
+export function parentDefinition(workflow:DeepReadonly<Workflow>,closure:DeepReadonly<ClosureGate>):DeepReadonly<ParentState>|null {return closure.state===ESCALATED?null:workflow.parent.states[closure.state]??null;}
 /** A ticket is delivered while it rests in a final state of the workflow, or in `Replaced` once its issue was replaced. */
-export function delivered(state:Agenda,ticket:Ticket):boolean {return ticket.state===REPLACED||ticketDefinition(state.workflow,ticket)?.kind==='final';}
-export function dependenciesDone(state:Agenda,ticket:Ticket):boolean {
+export function delivered(state:ReadonlyAgenda,ticket:ReadonlyTicket):boolean {return ticket.state===REPLACED||ticketDefinition(state.workflow,ticket)?.kind==='final';}
+export function dependenciesDone(state:ReadonlyAgenda,ticket:ReadonlyTicket):boolean {
   return ticket.dependsOn.every(id=>{const dependency=state.tickets.find(item=>item.id===id);return dependency!==undefined&&delivered(state,dependency);});
 }
-function sourcePr(ticket:Ticket,facts:Facts):PrSnapshot|undefined{return ticket.pr?.ref?facts.prs.find(pr=>sameRef(pr.ref,ticket.pr!.ref!)):undefined;}
-function ticketHolds(ticket:Ticket,facts:Facts):Holds {
+function sourcePr(ticket:ReadonlyTicket,facts:Facts):PrSnapshot|undefined{return ticket.pr?.ref?facts.prs.find(pr=>sameRef(pr.ref,ticket.pr!.ref!)):undefined;}
+function ticketHolds(ticket:ReadonlyTicket,facts:Facts):Holds {
   const holds:Holds=condition=>{
     switch(condition.kind){
       case 'checks':return sourcePr(ticket,facts)?.checks.kind===condition.is;
@@ -44,7 +45,7 @@ function ticketHolds(ticket:Ticket,facts:Facts):Holds {
   };
   return holds;
 }
-function parentHolds(closure:ClosureGate):Holds {
+function parentHolds(closure:DeepReadonly<ClosureGate>):Holds {
   const holds:Holds=condition=>{
     switch(condition.kind){
       // The workflow parser refuses PR conditions in the parent machine.
@@ -58,22 +59,22 @@ function parentHolds(closure:ClosureGate):Holds {
   return holds;
 }
 /** The first branch whose condition holds; else the decision's fallback, or null to keep waiting. */
-function decide(decision:{branches:Branch[];otherwise:string|null},holds:Holds):string|null {return decision.branches.find(branch=>holds(branch.when))?.to??decision.otherwise;}
+function decide(decision:DeepReadonly<{branches:Branch[];otherwise:string|null}>,holds:Holds):string|null {return decision.branches.find(branch=>holds(branch.when))?.to??decision.otherwise;}
 
 /* ------------------------------------------------------------ fingerprints */
 
-function contractIssue(ticket:Ticket,facts:Facts){
+function contractIssue(ticket:ReadonlyTicket,facts:Facts){
   const issue=facts.issues.find(issue=>sameRef(issue.ref,ticket.issue));
   return issue&&issue.bodyHash===ticket.contract.bodyHash?issue:null;
 }
 /** What a pullRequest judge judges: the exact open PR head that closes this issue at its target. */
-export function pullRequestStamp(ticket:Ticket,facts:Facts):PullRequestStamp|null {
+export function pullRequestStamp(ticket:ReadonlyTicket,facts:Facts):PullRequestStamp|null {
   const issue=contractIssue(ticket,facts),pr=sourcePr(ticket,facts);
   if(!issue||!pr||pr.state.kind!=='open'||pr.head!==ticket.pr?.head||!sameTarget(pr.target,ticket.target)||!exactClosingBody(pr.body,ticket.issue,pr.ref.repo)||pr.closes.length!==1||!sameRef(pr.closes[0]!,ticket.issue))return null;
   return {kind:'pullRequest',pr:pr.ref,head:pr.head,target:pr.target,bodyHash:issue.bodyHash,prBodyHash:pr.bodyHash,contractRevision:ticket.contract.revision,rulingsHash:digest(ticket.rulings)};
 }
 /** What a mergeCommit judge judges: the ticket's merge commit, still contained in its target. */
-export function mergeCommitStamp(ticket:Ticket,facts:Facts):MergeCommitStamp|null {
+export function mergeCommitStamp(ticket:ReadonlyTicket,facts:Facts):MergeCommitStamp|null {
   const issue=contractIssue(ticket,facts),terminal=ticket.terminal,head=targetHead(facts,ticket.target);
   if(!issue||terminal?.kind!=='merged'||!head||!contains(facts,ticket.target.repo,terminal.mergeSha,head))return null;
   const pr=facts.prs.find(pr=>sameRef(pr.ref,terminal.pr));
@@ -81,7 +82,7 @@ export function mergeCommitStamp(ticket:Ticket,facts:Facts):MergeCommitStamp|nul
   return {kind:'mergeCommit',issue:ticket.issue,bodyHash:issue.bodyHash,contractRevision:ticket.contract.revision,terminal,target:ticket.target,commit:terminal.mergeSha,rulingsHash:digest(ticket.rulings)};
 }
 /** What parent judges judge: every delivered child, its terminal and its target. */
-function parentStamp(state:Agenda,facts:Facts):ParentStamp|null {
+function parentStamp(state:ReadonlyAgenda,facts:Facts):ParentStamp|null {
   if(!state.parent||state.tickets.some(ticket=>!delivered(state,ticket)||!ticket.terminal))return null;
   const parent=facts.issues.find(issue=>sameRef(issue.ref,state.parent!));
   if(!parent||parent.children.some(child=>!state.tickets.some(ticket=>sameRef(ticket.issue,child))))return null;
@@ -97,7 +98,7 @@ function parentStamp(state:Agenda,facts:Facts):ParentStamp|null {
   }
   return {kind:'parent',parent:state.parent,bodyHash:parent.bodyHash,children,targets,rulingsHash:digest(state.closure?.rulings??[])};
 }
-function mergeReady(ticket:Ticket,pr:PrSnapshot,facts:Facts):boolean {
+function mergeReady(ticket:ReadonlyTicket,pr:PrSnapshot,facts:Facts):boolean {
   const base=facts.repos.find(item=>sameRepo(item.repo,ticket.target.repo))?.bases.find(item=>item.name===ticket.target.base);
   return pr.state.kind==='open'&&pr.mergeable==='yes'&&pr.checks.kind==='passing'&&base?.state.kind==='present';
 }
@@ -105,11 +106,11 @@ function mergeReady(ticket:Ticket,pr:PrSnapshot,facts:Facts):boolean {
 /* ------------------------------------------------------------ safety capabilities */
 
 /** A judge state's approval: its gate exists, judged exactly `stamp`, and every configured judge passed. */
-function approved(roster:TicketState|ParentState|undefined,gate:{stamp:unknown;verdicts:Ticket['gates'][string]['verdicts']}|undefined,stamp:unknown):boolean {
+function approved(roster:DeepReadonly<TicketState|ParentState>|undefined,gate:DeepReadonly<{stamp:unknown;verdicts:Ticket['gates'][string]['verdicts']}>|undefined,stamp:unknown):boolean {
   return roster?.kind==='judge'&&gate!==undefined&&canonical(gate.stamp)===canonical(stamp)&&stagePassed(roster.judges,gate.verdicts);
 }
 /** Merging needs every required approval, and every approval the ticket still holds, on the current PR fingerprint. */
-function mergeProblem(state:Agenda,ticket:Ticket,facts:Facts,requires:string[]):string|null {
+function mergeProblem(state:ReadonlyAgenda,ticket:ReadonlyTicket,facts:Facts,requires:readonly string[]):string|null {
   const stamp=pullRequestStamp(ticket,facts);
   if(!stamp)return 'the pull request is not an open PR that closes exactly this issue at its target';
   for(const name of requires)if(!approved(state.workflow.ticket.states[name],ticket.gates[name],stamp))return `${name} has not approved the current pull request`;
@@ -117,7 +118,7 @@ function mergeProblem(state:Agenda,ticket:Ticket,facts:Facts,requires:string[]):
   return null;
 }
 /** Closing the issue needs a Main noCode ruling on the current contract, or a contained merge with its approvals. */
-function closeProblem(state:Agenda,ticket:Ticket,facts:Facts,requires:string[]):string|null {
+function closeProblem(state:ReadonlyAgenda,ticket:ReadonlyTicket,facts:Facts,requires:readonly string[]):string|null {
   const terminal=ticket.terminal,issue=facts.issues.find(issue=>sameRef(issue.ref,ticket.issue));
   if(terminal?.kind==='noCode')return terminal.bodyHash===issue?.bodyHash?null:'the noCode ruling no longer matches the issue contract';
   if(terminal?.kind!=='merged')return 'the ticket has neither a merged PR nor a noCode ruling';
@@ -127,7 +128,7 @@ function closeProblem(state:Agenda,ticket:Ticket,facts:Facts,requires:string[]):
   for(const [name,gate] of Object.entries(ticket.gates))if(gate.stamp.kind==='mergeCommit'&&!approved(state.workflow.ticket.states[name],gate,stamp))return `${name} approved a different merge fingerprint`;
   return null;
 }
-function closeParentProblem(state:Agenda,closure:ClosureGate,facts:Facts,requires:string[]):string|null {
+function closeParentProblem(state:ReadonlyAgenda,closure:DeepReadonly<ClosureGate>,facts:Facts,requires:readonly string[]):string|null {
   const stamp=parentStamp(state,facts);
   if(!stamp||canonical(stamp)!==canonical(closure.stamp))return 'the children, their terminals or targets changed';
   for(const name of requires)if(!approved(state.workflow.parent.states[name],closure.gates[name],stamp))return `${name} has not approved the current children`;
@@ -135,7 +136,7 @@ function closeParentProblem(state:Agenda,closure:ClosureGate,facts:Facts,require
   return null;
 }
 /** A final state holds only while the issue is closed and its terminal is still true at source. */
-function finalProblem(ticket:Ticket,facts:Facts):string|null {
+function finalProblem(ticket:ReadonlyTicket,facts:Facts):string|null {
   const issue=facts.issues.find(issue=>sameRef(issue.ref,ticket.issue)),terminal=ticket.terminal;
   if(issue?.state!=='closed')return 'the issue is not closed';
   if(!terminal)return 'the ticket has neither a merged PR nor a noCode ruling';
@@ -149,11 +150,11 @@ function finalProblem(ticket:Ticket,facts:Facts):string|null {
     }
   }
 }
-function currentOrigin(state:Agenda,effect:Effect):boolean {
+function currentOrigin(state:ReadonlyAgenda,effect:DeepReadonly<Effect>):boolean {
   const owner=state.tickets.find(ticket=>ticket.id===effect.ticketId)??(state.closure?.id===effect.ticketId?state.closure:null);
   return effect.origin!==null&&owner!==null&&owner.state===effect.origin.state&&owner.revision===effect.origin.revision;
 }
-function liveFromEntry(state:Agenda,ticketId:string,origin:{state:string;revision:number}):Effect[] {
+function liveFromEntry(state:ReadonlyAgenda,ticketId:string,origin:{state:string;revision:number}):DeepReadonly<Effect>[] {
   return state.effects.filter(effect=>effect.ticketId===ticketId&&effect.origin?.state===origin.state&&effect.origin.revision===origin.revision&&effect.state.kind!=='cancelled');
 }
 
@@ -224,72 +225,99 @@ function arriveTicket(state:Agenda,ticket:Ticket,name:string,definition:TicketSt
     }
   }
 }
-/** A merge is requested once the PR is mergeable with passing checks and every dependency is delivered. */
-function tryMerge(state:Agenda,ticket:Ticket,origin:{state:string;revision:number},facts:Facts):void {
-  if(liveFromEntry(state,ticket.id,origin).length||!dependenciesDone(state,ticket))return;
+/** The open PR and its fingerprint once a merge is due: mergeable with passing checks, every dependency delivered. */
+function mergeDue(state:ReadonlyAgenda,ticket:ReadonlyTicket,origin:{state:string;revision:number},facts:Facts):{pr:PrSnapshot;stamp:PullRequestStamp}|null {
+  if(liveFromEntry(state,ticket.id,origin).length||!dependenciesDone(state,ticket))return null;
   const pr=sourcePr(ticket,facts),stamp=pullRequestStamp(ticket,facts);
-  if(!pr||!stamp||!mergeReady(ticket,pr,facts))return;
-  enqueue(state,ticket.id,{kind:'merge',issue:ticket.issue,pr:pr.ref,head:pr.head,target:ticket.target,stampHash:digest(stamp)},origin);
+  return pr&&stamp&&mergeReady(ticket,pr,facts)?{pr,stamp}:null;
+}
+function tryMerge(state:Agenda,ticket:Ticket,origin:{state:string;revision:number},facts:Facts):void {
+  const due=mergeDue(state,ticket,origin,facts);
+  if(due)enqueue(state,ticket.id,{kind:'merge',issue:ticket.issue,pr:due.pr.ref,head:due.pr.head,target:ticket.target,stampHash:digest(due.stamp)},origin);
+}
+
+/* ------------------------------------------------------------ reconcile pass */
+
+/**
+ * The agenda one reconcile pass reads and the agenda it writes. The pass reads through `state`, which is read-only,
+ * so the compiler admits a write only through `write()`. On a shared agenda the first `write()` makes the pass's one
+ * deep copy, so a pass that changes nothing copies nothing. Every write site changes the agenda (a revision, a note,
+ * an effect or its state, a closure or its stamp, a question's comment), so `changed` is the pass's change signal.
+ * A reference read before a write may be the shared original afterwards; each step re-reads through `state`.
+ */
+class Pass {
+  private draft:Agenda|null;
+  private wrote=false;
+  constructor(private readonly base:ReadonlyAgenda,owned:Agenda|null){this.draft=owned;}
+  get state():ReadonlyAgenda{return this.draft??this.base;}
+  get changed():boolean{return this.wrote;}
+  write():Agenda{this.wrote=true;return this.draft??=draftAgenda(this.base);}
+  /** The writable ticket at `index`; a pass adds and removes no ticket, so indexes hold across its writes. */
+  ticket(index:number):{state:Agenda;ticket:Ticket}{const state=this.write();return {state,ticket:state.tickets[index]!};}
 }
 /**
  * While the ticket holds an open PR in a state that observes it, source events route the ticket by the state's
  * `observe` map. A PR that stops being this delivery, unknown checks and drafts always reach Main.
  */
-function observePullRequest(state:Agenda,ticket:Ticket,observe:Observe,facts:Facts,at:number):boolean {
+function observePullRequest(pass:Pass,index:number,observe:Observe,facts:Facts,at:number):boolean {
+  const ticket=pass.state.tickets[index]!;
   if(!ticket.pr?.ref||ticket.terminal)return false;
   const pr=sourcePr(ticket,facts);
   if(!pr||pr.state.kind!=='open'||!sameTarget(pr.target,ticket.target)||!exactClosingBody(pr.body,ticket.issue,pr.ref.repo)||pr.closes.length!==1||!sameRef(pr.closes[0]!,ticket.issue)){
-    escalateTicket(ticket,'PR is closed, missing, retargeted, or no longer closes exactly this issue.',at,'sourceChange');return true;
+    escalateTicket(pass.ticket(index).ticket,'PR is closed, missing, retargeted, or no longer closes exactly this issue.',at,'sourceChange');return true;
   }
-  if(pr.checks.kind==='unknown'){escalateTicket(ticket,`Required CI observations cannot be verified: ${pr.checks.reason}`,at,'checks');return true;}
-  if(pr.mergeable==='draft'){escalateTicket(ticket,'The PR is a draft; Main must obtain a source change or adopt a ready PR.',at,'sourceChange');return true;}
+  if(pr.checks.kind==='unknown'){escalateTicket(pass.ticket(index).ticket,`Required CI observations cannot be verified: ${pr.checks.reason}`,at,'checks');return true;}
+  if(pr.mergeable==='draft'){escalateTicket(pass.ticket(index).ticket,'The PR is a draft; Main must obtain a source change or adopt a ready PR.',at,'sourceChange');return true;}
   // GitHub fixes a PR's head repository and branch at creation, so only these fields can legitimately move.
   const drifted=pr.head!==ticket.pr.head||pr.body!==ticket.pr.body||pr.title!==ticket.pr.title;
+  if(!drifted&&pr.checks.kind!=='failing'&&pr.mergeable!=='no'&&pr.mergeable!=='behind')return false;
+  const {state,ticket:writable}=pass.ticket(index);
   if(drifted){
-    ticket.pr={...ticket.pr,head:pr.head,title:pr.title,body:pr.body};
-    for(const [name,gate] of Object.entries(ticket.gates))if(gate.stamp.kind==='pullRequest')delete ticket.gates[name];
-    note(ticket,SYSTEM,'sourceChange',`Open PR changed to head ${pr.head}; gates restart on the new fingerprint.`,at);
+    writable.pr={...writable.pr!,head:pr.head,title:pr.title,body:pr.body};
+    for(const [name,gate] of Object.entries(writable.gates))if(gate.stamp.kind==='pullRequest')delete writable.gates[name];
+    note(writable,SYSTEM,'sourceChange',`Open PR changed to head ${pr.head}; gates restart on the new fingerprint.`,at);
   }
-  if(pr.checks.kind==='failing'){note(ticket,SYSTEM,'checks',JSON.stringify(pr.checks),at);enterTicket(state,ticket,observe.checksFailed,facts,at);return true;}
-  if(pr.mergeable==='no'){note(ticket,SYSTEM,'conflict','PR conflicts with the target.',at);enterTicket(state,ticket,observe.conflict,facts,at);return true;}
-  if(pr.mergeable==='behind'){note(ticket,SYSTEM,'conflict','GitHub requires this branch to be updated with the target.',at);enterTicket(state,ticket,observe.behind,facts,at);return true;}
-  if(drifted){enterTicket(state,ticket,observe.drift,facts,at);return true;}
-  return false;
+  if(pr.checks.kind==='failing'){note(writable,SYSTEM,'checks',JSON.stringify(pr.checks),at);enterTicket(state,writable,observe.checksFailed,facts,at);return true;}
+  if(pr.mergeable==='no'){note(writable,SYSTEM,'conflict','PR conflicts with the target.',at);enterTicket(state,writable,observe.conflict,facts,at);return true;}
+  if(pr.mergeable==='behind'){note(writable,SYSTEM,'conflict','GitHub requires this branch to be updated with the target.',at);enterTicket(state,writable,observe.behind,facts,at);return true;}
+  enterTicket(state,writable,observe.drift,facts,at);return true;
 }
-function reconcileTicket(state:Agenda,ticket:Ticket,facts:Facts,at:number):void {
-  const definition=ticketDefinition(state.workflow,ticket);
+function reconcileTicket(pass:Pass,index:number,facts:Facts,at:number):void {
+  const state=pass.state,ticket=state.tickets[index]!,definition=ticketDefinition(state.workflow,ticket);
   if(!definition)return;
   const issue=facts.issues.find(issue=>sameRef(issue.ref,ticket.issue));
   if(!issue)return;
-  if(issue.bodyHash!==ticket.contract.bodyHash){escalateTicket(ticket,'GitHub issue body changed; Main must synchronize the contract and rule.',at,'sourceChange');return;}
+  if(issue.bodyHash!==ticket.contract.bodyHash){escalateTicket(pass.ticket(index).ticket,'GitHub issue body changed; Main must synchronize the contract and rule.',at,'sourceChange');return;}
   const holds=ticketHolds(ticket,facts);
   switch(definition.kind){
     case 'work':return;
     case 'final':{
       const problem=finalProblem(ticket,facts);
-      if(problem)escalateTicket(ticket,`Completed source was reopened or its merge is no longer in the target: ${problem}.`,at,'sourceChange');
+      if(problem)escalateTicket(pass.ticket(index).ticket,`Completed source was reopened or its merge is no longer in the target: ${problem}.`,at,'sourceChange');
       return;
     }
     case 'judge':{
-      if(definition.subject==='pullRequest'){observePullRequest(state,ticket,definition.observe,facts,at);return;}
+      if(definition.subject==='pullRequest'){observePullRequest(pass,index,definition.observe,facts,at);return;}
       const stamp=mergeCommitStamp(ticket,facts),gate=ticket.gates[ticket.state];
-      if(!stamp)escalateTicket(ticket,'Merged commit or post-merge contract is not present in the target.',at,'sourceChange');
+      if(!stamp)escalateTicket(pass.ticket(index).ticket,'Merged commit or post-merge contract is not present in the target.',at,'sourceChange');
       // The judged merge commit stays fixed; a changed contract or ruling restarts this state on the new fingerprint.
-      else if(gate&&canonical(gate.stamp)!==canonical(stamp))enterTicket(state,ticket,ticket.state,facts,at);
+      else if(gate&&canonical(gate.stamp)!==canonical(stamp)){const writable=pass.ticket(index);enterTicket(writable.state,writable.ticket,writable.ticket.state,facts,at);}
       return;
     }
     case 'action':{
       if(definition.action.kind!=='merge')return;
-      if(observePullRequest(state,ticket,definition.action.observe,facts,at))return;
+      // An observation that routes nothing writes nothing, so `ticket` is still current below.
+      if(observePullRequest(pass,index,definition.action.observe,facts,at))return;
       const problem=mergeProblem(state,ticket,facts,definition.action.requires);
-      if(problem){escalateTicket(ticket,`PR head, target, closing link, body, or review contract changed after approval; fresh gates are required (${problem}).`,at,'sourceChange');return;}
-      tryMerge(state,ticket,{state:ticket.state,revision:ticket.revision},facts);
+      if(problem){escalateTicket(pass.ticket(index).ticket,`PR head, target, closing link, body, or review contract changed after approval; fresh gates are required (${problem}).`,at,'sourceChange');return;}
+      const origin={state:ticket.state,revision:ticket.revision};
+      if(mergeDue(state,ticket,origin,facts)){const writable=pass.ticket(index);tryMerge(writable.state,writable.ticket,origin,facts);}
       return;
     }
     case 'decision':{
-      if(observePullRequest(state,ticket,definition.observe,facts,at))return;
+      if(observePullRequest(pass,index,definition.observe,facts,at))return;
       const next=decide(definition,holds);
-      if(next)enterTicket(state,ticket,next,facts,at);
+      if(next){const writable=pass.ticket(index);enterTicket(writable.state,writable.ticket,next,facts,at);}
       return;
     }
   }
@@ -312,7 +340,7 @@ function enterParent(state:Agenda,closure:ClosureGate,target:string,facts:Facts,
   escalateClosure(closure,`The parent workflow moved through ${HOPS} states without waiting; check its routes for a loop.`);
 }
 /** A parent final state holds only while the parent issue is closed and the children are the ones judged. */
-function parentFinalProblem(state:Agenda,closure:ClosureGate,facts:Facts):string|null {
+function parentFinalProblem(state:ReadonlyAgenda,closure:DeepReadonly<ClosureGate>,facts:Facts):string|null {
   const parent=state.parent?facts.issues.find(issue=>sameRef(issue.ref,state.parent!)):undefined;
   if(parent?.state!=='closed')return 'the parent issue is not closed';
   const stamp=parentStamp(state,facts);
@@ -338,29 +366,35 @@ function arriveParent(state:Agenda,closure:ClosureGate,name:string,definition:Pa
     }
   }
 }
-function reconcileParent(state:Agenda,facts:Facts,at:number):void {
+function reconcileParent(pass:Pass,facts:Facts,at:number):void {
+  const state=pass.state;
   if(!state.parent)return;
+  // A written stamp is taken from the writable agenda, so the draft shares no object with the agenda it copies.
   const stamp=parentStamp(state,facts);
   if(!state.closure){
     if(!stamp)return;
-    state.closure={id:`${state.id}/closure`,revision:0,state:state.workflow.parent.initial,stamp,visits:{},gates:{},rulings:[],notes:[]};
-    enterParent(state,state.closure,state.workflow.parent.initial,facts,at);return;
+    const writable=pass.write();
+    writable.closure={id:`${writable.id}/closure`,revision:0,state:writable.workflow.parent.initial,stamp:parentStamp(writable,facts)!,visits:{},gates:{},rulings:[],notes:[]};
+    enterParent(writable,writable.closure,writable.workflow.parent.initial,facts,at);return;
   }
   const closure=state.closure;
   if(!stamp){
-    if(closure.state!==ESCALATED)escalateClosure(closure,'Parent, child membership, terminal, or target verification changed.');
+    if(closure.state!==ESCALATED)escalateClosure(pass.write().closure!,'Parent, child membership, terminal, or target verification changed.');
     return;
   }
   // Changed children restart the parent machine on the new fingerprint, also after an escalation.
-  if(canonical(closure.stamp)!==canonical(stamp)){closure.stamp=stamp;closure.gates={};enterParent(state,closure,state.workflow.parent.initial,facts,at);return;}
+  if(canonical(closure.stamp)!==canonical(stamp)){
+    const writable=pass.write(),gate=writable.closure!;
+    gate.stamp=parentStamp(writable,facts)!;gate.gates={};enterParent(writable,gate,writable.workflow.parent.initial,facts,at);return;
+  }
   const definition=parentDefinition(state.workflow,closure);
-  if(definition?.kind==='decision'){const next=decide(definition,parentHolds(closure));if(next)enterParent(state,closure,next,facts,at);}
-  if(definition?.kind==='final'){const problem=parentFinalProblem(state,closure,facts);if(problem)escalateClosure(closure,`The delivered parent no longer holds: ${problem}.`);}
+  if(definition?.kind==='decision'){const next=decide(definition,parentHolds(closure));if(next){const writable=pass.write();enterParent(writable,writable.closure!,next,facts,at);}}
+  if(definition?.kind==='final'){const problem=parentFinalProblem(state,closure,facts);if(problem)escalateClosure(pass.write().closure!,`The delivered parent no longer holds: ${problem}.`);}
 }
 
 /* ------------------------------------------------------------ queries */
 
-export function availableRoles(state:Agenda,ticket:Ticket):Role[] {
+export function availableRoles(state:ReadonlyAgenda,ticket:ReadonlyTicket):Role[] {
   const definition=ticketDefinition(state.workflow,ticket);
   if(!definition||!dependenciesDone(state,ticket))return [];
   switch(definition.kind){
@@ -370,20 +404,20 @@ export function availableRoles(state:Agenda,ticket:Ticket):Role[] {
   }
 }
 /** The parent closure's judges still owing a verdict on its current state. */
-export function closureRoles(state:Agenda):Role[] {
+export function closureRoles(state:ReadonlyAgenda):Role[] {
   const closure=state.closure,definition=closure?parentDefinition(state.workflow,closure):null;
   if(!closure||definition?.kind!=='judge')return [];
   const gate=closure.gates[closure.state];
   return gate?pendingRoles(definition.judges,gate.verdicts):[];
 }
 /** A ticket Main has not launched yet, whose dependencies are all delivered. */
-export function awaitsLaunch(state:Agenda,ticket:Ticket):boolean {
+export function awaitsLaunch(state:ReadonlyAgenda,ticket:ReadonlyTicket):boolean {
   const definition=ticketDefinition(state.workflow,ticket);
   return !ticket.started&&definition!==null&&definition.kind!=='final'&&dependenciesDone(state,ticket);
 }
 /** The seat a role holds in its ticket's or closure's current state. */
 export type SeatSpec={kind:'work';state:string;role:Role;agent:string;brief:string}|{kind:'judge';state:string;subject:'pullRequest'|'mergeCommit'|'parent';role:Role;agent:string;brief:string};
-export function currentSeat(state:Agenda,ticketId:string,role:Role):SeatSpec|null {
+export function currentSeat(state:ReadonlyAgenda,ticketId:string,role:Role):SeatSpec|null {
   const ticket=state.tickets.find(ticket=>ticket.id===ticketId);
   if(ticket){
     const definition=ticketDefinition(state.workflow,ticket);
@@ -431,34 +465,47 @@ export function createAgenda(input:ConveneInput,workflow:Workflow,facts:Facts,at
   reconcile(state,facts,at);return {ok:true,value:state};
 }
 /** An agenda belongs to an issue when that issue is its parent or the issue of any of its tickets. */
-export function belongsTo(state:Agenda,issue:IssueRef):boolean {
+export function belongsTo(state:ReadonlyAgenda,issue:IssueRef):boolean {
   return state.parent!==null&&sameRef(state.parent,issue)||state.tickets.some(ticket=>sameRef(ticket.issue,issue));
 }
-/** Reconcile only fresh, complete GitHub observations. No local intent establishes source state. */
-export function reconcile(state:Agenda,facts:Facts,at:number):void {
+/** Reconcile only fresh, complete GitHub observations, in place on an agenda the caller owns. No local intent establishes source state. */
+export function reconcile(state:Agenda,facts:Facts,at:number):void {reconcilePass(new Pass(state,state),facts,at);}
+/** The reconciled draft of a shared agenda, or null when the observation changes nothing; an unchanged agenda is never copied. */
+export function reconciled(state:ReadonlyAgenda,facts:Facts,at:number):Agenda|null {
+  const pass=new Pass(state,null);reconcilePass(pass,facts,at);
+  return pass.changed?pass.write():null;
+}
+function reconcilePass(pass:Pass,facts:Facts,at:number):void {
   // A settled question moves its ticket first, so the state it lands in is reconciled in the same pass.
-  for(const ticket of state.tickets)settleAsk(state,ticket,facts,at);
-  for(const ticket of state.tickets)reconcileTicket(state,ticket,facts,at);
-  reconcileParent(state,facts,at);
+  for(let index=0;index<pass.state.tickets.length;index++)settleAsk(pass,index,facts,at);
+  for(let index=0;index<pass.state.tickets.length;index++)reconcileTicket(pass,index,facts,at);
+  reconcileParent(pass,facts,at);
   // An effect that is still only an intent belongs to the state entry that requested it.
-  for(const effect of state.effects)if(effect.state.kind==='ready'&&effect.origin&&!currentOrigin(state,effect))effect.state={kind:'cancelled',reason:'The state that requested this effect has been left'};
+  for(let index=0;index<pass.state.effects.length;index++){
+    const effect=pass.state.effects[index]!;
+    if(effect.state.kind==='ready'&&effect.origin&&!currentOrigin(pass.state,effect))pass.write().effects[index]!.state={kind:'cancelled',reason:'The state that requested this effect has been left'};
+  }
   // A non-escalating effect left uncertain is settled by this complete read: confirmed when the source shows it,
   // failed otherwise. It belongs to no state entry, so its confirmation moves no machine.
-  for(const effect of state.effects){
+  for(let index=0;index<pass.state.effects.length;index++){
+    const effect=pass.state.effects[index]!;
     if(effect.state.kind!=='uncertain'||ESCALATES_ON_FAILURE[effect.action.kind])continue;
-    const result=satisfiedResult(state,effect,facts);
-    effect.state=result?{kind:'confirmed',result}:{kind:'failed',startedAt:effect.state.startedAt,error:effect.state.error};
+    const state=pass.write(),writable=state.effects[index]!;
+    if(writable.state.kind!=='uncertain')continue;
+    const result=satisfiedResult(state,writable,facts);
+    writable.state=result?{kind:'confirmed',result}:{kind:'failed',startedAt:writable.state.startedAt,error:writable.state.error};
   }
   // A confirmed `ask` comment hands its decision item to the intent guardians, once per question: the comment id
   // GitHub shows is recorded on the ticket, and the guardians are asked to answer that comment.
-  for(const ticket of state.tickets){
-    const ask=ticket.ask;
+  for(let index=0;index<pass.state.tickets.length;index++){
+    const state=pass.state,ticket=state.tickets[index]!,ask=ticket.ask;
     if(!ask||ask.comment!==null)continue;
     const posted=state.effects.some(effect=>effect.ticketId===ticket.id&&effect.state.kind==='confirmed'&&effect.action.kind==='comment'&&effect.action.marker.kind==='ask'&&effect.action.marker.key===ask.session);
     const marker=posted?facts.issues.find(issue=>sameRef(issue.ref,ticket.issue))?.pm?.markers.find(marker=>marker.kind==='ask'&&marker.json.session===ask.session):undefined;
     if(!marker)continue;
-    ask.comment=marker.id;
-    enqueue(state,ticket.id,{kind:'requestAnswer',issue:ticket.issue,comment:marker.id,question:ask.question,tier:ask.tier},{state:ASKING,revision:ticket.revision});
+    const writable=pass.ticket(index),asked=writable.ticket.ask!;
+    asked.comment=marker.id;
+    enqueue(writable.state,writable.ticket.id,{kind:'requestAnswer',issue:writable.ticket.issue,comment:marker.id,question:asked.question,tier:asked.tier},{state:ASKING,revision:writable.ticket.revision});
   }
 }
 
@@ -488,7 +535,7 @@ const RETRY_RESENDS:Readonly<Record<Action['kind'],boolean>>={publishPr:false,me
 
 /* ------------------------------------------------------------ effects */
 
-export function effectPrecondition(state:Agenda,effect:Effect,facts:Facts):string|null {
+export function effectPrecondition(state:ReadonlyAgenda,effect:DeepReadonly<Effect>,facts:Facts):string|null {
   const action=effect.action,ticket=state.tickets.find(ticket=>ticket.id===effect.ticketId);
   if(effect.origin&&!currentOrigin(state,effect))return 'The state that requested this effect has been left';
   const definition=ticket?ticketDefinition(state.workflow,ticket):null;
@@ -533,7 +580,7 @@ export function effectPrecondition(state:Agenda,effect:Effect,facts:Facts):strin
     case 'requestAnswer':return null;
   }
 }
-export function satisfiedResult(state:Agenda,effect:Effect,facts:Facts):EffectResult|null {
+export function satisfiedResult(state:ReadonlyAgenda,effect:DeepReadonly<Effect>,facts:Facts):EffectResult|null {
   const action=effect.action;
   switch(action.kind){
     case 'publishPr':{
@@ -633,7 +680,7 @@ function askTicket(state:Agenda,ticket:Ticket,ask:{question:string;tier:Tier;ses
  * The work state a question was asked from. A question recorded before Dispatch kept that state names it through
  * its asking session: the work state of the role whose latest session is that file, when the role has only one.
  */
-function askedFrom(state:Agenda,ticket:Ticket,ask:NonNullable<Ticket['ask']>):string|null {
+function askedFrom(state:ReadonlyAgenda,ticket:ReadonlyTicket,ask:DeepReadonly<NonNullable<Ticket['ask']>>):string|null {
   if(ask.from!==null)return ask.from;
   const role=Object.entries(ticket.sessions).find(([,file])=>file===ask.file)?.[0];
   const states=Object.entries(state.workflow.ticket.states).filter(([,definition])=>definition.kind==='work'&&definition.role===role);
@@ -645,35 +692,35 @@ function askedFrom(state:Agenda,ticket:Ticket,ask:NonNullable<Ticket['ask']>):st
  * ends it in `Replaced`, with no seat, PR or close; an `escalated` records the council agenda and keeps it waiting.
  * A settlement marker naming another ask changes nothing and is noted once.
  */
-function settleAsk(state:Agenda,ticket:Ticket,facts:Facts,at:number):void {
-  const ask=ticket.ask;
+function settleAsk(pass:Pass,index:number,facts:Facts,at:number):void {
+  const ticket=pass.state.tickets[index]!,ask=ticket.ask;
   if(ticket.state!==ASKING||!ask||ask.comment===null)return;
   const markers=facts.issues.find(issue=>sameRef(issue.ref,ticket.issue))?.pm?.markers;
   if(!markers)return;
   const read=settlement(ask.comment,markers);
   for(const ignored of read.ignored){
     const text=`ignored settlement ${ignored.commentId} for ask ${ignored.ask??'none'}`;
-    if(!ticket.notes.some(item=>item.text===text))note(ticket,SYSTEM,'sourceChange',text,at);
+    if(!pass.state.tickets[index]!.notes.some(item=>item.text===text))note(pass.ticket(index).ticket,SYSTEM,'sourceChange',text,at);
   }
   const settled=read.settlement;
-  if(!settled)return;
+  if(!settled||settled.kind==='escalated'&&ask.agenda===settled.agenda)return;
+  const {state,ticket:writable}=pass.ticket(index),asked=writable.ask!;
   switch(settled.kind){
     case 'escalated':
-      if(ask.agenda===settled.agenda)return;
-      ask.agenda=settled.agenda;
-      note(ticket,SYSTEM,'sourceChange',`ask ${ask.comment} was escalated to the council agenda ${settled.agenda} in comment ${settled.commentId}`,at);
+      asked.agenda=settled.agenda;
+      note(writable,SYSTEM,'sourceChange',`ask ${asked.comment} was escalated to the council agenda ${settled.agenda} in comment ${settled.commentId}`,at);
       return;
     case 'replaced':
-      ticket.revision++;ticket.gates={};ticket.state=REPLACED;ticket.ask=null;ticket.resumeMessage=null;
-      ticket.terminal={kind:'replaced',by:settled.by,comment:settled.commentId,at};
-      note(ticket,SYSTEM,'sourceChange',`ask ${ask.comment} was settled by replacing the issue with ${settled.by} in comment ${settled.commentId}`,at);
+      writable.revision++;writable.gates={};writable.state=REPLACED;writable.ask=null;writable.resumeMessage=null;
+      writable.terminal={kind:'replaced',by:settled.by,comment:settled.commentId,at};
+      note(writable,SYSTEM,'sourceChange',`ask ${asked.comment} was settled by replacing the issue with ${settled.by} in comment ${settled.commentId}`,at);
       return;
     case 'reply':{
-      const from=askedFrom(state,ticket,ask);
-      if(from===null){escalateTicket(ticket,`Ask ${ask.comment} was answered in comment ${settled.commentId}, but the work state it was asked from is unknown.`,at,'escalation');return;}
-      note(ticket,SYSTEM,'sourceChange',`ask ${ask.comment} was answered in comment ${settled.commentId}`,at);
-      ticket.resumeMessage=settled.text;
-      enterTicket(state,ticket,from,facts,at);
+      const from=askedFrom(state,writable,asked);
+      if(from===null){escalateTicket(writable,`Ask ${asked.comment} was answered in comment ${settled.commentId}, but the work state it was asked from is unknown.`,at,'escalation');return;}
+      note(writable,SYSTEM,'sourceChange',`ask ${asked.comment} was answered in comment ${settled.commentId}`,at);
+      writable.resumeMessage=settled.text;
+      enterTicket(state,writable,from,facts,at);
       return;
     }
   }
@@ -684,8 +731,8 @@ function settleAsk(state:Agenda,ticket:Ticket,facts:Facts,at:number):void {
  * that session, and its Project Status moves to in progress unless the source already shows it. The effects belong
  * to no state entry, so a seat that hands off before they run does not cancel them.
  */
-export function workerStarted(state:Agenda,started:WorkerStarted,pm:PmContext,facts:Facts):Result<Agenda,DomainError> {
-  const next=structuredClone(state),ticket=next.tickets.find(ticket=>ticket.id===started.ticketId);
+export function workerStarted(state:ReadonlyAgenda,started:WorkerStarted,pm:PmContext,facts:Facts):Result<Agenda,DomainError> {
+  const next=draftAgenda(state),ticket=next.tickets.find(ticket=>ticket.id===started.ticketId);
   if(!ticket)return reject('notFound','Unknown ticket');
   if(ticket.revision!==started.revision)return reject('staleRevision','The seat revision has been superseded');
   const definition=ticketDefinition(next.workflow,ticket);
@@ -699,7 +746,7 @@ export function workerStarted(state:Agenda,started:WorkerStarted,pm:PmContext,fa
   next.version++;return {ok:true,value:next};
 }
 /** Every ticket that `next` newly entered into the final state `Done` gets its Project Status set to done. */
-export function statusOnDone(previous:Agenda,next:Agenda,pm:PmContext):void {
+export function statusOnDone(previous:ReadonlyAgenda,next:Agenda,pm:PmContext):void {
   if(previous.id!==next.id)return;
   for(const ticket of next.tickets){
     if(ticket.state!=='Done'||ticketDefinition(next.workflow,ticket)?.kind!=='final')continue;
@@ -792,8 +839,8 @@ function resolveTicket(next:Agenda,ticket:Ticket,operation:Extract<PortInput,{op
 }
 
 /** `ask` is null while PM integration is off; with it on, a work seat's question waits on the intent guardians instead of Main. */
-export function applyOperation(state:Agenda,operation:PortInput,caller:Caller,facts:Facts,at:number,ask:PmAsk|null):Result<Agenda,DomainError> {
-  const next=structuredClone(state);
+export function applyOperation(state:ReadonlyAgenda,operation:PortInput,caller:Caller,facts:Facts,at:number,ask:PmAsk|null):Result<Agenda,DomainError> {
+  const next=draftAgenda(state);
   if(next.lifecycle!=='active')return reject('invalidTransition','Agenda has completed');
   const main=caller.kind==='main'&&next.run.kind==='attached'&&caller.agentId===next.run.mainAgentId&&caller.sessionId===next.run.mainSessionId;
   if(operation.op==='finish'){
