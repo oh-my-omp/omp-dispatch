@@ -1,8 +1,6 @@
-import {execFile} from 'node:child_process';
 import {randomUUID} from 'node:crypto';
 import {access,mkdir,readdir,rm} from 'node:fs/promises';
 import {dirname,join,resolve} from 'node:path';
-import {promisify} from 'node:util';
 import {createAgentSession,z,type AgentSession,type ExtensionContext} from '@oh-my-pi/pi-coding-agent';
 import type {ToolDefinition} from '@oh-my-pi/pi-coding-agent/extensibility/extensions/types';
 import {AgentRegistry,MAIN_AGENT_ID} from '@oh-my-pi/pi-coding-agent/registry/agent-registry';
@@ -18,17 +16,15 @@ import {buildPublicGrammar} from '../domain/public-grammar.ts';
 import {ASKING} from '../domain/workflow.ts';
 import {parseToolParameters} from '../domain/parse.ts';
 import type {Caller,PortInput,Repo,Result,Role} from '../domain/model.ts';
-import type {HostPort,SeatExit,SeatLaunch,SeatWorkspace} from './contracts.ts';
+import type {HostPort,SeatExit,SeatLaunch} from './contracts.ts';
+import {checkout,git,lockBare,type Worktree} from './bare-cache.ts';
 import type {ControllerOutput,RuntimeError} from '../runtime/controller.ts';
 import {tr} from '../i18n.ts';
 
-const runFile=promisify(execFile);
 const contractSchema=z.object({systemPrompt:z.array(z.string()),tools:z.array(z.string()),mountedTools:z.array(z.string())}).strict();
 const handoffSchema=z.object({ticketId:z.string(),notes:z.number().int().nonnegative(),rulings:z.number().int().nonnegative()}).strict();
 type LiveSeat={input:SeatLaunch;session:AgentSession|null;done:Promise<void>};
-type Worktree={bare:string;path:string};
 export type HostOptions={dataDir:string;ticketRevision:(ticketId:string)=>number|null;execute:(caller:Caller,input:PortInput)=>Promise<Result<ControllerOutput,RuntimeError>>;onExit:(seat:SeatExit,handedOff:boolean,error:string|null)=>void;onSeatError:(ticketId:string,message:string)=>void};
-async function git(args:readonly string[]):Promise<string>{const {stdout}=await runFile('git',[...args]);return stdout.trim();}
 
 /** Owns only the sessions and worktrees it creates; the native registry owns their identities. */
 export function createHostPort(options:HostOptions):HostPort {
@@ -38,13 +34,6 @@ export function createHostPort(options:HostOptions):HostPort {
   // is escalated asynchronously; until then its revision must not be seated again.
   const seatedRevisions=new Set<string>();
   const reposDir=join(options.dataDir,'repos'),worktreesDir=join(options.dataDir,'worktrees'),sessionsDir=join(options.dataDir,'sessions');
-  // git holds ref and worktree-admin locks per repository, so every operation on one bare cache runs in order.
-  const locks=new Map<string,Promise<unknown>>();
-  function locked<T>(bare:string,work:()=>Promise<T>):Promise<T> {
-    const result=(locks.get(bare)??Promise.resolve()).then(work);
-    locks.set(bare,result.catch(()=>{}));
-    return result;
-  }
   let disposed=false;
   function main():AgentSession {
     const root=registry.get(MAIN_AGENT_ID);
@@ -58,36 +47,6 @@ export function createHostPort(options:HostOptions):HostPort {
     if(!agent||cfgTaskDisabledAgents.get(parent.settings).includes(name))throw new Error(`Configured seat agent is unavailable: ${name}`);
     if(agent.blocking)throw new Error(`Dispatch requires a nonblocking seat agent: ${name}`);
     return agent;
-  }
-  /**
-   * A detached worktree of the repository's bare cache at exactly the commit the seat must build on or judge.
-   * The cache is cloned once and fetched before every checkout; seats never clone from the network.
-   */
-  async function checkout(agendaId:string,seatId:string,cwd:string,spec:Exclude<SeatWorkspace,{kind:'fork'}>):Promise<Worktree> {
-    const repo=spec.kind==='base'?spec.target.repo:spec.repo;
-    const bare=join(reposDir,`${repo.owner}__${repo.name}.git`.toLowerCase());
-    return locked(bare,async()=>{
-      if(!await access(join(bare,'HEAD')).then(()=>true,()=>false)){
-        await rm(bare,{recursive:true,force:true});await mkdir(reposDir,{recursive:true,mode:0o700});
-        await runFile('gh',['repo','clone',`${repo.owner}/${repo.name}`,bare,'--','--bare','--quiet'],{cwd});
-        // A bare clone has no remote-tracking refspec; worktrees then fetch and track origin like an ordinary clone.
-        await git(['-C',bare,'config','remote.origin.fetch','+refs/heads/*:refs/remotes/origin/*']);
-      }
-      await git(['-C',bare,'fetch','--prune','--quiet','origin']);
-      let commit:string;
-      if(spec.kind==='base')commit=await git(['-C',bare,'rev-parse','--verify',`refs/remotes/origin/${spec.target.base}^{commit}`]);
-      else {
-        // A fork PR head lives only under the base repository's pull ref, not its branches.
-        if(spec.pull!==null)await git(['-C',bare,'fetch','--quiet','origin',`+refs/pull/${spec.pull}/head:refs/dispatch/pull/${spec.pull}`]);
-        commit=spec.sha;
-      }
-      const tree={bare,path:join(worktreesDir,agendaId,seatId)};
-      await mkdir(dirname(tree.path),{recursive:true,mode:0o700});
-      await git(['-C',bare,'worktree','add','--detach','--quiet',tree.path,`${commit}^{commit}`]);
-      const head=await git(['-C',tree.path,'rev-parse','HEAD']);
-      if(head!==commit){await git(['-C',bare,'worktree','remove','--force',tree.path]);throw new Error(`Seat worktree is at ${head}, not the required ${commit}`);}
-      return tree;
-    });
   }
   return {
     bind(ctx){
@@ -133,7 +92,7 @@ export function createHostPort(options:HostOptions):HostPort {
           // that exit is repaired into a valid transcript, and the fork does not re-bill inherited spend.
           manager=await SessionManager.forkFrom(input.workspace.sessionFile,workspace,sessionDir,undefined,{copyArtifacts:false,suppressBreadcrumb:true,resetInheritedCost:true,repairInterruptedTail:true});
         }else{
-          tree=await checkout(input.agendaId,id,input.cwd,input.workspace);workspace=tree.path;
+          tree=await checkout(reposDir,join(worktreesDir,input.agendaId,id),input.cwd,input.workspace);workspace=tree.path;
           manager=SessionManager.create(workspace,sessionDir);
           await manager.ensureOnDisk();
         }
@@ -276,7 +235,7 @@ export function createHostPort(options:HostOptions):HostPort {
             try {await session.dispose();}catch(cause){error??=cause instanceof Error?cause.message:String(cause);}
             seats.delete(id);
             try {
-              if(disposable)await locked(disposable.bare,()=>git(['-C',disposable.bare,'worktree','remove','--force',disposable.path]));
+              if(disposable)await lockBare(disposable.bare,()=>git(['-C',disposable.bare,'worktree','remove','--force',disposable.path]));
             }catch(cause){error??=cause instanceof Error?cause.message:String(cause);}
             finally {options.onExit({ticketId:input.ticketId,role:input.role,revision:input.revision},handedOff,error);completion.resolve();}
           }
@@ -289,7 +248,7 @@ export function createHostPort(options:HostOptions):HostPort {
         seats.delete(id);
         if(seat.session)await seat.session.dispose();else {mcpFollower?.dispose();if(manager)await manager.close();}
         let detail=error instanceof Error?error.message:String(error);
-        if(tree){const created=tree;try {await locked(created.bare,()=>git(['-C',created.bare,'worktree','remove','--force',created.path]));}catch(cause){detail+=`; worktree cleanup failed: ${cause instanceof Error?cause.message:String(cause)}`;}}
+        if(tree){const created=tree;try {await lockBare(created.bare,()=>git(['-C',created.bare,'worktree','remove','--force',created.path]));}catch(cause){detail+=`; worktree cleanup failed: ${cause instanceof Error?cause.message:String(cause)}`;}}
         return {ok:false,error:{kind:'unavailable',message:detail}};
       }
     },
@@ -302,7 +261,7 @@ export function createHostPort(options:HostOptions):HostPort {
         await rm(root,{recursive:true,force:true});
         for(const name of await readdir(reposDir))if(name.endsWith('.git')){
           const bare=join(reposDir,name);
-          await locked(bare,()=>git(['-C',bare,'worktree','prune']));
+          await lockBare(bare,()=>git(['-C',bare,'worktree','prune']));
         }
         return {ok:true,value:null};
       }catch(error){return {ok:false,error:{kind:'unavailable',message:error instanceof Error?error.message:String(error)}};}
