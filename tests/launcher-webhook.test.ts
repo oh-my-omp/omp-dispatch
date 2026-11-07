@@ -106,6 +106,51 @@ describe('webhook listener',()=>{
       expect(ping.status).toBe(200);
     } finally {await listener.close();}
   });
+
+  test('one issue\'s opened and edited deliveries, arriving together, start one coordinator',async()=>{
+    // A Tern that lists a block only once `new tab` has returned, and returns
+    // only after both deliveries were answered: a second launch that does not
+    // wait for the first sees no block and opens a second tab.
+    const commands:string[]=[];
+    const blocks:{id:number;live:boolean;args:string[]}[]=[];
+    const answered=Promise.withResolvers<void>();
+    const runner:Runner=async(command,args)=>{
+      const key=`${command} ${args.join(' ')}`;commands.push(key);
+      const reply=(stdout:string):RunResult=>({code:0,stdout,stderr:''});
+      if(key==='tern inspect --json')return reply(JSON.stringify({clients:[{kind:'window'}]}));
+      if(key==='tern ls --json')return reply(JSON.stringify({sessions:[{tabs:[{blocks}]}]}));
+      if(key.startsWith('tern new tab ')){
+        await answered.promise;
+        blocks.push({id:blocks.length+40,live:true,args:['-c',args.slice(args.indexOf('--')+1).join(' ')]});
+        return reply('');
+      }
+      if(key.startsWith('tern focus '))return reply('');
+      throw new Error(`Unexpected command: ${key}`);
+    };
+    const entries:Readonly<Record<string,unknown>>[]=[];
+    const settled=Promise.withResolvers<void>();
+    const listener=await serveWebhook({host:'127.0.0.1',port:0,runner,
+      log:entry=>{entries.push(entry);if(entries.filter(item=>item.outcome==='launched'||item.outcome==='existing').length===2)settled.resolve();},
+      registration:async()=>({ok:true,value:{kind:'present',app:{id:1,slug:'s',name:'n',owner:'o',htmlUrl:'https://github.com/apps/s',webhookSecret:secret,pem:'',clientId:'',clientSecret:''}}}),
+      settings:async()=>({ok:true,value:linkMode})});
+    try {
+      const url=`http://127.0.0.1:${listener.port}/github/webhook`;
+      // GitHub renders both payloads from the issue as it is when delivering, so
+      // the `opened` body already carries the link the edit added.
+      const edited=JSON.stringify(delivery('edited',{body:badge(own)},{changes:{body:{from:'Plan\n\n(link written after the issue exists)'}}}));
+      const opened=JSON.stringify(delivery('opened',{body:badge(own)}));
+      const send=(body:string,id:string):Promise<Response>=>fetch(url,{method:'POST',body,headers:{'x-github-event':'issues','x-github-delivery':id,'x-hub-signature-256':sign(body)}});
+      const answers=await Promise.all([send(edited,'edited-1'),send(opened,'opened-1')]);
+      answered.resolve();
+      expect(await Promise.all(answers.map(answer=>answer.json()))).toEqual([{outcome:'launching',detail:'Acme/dispatch#7'},{outcome:'launching',detail:'Acme/dispatch#7'}]);
+      await settled.promise;
+      expect(commands.filter(command=>command.startsWith('tern new tab ')).length).toBe(1);
+      const outcomes=entries.filter(item=>item.outcome==='launched'||item.outcome==='existing');
+      expect(outcomes.map(item=>item.outcome).sort()).toEqual(['existing','launched']);
+      for(const item of outcomes)expect(item).toMatchObject({source:'webhook',event:'issues',reference:'Acme/dispatch#7'});
+      expect(commands).toContain('tern focus 40');
+    } finally {await listener.close();}
+  });
 });
 
 describe('launcher settings',()=>{

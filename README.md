@@ -28,7 +28,7 @@ Install the extension as an omp plugin (`omp plugin install omp-dispatch`), then
 
 The launcher holds no state of its own. It reads the link, calls the named frontend, and returns one page naming exactly one outcome: `launched` (the frontend now runs `omp --dispatch <owner>/<repo>#<number>` in `cwd`), `existing` (the frontend already runs a coordinator for that exact reference and started nothing), `rejected` (malformed path or number, a missing, malformed or unknown `spec`, a `cwd` that is not an existing absolute directory, or a request that is not a user's click navigation), or `frontendFailed` (the frontend's own output). Only `Sec-Fetch-Mode: navigate` with `Sec-Fetch-User: ?1` is served, because any page can GET `127.0.0.1` and GitHub drops Referer on the https→http hop; the click is the operator's authorization. The port and the `spec` grammar are part of the published link contract.
 
-The Tern frontend opens a tab running the coordinator, or focuses the live block that already runs that exact reference. Tern's daemon outlives its window, so it opens a window in `cwd` first whenever no window client is connected: a block started without one would run invisibly.
+The Tern frontend opens a tab running the coordinator, or focuses the live block that already runs that exact reference. Tern's daemon outlives its window, so it opens a window in `cwd` first whenever no window client is connected: a block started without one would run invisibly. Launches of one reference, from clicks and deliveries alike, run one after another, so a launch that arrives while another is still starting the same coordinator ends `existing` on the block that one started rather than opening a second tab.
 
 ### GitHub App trigger
 
