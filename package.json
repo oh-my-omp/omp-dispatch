@@ -42,6 +42,16 @@
         "type": "number",
         "default": 47592,
         "description": "Port the GitHub App webhook listener binds; read when the launcher starts"
+      },
+      "configCheckHost": {
+        "type": "string",
+        "default": "127.0.0.1",
+        "description": "Host the PM configuration check listener binds (POST /pm-config/check); read when the launcher starts"
+      },
+      "configCheckPort": {
+        "type": "number",
+        "default": 47593,
+        "description": "Port the PM configuration check listener binds; must differ from the link port 47591 and webhookPort; read when the launcher starts"
       }
     }
   },
