@@ -574,7 +574,8 @@ export function createGitHubPort(options: { actor?: string; pm: PmProjectSource 
   }
   async function containment(repository: m.Repo, ancestor: string, descendant: string, cause: string): Promise<'contains' | 'notContained' | 'missing'> {
     const key = `${repoKey(repository)}:${ancestor}:${descendant}`;
-    const cached = ancestry.get(key); if (cached) return cached;
+    const cached = ancestry.get(key);
+    if (cached) { rememberAncestry(key, cached); return cached; }
     const response = await api(`${pathRepo(repository)}/compare/${encodeURIComponent(ancestor)}...${encodeURIComponent(descendant)}`, 'GET', undefined, cause, true);
     if (response.status === 404) {
       // A masked/inaccessible repository must not become a missing-commit fact.
