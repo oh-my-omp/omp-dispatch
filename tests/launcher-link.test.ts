@@ -2,6 +2,7 @@ import {describe, expect, test} from 'bun:test';
 import {isUserNavigation,launcherLinks,parseLinkPath,resolveTarget} from '../src/launcher/link.ts';
 import {type RunResult,type Runner} from '../src/launcher/exec.ts';
 import {connectedWindow,launchTern,liveCoordinatorBlock} from '../src/launcher/tern.ts';
+import {launchFrontend} from '../src/launcher/frontends.ts';
 
 // The launcher's whole behaviour is: read a link, decide, call a frontend.
 // These checks drive that decision with a fake Tern and a real filesystem stat.
@@ -189,5 +190,19 @@ describe('Tern frontend: coordinator discovery and launch decision',()=>{
     const outcome=await launchTern(target,runner);
     expect(outcome.kind).toBe('frontendFailed');
     if(outcome.kind==='frontendFailed')expect(outcome.output).toContain('tern: cannot start the window');
+  });
+
+  test('a launch that fails does not hold back the next launch of the same reference',async()=>{
+    const broken:Runner=async()=>{throw new Error('tern vanished');};
+    const {calls,runner}=fakeRunner({
+      ...windowed,
+      'tern ls --json':ok(listing([])),
+      'tern new tab --cwd /tmp -- omp --dispatch Acme/dispatch#7':ok(''),
+    });
+    const first=launchFrontend({kind:'tern'},target,broken);
+    const second=launchFrontend({kind:'tern'},target,runner);
+    await expect(first).rejects.toThrow('tern vanished');
+    expect(await second).toEqual({kind:'launched'});
+    expect(calls.map(call=>call.args.join(' '))).toEqual(['inspect --json','ls --json','new tab --cwd /tmp -- omp --dispatch Acme/dispatch#7']);
   });
 });

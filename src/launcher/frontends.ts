@@ -18,8 +18,28 @@ export type CoordinatorTarget={reference:string;cwd:string};
 /** `existing`: the frontend already runs a coordinator for this reference and started nothing. */
 export type LaunchOutcome={kind:'launched'}|{kind:'existing';detail:string}|{kind:'frontendFailed';output:string};
 
-export function launchFrontend(spec:FrontendSpec,target:CoordinatorTarget,exec:Runner):Promise<LaunchOutcome> {
+function startFrontend(spec:FrontendSpec,target:CoordinatorTarget,exec:Runner):Promise<LaunchOutcome> {
   switch(spec.kind){
     case 'tern':return launchTern(target,exec);
   }
+}
+
+/** The last launch queued for each reference; it never rejects, and leaves once nothing follows it. */
+const queued=new Map<string,Promise<void>>();
+
+/**
+ * Launches for one reference run one at a time, whichever listener asked: a
+ * frontend decides `existing` from what it already runs, and a coordinator it
+ * is still starting is not running yet. Waiting for the earlier launch lets the
+ * frontend itself report the coordinator it just started, so one issue's
+ * `opened` and `edited` deliveries, or a delivery and a click, start one
+ * process. The queue orders launches only; the frontend stays the record of
+ * what runs.
+ */
+export function launchFrontend(spec:FrontendSpec,target:CoordinatorTarget,exec:Runner):Promise<LaunchOutcome> {
+  const launch=(queued.get(target.reference)??Promise.resolve()).then(()=>startFrontend(spec,target,exec));
+  const settled=launch.then(()=>undefined,()=>undefined);
+  queued.set(target.reference,settled);
+  void settled.then(()=>{if(queued.get(target.reference)===settled)queued.delete(target.reference);});
+  return launch;
 }
