@@ -4,7 +4,7 @@ import { YAML } from 'bun';
 import { z, type ZodLikeSchema } from '@oh-my-pi/omptype/zod';
 import type { Result } from '../domain/model.ts';
 
-/** The PM configuration Dispatch reads from `dispatch.pmConfigDir`: two shared files and its own delivery file. */
+/** The PM configuration Dispatch reads from the `pmConfigDir` plugin setting: two shared files and its own delivery file. */
 const object = <const S extends Readonly<Record<string, ZodLikeSchema<unknown>>>>(shape: S) => z.object(shape).strict();
 const text = z.string().min(1);
 const repo = z.string().regex(/^[^/\s]+\/[^/\s]+$/);

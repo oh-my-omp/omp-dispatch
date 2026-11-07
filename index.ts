@@ -1,7 +1,5 @@
 import {hostname} from 'node:os';
-import {join,resolve} from 'node:path';
-import {getAgentDir,logger,z,type ExtensionAPI,type ExtensionContext} from '@oh-my-pi/pi-coding-agent';
-import {register} from '@oh-my-pi/pi-coding-agent/config/registry';
+import {logger,z,type ExtensionAPI,type ExtensionContext} from '@oh-my-pi/pi-coding-agent';
 import {AgentRegistry,MAIN_AGENT_ID} from '@oh-my-pi/pi-coding-agent/registry/agent-registry';
 import {applyActiveTools} from './active-tools.ts';
 import {launcherCommand} from './src/launcher/commands.ts';
@@ -14,6 +12,7 @@ import {createHostPort} from './src/ports/host.ts';
 import {createGuardiansPort} from './src/ports/guardians.ts';
 import {createProcessPort} from './src/ports/process.ts';
 import {configuredWorkflow} from './src/ports/workflow-settings.ts';
+import {readRuntimeSettings} from './src/ports/runtime-settings.ts';
 import {tr} from './src/i18n.ts';
 import {loadPmConfig,type PmConfig} from './src/pm/config.ts';
 import {runtimeErrorText} from './src/runtime/error-text.ts';
@@ -24,16 +23,9 @@ import {RuntimeExit} from './src/runtime/exit.ts';
 
 const SLOT=Symbol.for('omp-dispatch.runtime.v4');
 type Identity={kind:'absent'}|{kind:'invalid';message:string}|({kind:'coordinator'}&CoordinatorIdentity);
-function requireText(value:unknown):void {if(value!==undefined&&(typeof value!=='string'||!value.trim()))throw new Error(tr('Dispatch setting must be a nonempty string','调度设置必须为非空字符串'));}
-function requireInterval(value:unknown):void {if(value!==undefined&&(typeof value!=='number'||!Number.isSafeInteger(value)||value<1||value>2_147_483))throw new Error(tr('Dispatch recompute interval must be positive whole seconds within the native timer range','调度重算间隔必须为原生定时器范围内的正整数秒'));}
-function requireString(value:unknown):void {if(value!==undefined&&typeof value!=='string')throw new Error(tr('Dispatch setting must be a string','调度设置必须为字符串'));}
 
 /** Main is one native session for the whole process; seats own their own SDK lifetimes. */
 class ProcessRuntime {
-  private readonly interval=register({id:'dispatch.recomputeIntervalSeconds',type:'number',default:120,env:'OMP_DISPATCH_RECOMPUTE_SECONDS',validate:requireInterval});
-  private readonly directory=register({id:'dispatch.dataDir',type:'string',default:join(getAgentDir(),'omp-dispatch'),env:'OMP_DISPATCH_DIR',validate:requireText});
-  /** The PM configuration repository root; empty leaves PM integration off. */
-  private readonly pmConfigDir=register({id:'dispatch.pmConfigDir',type:'string',default:'',env:'OMP_DISPATCH_PM_CONFIG',validate:requireString});
   private identity:Identity|null=null;
   private binding:{pi:ExtensionAPI;ctx:ExtensionContext}|null=null;
   private controller:DispatchController|null=null;
@@ -83,11 +75,15 @@ class ProcessRuntime {
     this.started=true;this.binding={pi,ctx};
     // Only a coordinator identity reaches start, so the exit request binds to the exact context it was granted for.
     this.exit.grant(()=>ctx.shutdown());
-    const directory=resolve(ctx.cwd,this.directory.get(root.settings));
-    const pmDirectory=this.pmConfigDir.get(root.settings).trim();
+    const settings=await readRuntimeSettings(ctx.cwd);
+    if(!settings.ok){
+      const message=`${tr('Dispatch settings are invalid; the coordinator does not start','调度设置无效，协调者不启动')}:\n${settings.error}`;
+      ctx.ui.notify(message,'error');throw new Error(message);
+    }
+    const directory=settings.value.dataDir;
     let pm:PmConfig|null=null;
-    if(pmDirectory){
-      const loaded=await loadPmConfig(resolve(ctx.cwd,pmDirectory));
+    if(settings.value.pm){
+      const loaded=await loadPmConfig(settings.value.pm);
       if(!loaded.ok){
         const message=`${tr('Dispatch PM configuration is invalid; the coordinator does not start','调度 PM 配置无效，协调者不启动')}:\n${loaded.error}`;
         ctx.ui.notify(message,'error');throw new Error(message);
@@ -113,7 +109,7 @@ class ProcessRuntime {
         ask:{defaultTier:pm.delivery.defaultTier,tierHelp:pm.delivery.tierHelp,resumePrompt:pm.delivery.resumePrompt}},guardians:createGuardiansPort(pm.delivery.guardiansURL)}:null,
       // Read at each convene: a configured file must exist; otherwise the data directory may override the built-in workflow.
       workflow:()=>configuredWorkflow(ctx.cwd,directory),
-      intervalSeconds:this.interval.get(root.settings),onChange:()=>this.changed(),onError:error=>this.report(error)});
+      intervalSeconds:settings.value.intervalSeconds,onChange:()=>this.changed(),onError:error=>this.report(error)});
     const caller=this.host.bind(ctx);if(!caller.ok||caller.value.kind!=='main')throw new Error('Cannot bind Main to the coordinator');
     this.controller.setMain(caller.value);
     await applyActiveTools(pi,[...pi.getActiveTools(),'dispatch']);
