@@ -102,7 +102,7 @@ function harness(root:string,facts:Facts,processes:ProcessTable,pid:number,guard
     seated:(ticketId,role,revision)=>launches.some(seat=>seat.ticketId===ticketId&&seat.role===role&&seat.revision===revision),
     launch:async input=>{launches.push(input);return success({agentId:`owner-${launches.length}`,sessionId:`session-${launches.length}`,sessionFile:`/data/session-${launches.length}.jsonl`,jobId:`job-${launches.length}`});}};
   const port:GuardiansPort={requestAnswer:request=>{asks.push(request);return guardians(request);}};
-  const controller=new DispatchController({files:createAgendaFiles(root),github,host,process:processes.spawn(pid,`start-${pid}`),cwd:root,workflow:async()=>({ok:true,value:workflow}),
+  const controller=new DispatchController({issue,files:createAgendaFiles(root),github,host,process:processes.spawn(pid,`start-${pid}`),cwd:root,workflow:async()=>({ok:true,value:workflow}),
     intervalSeconds:3600,pm:{context:PM,guardians:port},onChange:()=>{},onError:error=>errors.push(error)});
   return {controller,launches,asks,errors,host};
 }

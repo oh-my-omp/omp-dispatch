@@ -103,7 +103,7 @@ class ProcessRuntime {
       },
       onSeatError:(ticketId,message)=>this.report({kind:'host',error:{kind:'unavailable',message:`Ticket ${ticketId} seat: ${message}`}}),
     });
-    this.controller=new DispatchController({files:createAgendaFiles(directory),
+    this.controller=new DispatchController({issue:identity.issue,files:createAgendaFiles(directory),
       github:createGitHubPort({pm:pm?{owner:pm.repos.pm.project.owner,number:pm.repos.pm.project.number,statusField:pm.project.fields.status.name}:null}),host:this.host,process:createProcessPort(),cwd:ctx.cwd,
       pm:pm?{context:{host:hostname(),pid:process.pid,status:{inProgress:pm.project.fields.status.options.inProgress,done:pm.project.fields.status.options.done},
         ask:{defaultTier:pm.delivery.defaultTier,tierHelp:pm.delivery.tierHelp,resumePrompt:pm.delivery.resumePrompt}},guardians:createGuardiansPort(pm.delivery.guardiansURL)}:null,
@@ -115,8 +115,7 @@ class ProcessRuntime {
     await applyActiveTools(pi,[...pi.getActiveTools(),'dispatch']);
     const saved=await this.controller.startup(caller.value);
     if(!saved.ok)this.report(saved.error);
-    const agenda=saved.ok&&'active' in saved.value?(saved.value.active.length?`active: ${saved.value.active.join(', ')}`:'no saved active agenda'):JSON.stringify(saved);
-    pi.sendMessage({customType:'dispatch-start',display:true,content:coordinatorBriefing({reference:identity.reference,agenda})},{triggerTurn:true,deliverAs:'nextTurn'});
+    pi.sendMessage({customType:'dispatch-start',display:true,content:coordinatorBriefing({reference:identity.reference,saved:saved.ok?{kind:'listed',active:saved.value}:{kind:'unreadable',error:JSON.stringify(saved.error)}})},{triggerTurn:true,deliverAs:'nextTurn'});
   }
   async execute(ctx:ExtensionContext,params:unknown) {
     const parsed=parseToolParameters(params);

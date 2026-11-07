@@ -1,7 +1,7 @@
 import {randomUUID} from 'node:crypto';
-import type {Agenda,Caller,DomainError,Effect,EffectResult,Facts,PmContext,PortError,PortInput,Result,Role,Workflow} from '../domain/model.ts';
-import {REPLAYABLE,abandonSeat,applyOperation,availableRoles,awaitsLaunch,closureRoles,confirmEffect,createAgenda,currentSeat,effectPrecondition,failEffect,reconcile,satisfiedResult,statusOnDone,ticketDefinition,workerStarted} from '../domain/engine.ts';
-import {canonical,sameRef} from '../domain/identity.ts';
+import type {Agenda,Caller,DomainError,Effect,EffectResult,Facts,IssueRef,PmContext,PortError,PortInput,Result,Role,Workflow} from '../domain/model.ts';
+import {REPLAYABLE,abandonSeat,applyOperation,availableRoles,awaitsLaunch,belongsTo,closureRoles,confirmEffect,createAgenda,currentSeat,effectPrecondition,failEffect,reconcile,satisfiedResult,statusOnDone,ticketDefinition,workerStarted} from '../domain/engine.ts';
+import {canonical,refKey,sameRef} from '../domain/identity.ts';
 import {seatBrief} from '../domain/briefs.ts';
 import {parentSeatRoles,ticketSeatRoles,workflowAgents} from '../domain/workflow.ts';
 import type {AgendaFiles,GitHubPort,GuardiansPort,HostPort,ProcessPort,SeatExit,SeatHandle,SeatLaunch,SeatWorkspace,StateError,WorkflowError} from '../ports/contracts.ts';
@@ -13,13 +13,15 @@ export type RuntimeError={kind:'domain';error:DomainError}|{kind:'storage';error
  * council agenda once the question went to the council), and which seats the relay currently runs.
  */
 export type AgendaView={agenda:Agenda;launchable:string[];asking:{ticketId:string;question:string;comment:number|null;agenda:string|null}[];seated:{ticketId:string;roles:Role[]}[]};
-export type ControllerOutput=AgendaView|{active:string[]}|{ticket:Agenda['tickets'][number]|NonNullable<Agenda['closure']>}|{launched:SeatHandle[]};
+export type ControllerOutput=AgendaView|{ticket:Agenda['tickets'][number]|NonNullable<Agenda['closure']>}|{launched:SeatHandle[]};
 /**
+ * `issue` is the launch issue: only the active agendas that belong to it are listed at startup, resumed, or block
+ * a new convene; the active agendas of other issues are left alone.
  * `workflow` reads the workflow a new agenda will freeze; an attached agenda never consults it.
  * `pm` turns on PM integration: work seats record their sessions on their issues, Project Status follows delivery,
  * and a work seat's question goes to the intent guardians behind `guardians`.
  */
-export type ControllerOptions={files:AgendaFiles;github:GitHubPort;host:HostPort;process:ProcessPort;cwd:string;workflow:()=>Promise<Result<Workflow,WorkflowError>>;intervalSeconds:number;pm:{context:PmContext;guardians:GuardiansPort}|null;onChange:()=>void;onError:(error:RuntimeError)=>void};
+export type ControllerOptions={issue:IssueRef;files:AgendaFiles;github:GitHubPort;host:HostPort;process:ProcessPort;cwd:string;workflow:()=>Promise<Result<Workflow,WorkflowError>>;intervalSeconds:number;pm:{context:PmContext;guardians:GuardiansPort}|null;onChange:()=>void;onError:(error:RuntimeError)=>void};
 function domain(kind:DomainError['kind'],message:string):{ok:false;error:RuntimeError}{return {ok:false,error:{kind:'domain',error:{kind,message}}};}
 
 /** The controller is the sole writer of its agenda. GitHub observations are never optimistic writes. */
@@ -75,10 +77,16 @@ export class DispatchController {
     const asking=state.tickets.flatMap(ticket=>ticket.ask?[{ticketId:ticket.id,question:ticket.ask.question,comment:ticket.ask.comment,agenda:ticket.ask.agenda}]:[]);
     return {ok:true,value:{agenda:structuredClone(state),launchable:state.tickets.filter(ticket=>awaitsLaunch(state,ticket)).map(ticket=>ticket.id),asking,seated}};
   }
-  async startup(caller:Caller):Promise<Result<ControllerOutput,RuntimeError>> {
-    if(caller.kind!=='main'||!this.visible(caller))return domain('unauthorized','Only the native coordinator may inspect saved agendas');
+  /** The saved active agendas of the launch issue; a storage failure is the caller's to report. */
+  private async owned():Promise<Result<Agenda[],RuntimeError>> {
     const list=await this.options.files.list();if(!list.ok)return {ok:false,error:{kind:'storage',error:list.error}};
-    return {ok:true,value:{active:list.value.filter(state=>state.lifecycle==='active').map(state=>state.id)}};
+    return {ok:true,value:list.value.filter(state=>state.lifecycle==='active'&&belongsTo(state,this.options.issue))};
+  }
+  /** The ids of the launch issue's saved active agendas, for the startup message. */
+  async startup(caller:Caller):Promise<Result<string[],RuntimeError>> {
+    if(caller.kind!=='main'||!this.visible(caller))return domain('unauthorized','Only the native coordinator may inspect saved agendas');
+    const owned=await this.owned();if(!owned.ok)return owned;
+    return {ok:true,value:owned.value.map(state=>state.id)};
   }
   async execute(caller:Caller,operation:PortInput):Promise<Result<ControllerOutput,RuntimeError>> {
     return this.serial(async()=>{
@@ -87,12 +95,12 @@ export class DispatchController {
       if(operation.op==='convene'||operation.op==='resume'){
         if(caller.kind!=='main')return domain('unauthorized','Only Main may attach an agenda');
         if(this.state?.lifecycle==='active')return domain('ownershipBlocked','A live agenda is already attached');
-        const list=await this.options.files.list();if(!list.ok)return {ok:false,error:{kind:'storage',error:list.error}};
-        const active=list.value.filter(state=>state.lifecycle==='active');
+        const owned=await this.owned();if(!owned.ok)return owned;
+        const active=owned.value;
         const self=await this.options.process.current();if(!self.ok)return {ok:false,error:{kind:'process',error:self.error}};
         const run={kind:'attached',id:this.runId,mainAgentId:caller.agentId,mainSessionId:caller.sessionId,pid:self.value.pid,startedAt:self.value.startedAt} as const;
         if(operation.op==='convene'){
-          if(active.length)return domain('ownershipBlocked','Resume the saved active agenda instead of creating a second owner');
+          if(active.length)return domain('ownershipBlocked',`Resume the saved active agenda of ${refKey(this.options.issue)} instead of creating a second owner`);
           const workflow=await this.options.workflow();if(!workflow.ok)return {ok:false,error:{kind:'workflow',error:workflow.error}};
           // The workflow is frozen for the agenda's whole life, so a seat agent that cannot run is refused before it is.
           const agents=await this.options.host.agents(this.options.cwd,workflowAgents(workflow.value));
@@ -102,7 +110,7 @@ export class DispatchController {
           created.value.run=run;
           const saved=await this.save(created.value,null);if(!saved.ok)return saved;
         }else{
-          if(active.length!==1||active[0]?.id!==operation.agenda)return domain('ownershipBlocked','Exactly one matching saved active agenda is required');
+          if(active.length!==1||active[0]?.id!==operation.agenda)return domain('ownershipBlocked',`Agenda ${operation.agenda} is not the one saved active agenda of ${refKey(this.options.issue)}`);
           const saved=await this.options.files.load(operation.agenda);if(!saved.ok)return {ok:false,error:{kind:'storage',error:saved.error}};
           // The OS names a live holder: the same pid with the same start time. A reused pid has another start time.
           const holder=saved.value.run;

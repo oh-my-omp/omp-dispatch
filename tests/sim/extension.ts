@@ -75,6 +75,7 @@ type Ask = {input: Record<string, unknown>} | {shell: string};
 type MainPlan = Generator<Ask, void, Reply>;
 
 function* startPlan(trigger: string): MainPlan {
+  if (scenario.resumeFirst) yield {input: {op: 'resume', agenda: scenario.resumeFirst}};
   const saved = /Saved agendas: active: ([0-9a-f-]{36})/.exec(trigger);
   const target = {repo, base: 'main'};
   const opened = saved
