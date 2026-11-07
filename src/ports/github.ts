@@ -202,10 +202,23 @@ function checks(value: SourcePr, rules: m.MergeRequirements): m.ChecksSnapshot {
   return { kind: 'passing', required: rules.required };
 }
 
+/** Matches `gh api --include` output: one header line, a header block, then the body. */
+const GH_RESPONSE_PREFIX = /^HTTP\/[^\s]+ (\d+)[^\r\n]*\r?\n([\s\S]*?)\r?\n\r?\n/;
+/** Upper bound on `ancestry` containment entries: a miss costs at most one compare request. */
+const ANCESTRY_LIMIT = 500;
 /** `pm` names the Project and Status field PM integration reads and writes; null keeps every read and write PM-free. */
 export function createGitHubPort(options: { actor?: string; pm: PmProjectSource | null } = { pm: null }): GitHubPort {
   let blockedUntil = 0;
   const ancestry = new Map<string, 'contains' | 'notContained'>();
+  const rememberAncestry = (key: string, value: 'contains' | 'notContained'): void => {
+    // Refresh recency so eviction drops the least recently used entry.
+    if (ancestry.has(key)) ancestry.delete(key);
+    ancestry.set(key, value);
+    if (ancestry.size > ANCESTRY_LIMIT) {
+      const oldest = ancestry.keys().next();
+      if (!oldest.done) ancestry.delete(oldest.value);
+    }
+  };
   const pm = options.pm;
   const issueSelection = pm ? `${issueFields} ${commentsPage(null)} ${projectItemsPage(pm.statusField, null)}` : issueFields;
   async function result<T>(action: () => Promise<T>): Promise<m.Result<T, m.PortError>> {
@@ -215,12 +228,13 @@ export function createGitHubPort(options: { actor?: string; pm: PmProjectSource 
   async function command(args: string[], input: string | undefined, write: boolean): Promise<{ stdout: string; stderr: string; code: number; timedOut: boolean }> {
     const { promise, resolve, reject } = Promise.withResolvers<{ stdout: string; stderr: string; code: number; timedOut: boolean }>();
     const child = spawn('gh', args, { env: { ...process.env, GH_PROMPT_DISABLED: '1', GH_DEBUG: '' }, stdio: ['pipe', 'pipe', 'pipe'] });
-    let stdout = '', stderr = '', timedOut = false;
+    const stdout: string[] = [], stderr: string[] = [];
+    let timedOut = false;
     const timeout = setTimeout(() => { timedOut = true; child.kill('SIGTERM'); }, 60_000);
     child.stdout.setEncoding('utf8'); child.stderr.setEncoding('utf8');
-    child.stdout.on('data', (chunk: string) => { stdout += chunk; }); child.stderr.on('data', (chunk: string) => { stderr += chunk; });
+    child.stdout.on('data', (chunk: string) => { stdout.push(chunk); }); child.stderr.on('data', (chunk: string) => { stderr.push(chunk); });
     child.on('error', error => { clearTimeout(timeout); reject(new SourceFailure({ kind: write ? 'uncertainOutcome' : 'unavailable', message: sanitize(error.message) })); });
-    child.on('close', code => { clearTimeout(timeout); resolve({ stdout, stderr, code: code ?? -1, timedOut }); });
+    child.on('close', code => { clearTimeout(timeout); resolve({ stdout: stdout.join(''), stderr: stderr.join(''), code: code ?? -1, timedOut }); });
     child.stdin.end(input);
     return promise;
   }
@@ -246,12 +260,16 @@ export function createGitHubPort(options: { actor?: string; pm: PmProjectSource 
     const args = ['api', '--include', '--method', method, endpoint, '-H', 'Accept: application/vnd.github+json', '-H', 'X-GitHub-Api-Version: 2022-11-28'];
     if (payload !== undefined) args.push('--input', '-');
     const output = await command(args, payload === undefined ? undefined : JSON.stringify(payload), write);
-    const match = output.stdout.match(/^HTTP\/[^\s]+ (\d+)[^\r\n]*\r?\n([\s\S]*?)\r?\n\r?\n([\s\S]*)$/);
+    // Prefix-only match: the body is everything after the header separator, never a
+    // captured copy. `match` carries the status and header block; `raw` aliases the
+    // response tail without copying it.
+    const match = GH_RESPONSE_PREFIX.exec(output.stdout);
     const headers = new Map<string, string>();
     for (const line of (match?.[2] ?? '').split(/\r?\n/)) { const colon = line.indexOf(':'); if (colon > 0) headers.set(line.slice(0, colon).toLowerCase(), line.slice(colon + 1).trim()); }
     let body: unknown = null;
-    const raw = match?.[3] ?? output.stdout;
-    try { if (raw.trim()) body = JSON.parse(raw); } catch { /* Classified below using the actual status and source response. */ }
+    const raw = match ? output.stdout.slice(match[0].length) : output.stdout;
+    const trimmed = raw.trim();
+    try { if (trimmed) body = JSON.parse(trimmed); } catch { /* Classified below using the actual status and source response. */ }
     const response: HttpResponse = { status: match ? Number(match[1]) : 0, headers, body };
     if (output.timedOut) fail(write ? 'uncertainOutcome' : 'unavailable', `${method} ${endpoint}: request timed out`);
     if (allowNotFound && response.status === 404) return response;
@@ -259,7 +277,7 @@ export function createGitHubPort(options: { actor?: string; pm: PmProjectSource 
       const detail = z.object({ message: z.string() }).safeParse(body);
       sourceError(response, write, `${cause}: ${detail.success ? detail.data.message : output.stderr || raw}`);
     }
-    if (raw.trim() && body === null) fail(write ? 'uncertainOutcome' : 'invalidResponse', `${method} ${endpoint}: malformed JSON response`);
+    if (trimmed && body === null) fail(write ? 'uncertainOutcome' : 'invalidResponse', `${method} ${endpoint}: malformed JSON response`);
     return response;
   }
   /** `write` marks a mutation: a lost response is an uncertain outcome, not an unavailable read. */
@@ -556,7 +574,8 @@ export function createGitHubPort(options: { actor?: string; pm: PmProjectSource 
   }
   async function containment(repository: m.Repo, ancestor: string, descendant: string, cause: string): Promise<'contains' | 'notContained' | 'missing'> {
     const key = `${repoKey(repository)}:${ancestor}:${descendant}`;
-    const cached = ancestry.get(key); if (cached) return cached;
+    const cached = ancestry.get(key);
+    if (cached) { rememberAncestry(key, cached); return cached; }
     const response = await api(`${pathRepo(repository)}/compare/${encodeURIComponent(ancestor)}...${encodeURIComponent(descendant)}`, 'GET', undefined, cause, true);
     if (response.status === 404) {
       // A masked/inaccessible repository must not become a missing-commit fact.
@@ -566,7 +585,7 @@ export function createGitHubPort(options: { actor?: string; pm: PmProjectSource 
     const comparison = decode(z.object({ status: z.enum(['ahead', 'behind', 'diverged', 'identical']), base_commit: z.object({ sha: m.shaSchema }), commits: z.array(z.object({ sha: m.shaSchema })) }), response.body, 'commit comparison');
     if (comparison.base_commit.sha !== ancestor) fail('invalidResponse', 'Comparison source ancestor mismatch');
     const answer = comparison.status === 'ahead' || comparison.status === 'identical' ? 'contains' : 'notContained';
-    ancestry.set(key, answer); return answer;
+    rememberAncestry(key, answer); return answer;
   }
   async function attempt(repository: m.Repo, runId: number, cause: string): Promise<m.CheckAttempt> {
     const response = await api(`${pathRepo(repository)}/actions/runs/${runId}`, 'GET', undefined, cause);
