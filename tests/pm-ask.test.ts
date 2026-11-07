@@ -178,3 +178,39 @@ test('unreachable guardians fail the request with their connection error, wake M
     expect(h.errors).toEqual([]);
   }finally {await h.controller.shutdown();await rm(root,{recursive:true,force:true});}
 });
+
+test('Main retries a failed guardians request by resolving to Asking; the request is sent again, the question kept, and no attention remains',async()=>{
+  const root=await mkdtemp(join(tmpdir(),'dispatch-pm-ask-retry-'));
+  const facts=source(),processes=new ProcessTable();
+  // The first request finds the guardians unreachable; the retried one is accepted.
+  const answers:Result<200|202,PortError>[]=[{ok:false,error:{kind:'unavailable',message:'POST http://127.0.0.1:1/v1/asks: ECONNREFUSED'}},success(202)];
+  const h=harness(root,facts,processes,101,async()=>answers.shift()!);
+  h.controller.setMain(MAIN);
+  try {
+    expect((await h.controller.execute(MAIN,{op:'convene',parent:null,tickets:[{id:'one',issue,target:{repo:repository,base:'main'},dependsOn:[],adoptPr:null}]})).ok).toBe(true);
+    expect((await h.controller.execute(MAIN,{op:'launch',ticketId:'one'})).ok).toBe(true);
+    for(let round=0;round<3;round++)await h.controller.run();
+    const revision=h.controller.snapshot()!.tickets[0]!.revision;
+    // Only a ticket already waiting on a question can stay in Asking.
+    const early=await h.controller.execute(MAIN,{op:'resolve',ticketId:'one',revision,ruling:'Wait on the guardians.',to:'Asking'});
+    expect(!early.ok&&early.error.kind==='domain'&&early.error.error.kind).toBe('invalidTransition');
+    expect((await h.controller.execute(owner(revision),{op:'escalate',ticketId:'one',revision,kind:'question',reason:QUESTION})).ok).toBe(true);
+    for(let round=0;round<3;round++)await h.controller.run();
+    const failed=h.controller.snapshot()!,request=failed.effects.find(effect=>effect.action.kind==='requestAnswer')!;
+    expect(request).toMatchObject({attempt:1,state:{kind:'failed'}});
+    expect(new Attention().observe(failed,h.host.active)).toEqual([`failed:one:${request.id}`]);
+    const asking=failed.tickets[0]!;
+    expect(asking.state).toBe('Asking');
+    const resolved=await h.controller.execute(MAIN,{op:'resolve',ticketId:'one',revision:asking.revision,ruling:'The guardians are reachable again; ask them again.',to:'Asking',effects:[{effectId:request.id,disposition:'retry'}]});
+    expect(resolved.ok).toBe(true);
+    for(let round=0;round<3;round++)await h.controller.run();
+    const state=h.controller.snapshot()!,retried=state.effects.find(effect=>effect.id===request.id)!;
+    expect(retried).toMatchObject({attempt:2,state:{kind:'confirmed',result:{kind:'answerRequested',issue,comment:asking.ask!.comment,status:202}}});
+    expect(state.effects.filter(effect=>effect.action.kind==='requestAnswer')).toHaveLength(1);
+    expect(state.tickets[0]).toMatchObject({state:'Asking',revision:asking.revision,ask:asking.ask!});
+    expect(h.asks).toEqual([{issue,comment:asking.ask!.comment!,question:QUESTION,tier:'simple'},{issue,comment:asking.ask!.comment!,question:QUESTION,tier:'simple'}]);
+    expect(new Attention().observe(state,h.host.active)).toEqual([]);
+    expect(h.launches).toHaveLength(1);
+    expect(h.errors).toEqual([]);
+  }finally {await h.controller.shutdown();await rm(root,{recursive:true,force:true});}
+});

@@ -467,10 +467,11 @@ export const REPLAYABLE:Readonly<Record<Action['kind'],boolean>>={publishPr:fals
 /**
  * Whether `retry` without a source result sends the same effect again. PM records belong to no state entry, so no
  * action state can request them afresh, and they are idempotent by marker key or field value: the executor adopts
- * one the source already shows instead of writing it twice. Every other kind is requested afresh by its action state,
- * except `requestAnswer`, which belongs to the `Asking` entry that Main's resolution leaves.
+ * one the source already shows instead of writing it twice. `requestAnswer` is requested only once per ask comment,
+ * and the guardians accept a repeat for that comment; GitHub never shows it, so its retry always sends it again,
+ * provided Main's resolution keeps the ticket in `Asking`. Every other kind is requested afresh by its action state.
  */
-const RETRY_RESENDS:Readonly<Record<Action['kind'],boolean>>={publishPr:false,merge:false,setIssueState:false,replaceBody:false,createIssue:false,attachChild:false,rerunChecks:false,comment:true,setProjectField:true,requestAnswer:false};
+const RETRY_RESENDS:Readonly<Record<Action['kind'],boolean>>={publishPr:false,merge:false,setIssueState:false,replaceBody:false,createIssue:false,attachChild:false,rerunChecks:false,comment:true,setProjectField:true,requestAnswer:true};
 
 /* ------------------------------------------------------------ effects */
 
@@ -654,8 +655,8 @@ function settleEffects(next:Agenda,operation:Extract<PortInput,{op:'resolve'}>,f
     switch(resolution.disposition){
       case 'cancel':effect.state={kind:'cancelled',reason:operation.ruling};break;
       case 'adopt':if(!result)return reject('sourceChanged','Source does not confirm the effect');confirmEffect(next,effect,result,facts,at);break;
-      // A source-confirmed effect is adopted. Otherwise a PM record is queued again under its id and intent, and any
-      // other effect is cancelled: resolving to its action state requests it afresh.
+      // A source-confirmed effect is adopted. Otherwise a PM record or a guardians request is queued again under its id
+      // and intent, and any other effect is cancelled: resolving to its action state requests it afresh.
       case 'retry':
         if(result)confirmEffect(next,effect,result,facts,at);
         else effect.state=RETRY_RESENDS[effect.action.kind]?{kind:'ready'}:{kind:'cancelled',reason:`Main requested a retry: ${operation.ruling}`};
@@ -676,9 +677,13 @@ function resolveClosure(next:Agenda,closure:ClosureGate,operation:Extract<PortIn
   return closure.state===ESCALATED?reject('invalidTransition',closure.notes.at(-1)??'The parent closure could not enter that state'):{ok:true,value:null};
 }
 function resolveTicket(next:Agenda,ticket:Ticket,operation:Extract<PortInput,{op:'resolve'}>,facts:Facts,at:number):Result<null,DomainError> {
-  const target=next.workflow.ticket.states[operation.to];
-  if(!target)return reject('invalidTransition',`${operation.to} is not a state of the ticket workflow`);
-  if(operation.noCode&&!(target.kind==='final'||target.kind==='action'&&target.action.kind==='closeIssue'))return reject('invalidTransition','noCode resolves to a closeIssue action state or a final state');
+  // Main may keep an Asking ticket waiting on the guardians, typically to retry its failed request; no other ticket can
+  // enter Asking, because only a worker's question carries one.
+  const staysAsking=operation.to===ASKING;
+  if(staysAsking&&ticket.state!==ASKING)return reject('invalidTransition',`Only a ticket already in ${ASKING} can be resolved to ${ASKING}`);
+  const target=staysAsking?null:next.workflow.ticket.states[operation.to];
+  if(!staysAsking&&!target)return reject('invalidTransition',`${operation.to} is not a state of the ticket workflow`);
+  if(operation.noCode&&!(target?.kind==='final'||target?.kind==='action'&&target.action.kind==='closeIssue'))return reject('invalidTransition','noCode resolves to a closeIssue action state or a final state');
   if(operation.actions?.some(action=>!RESOLVE_ACTIONS.includes(action.kind)))return reject('invalidTransition',`resolve actions are limited to ${RESOLVE_ACTIONS.join(', ')}; the workflow owns publishing, merging and closing`);
   if(operation.add)for(const entry of operation.add){const added=ticketFrom(next,entry,facts,at);if(!added.ok)return added;next.tickets.push(added.value);}
   if(operation.remove){
@@ -709,7 +714,8 @@ function resolveTicket(next:Agenda,ticket:Ticket,operation:Extract<PortInput,{op
   if(operation.noCode)ticket.terminal={kind:'noCode',bodyHash:source.bodyHash,reason:operation.noCode,at};
   else if(ticket.terminal?.kind==='noCode')ticket.terminal=null;
   const settled=settleEffects(next,operation,facts,at);if(!settled.ok)return settled;
-  enterTicket(next,ticket,operation.to,facts,at);
+  // Staying in Asking is no new state entry: the revision, the question and the effects it requested stay current.
+  if(!staysAsking)enterTicket(next,ticket,operation.to,facts,at);
   if(ticket.state===ESCALATED)return reject('invalidTransition',ticket.notes.at(-1)?.text??'The ticket could not enter that state');
   const landed=ticketDefinition(next.workflow,ticket);
   if(operation.noCode&&!(landed?.kind==='final'||landed?.kind==='action'&&landed.action.kind==='closeIssue'))return reject('invalidTransition',`noCode must land in a closeIssue action state or a final state; the entry condition led to ${ticket.state}`);
