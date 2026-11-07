@@ -198,7 +198,7 @@ function arriveTicket(state:Agenda,ticket:Ticket,name:string,definition:TicketSt
         case 'merge':{
           const problem=mergeProblem(state,ticket,facts,action.requires);
           if(problem){escalateTicket(ticket,`${name} cannot merge: ${problem}.`,at,'escalation');return null;}
-          tryMerge(state,ticket,origin,facts);return null;
+          const due=mergeDue(state,ticket,origin,facts);if(due)enqueueMerge(state,ticket,due,origin);return null;
         }
         case 'closeIssue':{
           const problem=closeProblem(state,ticket,facts,action.requires);
@@ -231,9 +231,8 @@ function mergeDue(state:ReadonlyAgenda,ticket:ReadonlyTicket,origin:{state:strin
   const pr=sourcePr(ticket,facts),stamp=pullRequestStamp(ticket,facts);
   return pr&&stamp&&mergeReady(ticket,pr,facts)?{pr,stamp}:null;
 }
-function tryMerge(state:Agenda,ticket:Ticket,origin:{state:string;revision:number},facts:Facts):void {
-  const due=mergeDue(state,ticket,origin,facts);
-  if(due)enqueue(state,ticket.id,{kind:'merge',issue:ticket.issue,pr:due.pr.ref,head:due.pr.head,target:ticket.target,stampHash:digest(due.stamp)},origin);
+function enqueueMerge(state:Agenda,ticket:Ticket,due:{pr:PrSnapshot;stamp:PullRequestStamp},origin:{state:string;revision:number}):void {
+  enqueue(state,ticket.id,{kind:'merge',issue:ticket.issue,pr:due.pr.ref,head:due.pr.head,target:ticket.target,stampHash:digest(due.stamp)},origin);
 }
 
 /* ------------------------------------------------------------ reconcile pass */
@@ -310,8 +309,8 @@ function reconcileTicket(pass:Pass,index:number,facts:Facts,at:number):void {
       if(observePullRequest(pass,index,definition.action.observe,facts,at))return;
       const problem=mergeProblem(state,ticket,facts,definition.action.requires);
       if(problem){escalateTicket(pass.ticket(index).ticket,`PR head, target, closing link, body, or review contract changed after approval; fresh gates are required (${problem}).`,at,'sourceChange');return;}
-      const origin={state:ticket.state,revision:ticket.revision};
-      if(mergeDue(state,ticket,origin,facts)){const writable=pass.ticket(index);tryMerge(writable.state,writable.ticket,origin,facts);}
+      const origin={state:ticket.state,revision:ticket.revision},due=mergeDue(state,ticket,origin,facts);
+      if(due){const writable=pass.ticket(index);enqueueMerge(writable.state,writable.ticket,due,origin);}
       return;
     }
     case 'decision':{
@@ -488,12 +487,10 @@ function reconcilePass(pass:Pass,facts:Facts,at:number):void {
   // A non-escalating effect left uncertain is settled by this complete read: confirmed when the source shows it,
   // failed otherwise. It belongs to no state entry, so its confirmation moves no machine.
   for(let index=0;index<pass.state.effects.length;index++){
-    const effect=pass.state.effects[index]!;
-    if(effect.state.kind!=='uncertain'||ESCALATES_ON_FAILURE[effect.action.kind])continue;
-    const state=pass.write(),writable=state.effects[index]!;
-    if(writable.state.kind!=='uncertain')continue;
-    const result=satisfiedResult(state,writable,facts);
-    writable.state=result?{kind:'confirmed',result}:{kind:'failed',startedAt:writable.state.startedAt,error:writable.state.error};
+    const effect=pass.state.effects[index]!,settling=effect.state;
+    if(settling.kind!=='uncertain'||ESCALATES_ON_FAILURE[effect.action.kind])continue;
+    const state=pass.write(),writable=state.effects[index]!,result=satisfiedResult(state,writable,facts);
+    writable.state=result?{kind:'confirmed',result}:{kind:'failed',startedAt:settling.startedAt,error:{...settling.error}};
   }
   // A confirmed `ask` comment hands its decision item to the intent guardians, once per question: the comment id
   // GitHub shows is recorded on the ticket, and the guardians are asked to answer that comment.
