@@ -1,4 +1,4 @@
-import type {Action,Agenda,Caller,ClosureGate,ConveneInput,DomainError,Effect,EffectResult,Entry,Facts,MergeCommitStamp,NoteAuthor,ParentStamp,PmAsk,PmContext,PortError,PortInput,PrSnapshot,PullRequestStamp,Result,Role,Ticket,Tier,WorkerStarted,Workflow} from './model.ts';
+import type {Action,Agenda,Caller,ClosureGate,ConveneInput,DomainError,Effect,EffectResult,Entry,Facts,IssueRef,MergeCommitStamp,NoteAuthor,ParentStamp,PmAsk,PmContext,PortError,PortInput,PrSnapshot,PullRequestStamp,Result,Role,Ticket,Tier,WorkerStarted,Workflow} from './model.ts';
 import {bodyHash,canonical,contains,digest,exactClosingBody,nextId,sameRef,sameRepo,sameTarget,targetHead} from './identity.ts';
 import {formatMarker} from '../pm/markers.ts';
 import {settlement} from '../pm/settlement.ts';
@@ -429,6 +429,10 @@ export function createAgenda(input:ConveneInput,workflow:Workflow,facts:Facts,at
     if(state.tickets.some(ticket=>sameRef(ticket.issue,input.parent!)))return reject('invalidTopology','Parent cannot be its own delivery ticket');
   }
   reconcile(state,facts,at);return {ok:true,value:state};
+}
+/** An agenda belongs to an issue when that issue is its parent or the issue of any of its tickets. */
+export function belongsTo(state:Agenda,issue:IssueRef):boolean {
+  return state.parent!==null&&sameRef(state.parent,issue)||state.tickets.some(ticket=>sameRef(ticket.issue,issue));
 }
 /** Reconcile only fresh, complete GitHub observations. No local intent establishes source state. */
 export function reconcile(state:Agenda,facts:Facts,at:number):void {

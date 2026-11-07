@@ -135,7 +135,7 @@ test('a PM record write never escalates its ticket or supersedes the live Owner;
     const state=controller?.snapshot(),comment=state?.effects.filter(effect=>effect.action.kind==='comment').at(-1);
     if(state&&comment)seen.push({comment:comment.state.kind,ticket:state.tickets[0]!.state,revision:state.tickets[0]!.revision,notes:state.tickets[0]!.notes.length,owner:host.active('one','owner')});
   };
-  controller=new DispatchController({files:createAgendaFiles(root),github,host,process:new ProcessTable().spawn(101,'Sat Nov 7 06:00:00 2026'),cwd:root,workflow:async()=>({ok:true,value:workflow}),intervalSeconds:3600,pm:{context:PM,guardians:{requestAnswer:unexpected}},onChange:observe,onError:error=>errors.push(error)});
+  controller=new DispatchController({issue,files:createAgendaFiles(root),github,host,process:new ProcessTable().spawn(101,'Sat Nov 7 06:00:00 2026'),cwd:root,workflow:async()=>({ok:true,value:workflow}),intervalSeconds:3600,pm:{context:PM,guardians:{requestAnswer:unexpected}},onChange:observe,onError:error=>errors.push(error)});
   const dispatch=controller;
   const main:Caller={kind:'main',agentId:'Main',sessionId:'main',sessionFile:null};dispatch.setMain(main);
   const comments=()=>dispatch.snapshot()!.effects.filter(effect=>effect.action.kind==='comment');
@@ -234,7 +234,7 @@ async function lostFirstWrites(name:string) {
     launch:async input=>{launches.push(input);live.add(`${input.ticketId}/${input.role}`);return success({agentId:'owner',sessionId:`session-${launches.length}`,sessionFile:join(root,`owner-${launches.length}.jsonl`),jobId:`job-${launches.length}`});},
   };
   const errors:unknown[]=[];
-  const dispatch=new DispatchController({files:createAgendaFiles(root),github,host,process:new ProcessTable().spawn(101,'Sat Nov 7 06:00:00 2026'),cwd:root,workflow:async()=>({ok:true,value:workflow}),intervalSeconds:3600,pm:{context:PM,guardians:{requestAnswer:unexpected}},onChange:()=>{},onError:error=>errors.push(error)});
+  const dispatch=new DispatchController({issue,files:createAgendaFiles(root),github,host,process:new ProcessTable().spawn(101,'Sat Nov 7 06:00:00 2026'),cwd:root,workflow:async()=>({ok:true,value:workflow}),intervalSeconds:3600,pm:{context:PM,guardians:{requestAnswer:unexpected}},onChange:()=>{},onError:error=>errors.push(error)});
   const main:Caller={kind:'main',agentId:'Main',sessionId:'main',sessionFile:null};dispatch.setMain(main);
   // One run executes at most one effect.
   const drain=async():Promise<void>=>{for(let round=0;round<6;round++)await dispatch.run();};

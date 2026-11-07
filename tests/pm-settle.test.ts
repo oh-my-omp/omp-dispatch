@@ -61,7 +61,7 @@ function harness(root:string,facts:Facts,pid:number):Harness {
   const host:HostPort={agents:async()=>success(null),bind:unexpected,finish:async()=>success(null),dispose:async()=>{},active:()=>false,
     seated:(ticketId,role,revision)=>launches.some(seat=>seat.ticketId===ticketId&&seat.role===role&&seat.revision===revision),
     launch:async input=>{launches.push(input);return success({agentId:`owner-${launches.length}`,sessionId:`session-${launches.length}`,sessionFile:`/data/session-${launches.length}.jsonl`,jobId:`job-${launches.length}`});}};
-  const controller=new DispatchController({files:createAgendaFiles(root),github,host,process:new ProcessTable().spawn(pid,`start-${pid}`),cwd:root,workflow:async()=>({ok:true,value:workflow}),
+  const controller=new DispatchController({issue,files:createAgendaFiles(root),github,host,process:new ProcessTable().spawn(pid,`start-${pid}`),cwd:root,workflow:async()=>({ok:true,value:workflow}),
     intervalSeconds:3600,pm:{context:PM,guardians:{requestAnswer:async()=>success(202)}},onChange:()=>{},onError:error=>errors.push(error)});
   controller.setMain(MAIN);
   return {controller,launches,errors,host};

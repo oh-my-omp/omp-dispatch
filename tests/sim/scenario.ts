@@ -65,6 +65,8 @@ export const scenarioSchema = z.object({
    * resolves the effect with `retry`. Without it Main leaves `failed:` decisions alone.
    */
   retryFailed: z.string().optional(),
+  /** An agenda id Main asks to resume first, whatever the startup message lists; the refusal is the point. */
+  resumeFirst: z.string().optional(),
   /** JSON lines of every scripted model call, for the driver's assertions. */
   log: z.string(),
 });

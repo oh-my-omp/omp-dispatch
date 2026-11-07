@@ -7,12 +7,13 @@
 
 import {closeSync, cpSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, writeFileSync} from 'node:fs';
 import {hostname} from 'node:os';
-import {join, resolve} from 'node:path';
+import {basename, join, resolve} from 'node:path';
 import {YAML, type Subprocess} from 'bun';
 import {z} from '@oh-my-pi/omptype/zod';
 import type {Agenda} from '../../src/domain/model.ts';
 import {parseMarker} from '../../src/pm/markers.ts';
 import {encodeWorkflow, parseWorkflow, parentSeatRoles, workflowAgents, type ParentState, type TicketState, type Workflow} from '../../src/domain/workflow.ts';
+import {belongsTo} from '../../src/domain/engine.ts';
 import {createAgendaFiles} from '../../src/ports/state.ts';
 import {git, remotePath, seedGitHub, withState, type SimState} from './github-sim.ts';
 import type {Expect, Scenario, TicketSpec} from './scenario.ts';
@@ -59,6 +60,8 @@ export type Case = {
   name: string;
   /** The workflow the run's data directory supplies to convene; SIM_WORKFLOW when omitted. */
   workflow?: Workflow;
+  /** Agenda state files the data directory holds before the first start, copied unchanged; each is named `<agenda id>.json`. */
+  saved?: string[];
   /**
    * PM integration on, with PM_CONFIG. `holdComment` makes the simulated GitHub hold the comment request that finds
    * `skip` comments, `at` before or after recording it, touching `markers/comment-arrived` until `markers/release-comment`
@@ -92,6 +95,10 @@ function setup(spec: Case): Run {
   for (const agent of workflowAgents(workflow))
     writeFileSync(join(work, '.omp', 'agents', `${agent}.md`), `---\nname: ${agent}\ndescription: Scripted dispatch seat for the state-flow simulation\nmodel: sim/seat\n---\n\nFollow the dispatch brief.\n`);
   writeFileSync(join(data, 'workflow.yml'), JSON.stringify(encodeWorkflow(workflow), null, 1));
+  for (const file of spec.saved ?? []) {
+    mkdirSync(join(data, 'state'), {recursive: true, mode: 0o700});
+    cpSync(file, join(data, 'state', basename(file)));
+  }
   const scenario: Scenario = {name: spec.name, repo: REPO, log: join(dir, 'model.jsonl'), parentRoles: parentSeatRoles(workflow), workRoles: workRoles(workflow), ...spec.scenario(markers)};
   const scenarioFile = join(dir, 'scenario.json');
   writeFileSync(scenarioFile, JSON.stringify(scenario, null, 1));
@@ -144,10 +151,11 @@ async function kill(run: Run): Promise<void> {
 
 /* ------------------------------------------------------------ observations */
 
+/** The run's own agenda: the one that belongs to its launch issue, whatever else the data directory holds. */
 async function agenda(run: Run): Promise<Agenda | null> {
   const list = await createAgendaFiles(run.data).list();
   if (!list.ok) throw new Error(`Cannot read agendas: ${list.error.message}`);
-  return list.value[0] ?? null;
+  return list.value.find(state => belongsTo(state, {repo: REPO, number: run.rootIssue})) ?? null;
 }
 
 const ticketOf = (state: Agenda | null, id: string) => state?.tickets.find(ticket => ticket.id === id);
@@ -353,6 +361,9 @@ const ticket = (id: string, issue: number, owner: TicketSpec['owner'], gate: Exp
 
 const TREE_FILES = {'a1.txt': '0\n', 'a2.txt': '0\n', 'shared.txt': 'L1=0\nL2=0\n', 'c.txt': '0\n', 'd.txt': '0\n', 'e.txt': '1\n'};
 const TREE_DONE = {'a1.txt': '1\n', 'a2.txt': '1\n', 'shared.txt': 'L1=1\nL2=1\n', 'c.txt': '1\n', 'c.verify': '1\n', 'd.txt': '1\n', 'e.txt': '1\n'};
+
+/** The leftover agenda of the 2026-11-07 incident: active, Escalated, `parent: null`, one ticket on oh-my-omp/pm-e2e-code#100. */
+const FOREIGN_AGENDA = join(ROOT, 'tests/sim/fixtures/9c825bdb-049d-4098-8836-0559bfd96760.json');
 
 // restart-pm: the gates reject round one, and the simulated GitHub holds the rework Owner's impl comment, the second
 // comment request; the driver kills the coordinator once the hold is reached, so the order of the write and the kill is fixed.
@@ -734,6 +745,33 @@ const cases: Case[] = [
       }
       const closure = state?.closure;
       if (closure?.state !== 'Finished' || closure.gates.Release?.verdicts.map(item => `${item.role}:${item.status}`).join(',') !== 'release:passed,compliance:passed') failures.push(`the parent machine did not finish through both Release judges: ${JSON.stringify(closure)}`);
+      return failures;
+    },
+  },
+  {
+    // An earlier coordinator of another issue left its agenda active and Escalated: the agenda of the 2026-11-07
+    // incident, kept verbatim. The coordinator of #1 is not offered it, is refused when Main resumes it anyway, and
+    // convenes and delivers its own issue while the leftover's file stays byte for byte the same.
+    name: 'foreign',
+    saved: [FOREIGN_AGENDA],
+    files: {'g.txt': '0\n'},
+    issues: [{title: 'G'}],
+    requiredChecks: [], ci: {default: 'SUCCESS', failMarker: null}, rootIssue: 1,
+    scenario: () => ({parent: null, closure: {}, resumeFirst: basename(FOREIGN_AGENDA, '.json'), tickets: [
+      ticket('G', 1, [commit({'g.txt': '1\n'})], {'g.txt': '1\n'}),
+    ]}),
+    async check(run) {
+      const failures = await commonChecks(run, {'g.txt': '1\n'});
+      const foreign = basename(FOREIGN_AGENDA, '.json');
+      const left = join(run.data, 'state', basename(FOREIGN_AGENDA));
+      if (!existsSync(left) || readFileSync(left, 'utf8') !== readFileSync(FOREIGN_AGENDA, 'utf8')) failures.push('the leftover agenda file changed');
+      const start = readdirSync(run.mainSessions).filter(name => name.endsWith('.jsonl')).map(name => readFileSync(join(run.mainSessions, name), 'utf8')).join('\n');
+      if (!start.includes('Saved agendas: no saved active agenda.')) failures.push('the startup message does not say no saved active agenda');
+      if (start.includes(`Saved agendas: active: ${foreign}`)) failures.push('the startup message offers the leftover agenda');
+      const [resume, convene] = mainCalls(run);
+      if (resume?.input.op !== 'resume' || resume.input.agenda !== foreign || resume.reply?.error?.error?.kind !== 'ownershipBlocked') failures.push(`resuming the leftover was not refused with ownershipBlocked: ${JSON.stringify(resume)}`);
+      if (convene?.input.op !== 'convene' || !convene.reply?.ok) failures.push(`Main did not convene #1 after the refusal: ${JSON.stringify(convene)}`);
+      console.log(`  ${run.name}: resume ${foreign} -> ${JSON.stringify(resume?.reply?.error)}; convene ok ${convene?.reply?.ok}; own agenda ${(await agenda(run))?.id}`);
       return failures;
     },
   },

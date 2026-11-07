@@ -71,7 +71,7 @@ function harness(root:string,workflow:Workflow=defaultWorkflow) {
     const fresh=attention.observe(agenda,host.active);if(fresh.length)wakes.push(fresh);
   }
   const processes=new ProcessTable();
-  controller=new DispatchController({files:createAgendaFiles(root),github,host,process:processes.spawn(101,'Sat Nov 7 06:00:00 2026'),cwd:root,workflow:async()=>({ok:true,value:workflow}),intervalSeconds:3600,pm:null,onChange:observe,onError:error=>errors.push(error)});
+  controller=new DispatchController({issue:issueA,files:createAgendaFiles(root),github,host,process:processes.spawn(101,'Sat Nov 7 06:00:00 2026'),cwd:root,workflow:async()=>({ok:true,value:workflow}),intervalSeconds:3600,pm:null,onChange:observe,onError:error=>errors.push(error)});
   const dispatch=controller;
   const main:Caller={kind:'main',agentId:'Main',sessionId:'main',sessionFile:null};dispatch.setMain(main);
   // run() is the entry the kick timer uses; calling it directly drains effects and relays deterministically.
@@ -260,7 +260,7 @@ test('resume uses the frozen workflow without calling the current workflow loade
   try {
     expect((await h.asMain({op:'convene',parent:null,tickets:[{id:'A',issue:issueA,target,dependsOn:[],adoptPr:null}]})).ok).toBe(true);
     const id=h.controller.snapshot()!.id;await h.controller.shutdown();
-    resumed=new DispatchController({files:createAgendaFiles(root),github:h.github,host:h.host,process:h.processes.spawn(102,'Sat Nov 7 06:05:00 2026'),cwd:root,workflow:async()=>{loads++;throw new Error('Current workflow is unavailable');},intervalSeconds:3600,pm:null,onChange:()=>{},onError:error=>h.errors.push(error)});
+    resumed=new DispatchController({issue:issueA,files:createAgendaFiles(root),github:h.github,host:h.host,process:h.processes.spawn(102,'Sat Nov 7 06:05:00 2026'),cwd:root,workflow:async()=>{loads++;throw new Error('Current workflow is unavailable');},intervalSeconds:3600,pm:null,onChange:()=>{},onError:error=>h.errors.push(error)});
     const main:Caller={kind:'main',agentId:'successor',sessionId:'successor-main',sessionFile:null};resumed.setMain(main);
     expect((await resumed.execute(main,{op:'resume',agenda:id})).ok).toBe(true);
     expect((await resumed.execute(main,{op:'launch',ticketId:'A'})).ok).toBe(true);
