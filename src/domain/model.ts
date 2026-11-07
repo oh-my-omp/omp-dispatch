@@ -102,6 +102,8 @@ export type FactRead = {kind:'available';generation:number;scope:SourceScope;obs
 export const terminalSchema = z.union([
   object({kind:z.literal('merged'),pr:prRefSchema,mergeSha:shaSchema,at:millisSchema}),
   object({kind:z.literal('noCode'),bodyHash:hashSchema,reason:text,at:millisSchema}),
+  /** The ticket's question was settled by replacing its issue with `by` (`owner/repo#n`) in comment `comment`. */
+  object({kind:z.literal('replaced'),by:text,comment:revision,at:millisSchema}),
 ]);
 export type Terminal = z.infer<typeof terminalSchema>;
 export const pullRequestStampSchema = object({kind:z.literal('pullRequest'),pr:prRefSchema,head:shaSchema,target:targetSchema,bodyHash:hashSchema,prBodyHash:hashSchema,contractRevision:revision,rulingsHash:hashSchema});
@@ -124,7 +126,10 @@ export type NoteAuthor = z.infer<typeof noteAuthorSchema>;
 export const ticketSchema = object({
   id:idSchema,revision,issue:issueRefSchema,target:targetSchema,dependsOn:z.array(idSchema),
   contract:object({revision,bodyHash:hashSchema,body:z.string()}),
-  /** A state of the agenda's workflow, `Escalated` while Main's ruling is due, or `Asking` while the intent guardians settle a worker's question. */
+  /**
+   * A state of the agenda's workflow, `Escalated` while Main's ruling is due, `Asking` while the intent guardians
+   * settle a worker's question, or `Replaced` once that question was settled by replacing the issue.
+   */
   state:text,started:z.boolean(),visits:visitsSchema,
   /** The latest accepted session of each work role; a later seat of that role forks it. */
   sessions:z.record(z.string(),text),
@@ -135,9 +140,13 @@ export const ticketSchema = object({
   terminal:terminalSchema.nullable(),
   /**
    * The worker question the ticket waits on, exactly while it is `Asking`: the decision item, its tier, the asking
-   * session's id and file, and the id of its `ask` comment once GitHub shows it.
+   * session's id and file, the id of its `ask` comment once GitHub shows it, the work state it was asked from, and
+   * the council agenda issue once the question was escalated to the council. `from` is null only in a question
+   * recorded before Dispatch kept it; that state is then the asking session's work role's.
    */
-  ask:object({question:text,tier:tierSchema,session:text,file:text,comment:revision.nullable()}).nullable(),
+  ask:object({question:text,tier:tierSchema,session:text,file:text,comment:revision.nullable(),from:text.nullable().default(null),agenda:text.nullable().default(null)}).nullable(),
+  /** The answer to the ticket's question, until the work seat it resumes has started; that seat receives it first. */
+  resumeMessage:z.string().nullable().default(null),
 });
 export type Ticket = z.infer<typeof ticketSchema>;
 export const effectResultSchema = z.union([
@@ -172,8 +181,11 @@ export type Agenda = Omit<z.infer<typeof agendaSchema>,'workflow'>&{workflow:Wor
 export type Caller = {agentId:string;sessionId:string;sessionFile:string|null;kind:'main'}|{agentId:string;sessionId:string;sessionFile:string;kind:'seat';ticketId:string;role:Role;revision:number};
 /** Internal operation from the controller, never part of the public grammar: a work seat's native session has started. */
 export type WorkerStarted = {ticketId:string;revision:number;role:Role;sessionId:string;sessionFile:string};
-/** How a work seat's question is asked under PM integration: the tier it defaults to and the tier help its brief carries. */
-export type PmAsk = {defaultTier:Tier;tierHelp:string};
+/**
+ * How a work seat's question is asked under PM integration: the tier it defaults to and the tier help its brief
+ * carries; and how the answer reaches the resumed seat: `resumePrompt` opens its first message, before the answer.
+ */
+export type PmAsk = {defaultTier:Tier;tierHelp:string;resumePrompt:string};
 /** What the engine needs for PM integration: this coordinator process, the configured Status option names, and how a worker's question is asked. */
 export type PmContext = {host:string;pid:number;status:{inProgress:string;done:string};ask:PmAsk};
 export type DomainError = {kind:'unauthorized'|'invalidTransition'|'staleRevision'|'sourceUnavailable'|'sourceChanged'|'notFound'|'ownershipBlocked'|'invalidTopology'|'agenda_attached';message:string};

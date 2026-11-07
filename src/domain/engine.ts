@@ -1,8 +1,9 @@
 import type {Action,Agenda,Caller,ClosureGate,ConveneInput,DomainError,Effect,EffectResult,Entry,Facts,MergeCommitStamp,NoteAuthor,ParentStamp,PmAsk,PmContext,PortError,PortInput,PrSnapshot,PullRequestStamp,Result,Role,Ticket,Tier,WorkerStarted,Workflow} from './model.ts';
 import {bodyHash,canonical,contains,digest,exactClosingBody,nextId,sameRef,sameRepo,sameTarget,targetHead} from './identity.ts';
 import {formatMarker} from '../pm/markers.ts';
+import {settlement} from '../pm/settlement.ts';
 import {validateTopology} from './parse.ts';
-import {ASKING,ESCALATE,ESCALATED,openVerdicts,pendingRoles,routeTarget,stagePassed,type Branch,type Condition,type Observe,type ParentState,type TicketState} from './workflow.ts';
+import {ASKING,ESCALATE,ESCALATED,REPLACED,openVerdicts,pendingRoles,routeTarget,stagePassed,type Branch,type Condition,type Observe,type ParentState,type TicketState} from './workflow.ts';
 
 const SYSTEM:NoteAuthor={kind:'system'},MAIN:NoteAuthor={kind:'main'};
 /** A machine that keeps entering states without waiting for a seat, an effect or a source change is misconfigured. */
@@ -22,10 +23,10 @@ export function enqueue(state:Agenda,ticketId:string,action:Action,origin:Effect
 
 /* ------------------------------------------------------------ definitions */
 
-export function ticketDefinition(workflow:Workflow,ticket:Ticket):TicketState|null {return ticket.state===ESCALATED||ticket.state===ASKING?null:workflow.ticket.states[ticket.state]??null;}
+export function ticketDefinition(workflow:Workflow,ticket:Ticket):TicketState|null {return ticket.state===ESCALATED||ticket.state===ASKING||ticket.state===REPLACED?null:workflow.ticket.states[ticket.state]??null;}
 export function parentDefinition(workflow:Workflow,closure:ClosureGate):ParentState|null {return closure.state===ESCALATED?null:workflow.parent.states[closure.state]??null;}
-/** A ticket is delivered while it rests in a final state of the workflow. */
-export function delivered(state:Agenda,ticket:Ticket):boolean {return ticketDefinition(state.workflow,ticket)?.kind==='final';}
+/** A ticket is delivered while it rests in a final state of the workflow, or in `Replaced` once its issue was replaced. */
+export function delivered(state:Agenda,ticket:Ticket):boolean {return ticket.state===REPLACED||ticketDefinition(state.workflow,ticket)?.kind==='final';}
 export function dependenciesDone(state:Agenda,ticket:Ticket):boolean {
   return ticket.dependsOn.every(id=>{const dependency=state.tickets.find(item=>item.id===id);return dependency!==undefined&&delivered(state,dependency);});
 }
@@ -138,9 +139,15 @@ function finalProblem(ticket:Ticket,facts:Facts):string|null {
   const issue=facts.issues.find(issue=>sameRef(issue.ref,ticket.issue)),terminal=ticket.terminal;
   if(issue?.state!=='closed')return 'the issue is not closed';
   if(!terminal)return 'the ticket has neither a merged PR nor a noCode ruling';
-  if(terminal.kind==='noCode')return terminal.bodyHash===issue.bodyHash?null:'the noCode ruling no longer matches the issue contract';
-  const head=targetHead(facts,ticket.target);
-  return head&&contains(facts,ticket.target.repo,terminal.mergeSha,head)?null:'the merge is no longer in the target';
+  switch(terminal.kind){
+    case 'noCode':return terminal.bodyHash===issue.bodyHash?null:'the noCode ruling no longer matches the issue contract';
+    // A replaced issue rests in the built-in Replaced, never in a workflow final state.
+    case 'replaced':return `the issue was replaced by ${terminal.by}, not delivered through this workflow`;
+    case 'merged':{
+      const head=targetHead(facts,ticket.target);
+      return head&&contains(facts,ticket.target.repo,terminal.mergeSha,head)?null:'the merge is no longer in the target';
+    }
+  }
 }
 function currentOrigin(state:Agenda,effect:Effect):boolean {
   const owner=state.tickets.find(ticket=>ticket.id===effect.ticketId)??(state.closure?.id===effect.ticketId?state.closure:null);
@@ -399,7 +406,7 @@ function ticketFrom(state:Agenda,entry:Entry,facts:Facts,at:number):Result<Ticke
   // A ticket starts in the initial work state; an adopted one starts where its PR stands and never visited it.
   const ticket:Ticket={id:entry.id,revision:1,issue:entry.issue,target:entry.target,dependsOn:entry.dependsOn,
     contract:{revision:1,bodyHash:source.bodyHash,body:source.body},state:initial,started:false,visits:entry.adoptPr?{}:{[initial]:1},sessions:{},pr:null,
-    gates:{},rulings:[],notes:[],terminal:null,ask:null};
+    gates:{},rulings:[],notes:[],terminal:null,ask:null,resumeMessage:null};
   if(entry.adoptPr){
     const pr=facts.prs.find(pr=>sameRef(pr.ref,entry.adoptPr!));
     if(!pr||!sameTarget(pr.target,ticket.target)||pr.closes.length!==1||!sameRef(pr.closes[0]!,ticket.issue))return reject('sourceChanged','Adopted PR must close exactly this issue at the target');
@@ -425,6 +432,8 @@ export function createAgenda(input:ConveneInput,workflow:Workflow,facts:Facts,at
 }
 /** Reconcile only fresh, complete GitHub observations. No local intent establishes source state. */
 export function reconcile(state:Agenda,facts:Facts,at:number):void {
+  // A settled question moves its ticket first, so the state it lands in is reconciled in the same pass.
+  for(const ticket of state.tickets)settleAsk(state,ticket,facts,at);
   for(const ticket of state.tickets)reconcileTicket(state,ticket,facts,at);
   reconcileParent(state,facts,at);
   // An effect that is still only an intent belongs to the state entry that requested it.
@@ -608,11 +617,62 @@ export function abandonSeat(state:Agenda,ticketId:string,role:Role,revision:numb
 /**
  * A work seat's question under PM integration: the ticket waits in `Asking`, with no seat and no call on Main, and
  * the decision item is written verbatim to its issue as a comment ending with an `ask` marker keyed by the asking session.
+ * The work state it was asked from is kept, so an answer returns the ticket there.
  */
 function askTicket(state:Agenda,ticket:Ticket,ask:{question:string;tier:Tier;session:string;file:string}):void {
-  ticket.revision++;ticket.gates={};ticket.state=ASKING;ticket.ask={...ask,comment:null};
+  const from=ticket.state;
+  ticket.revision++;ticket.gates={};ticket.state=ASKING;ticket.ask={...ask,comment:null,from,agenda:null};
   const marker=formatMarker({kind:'ask',json:{v:1,tier:ask.tier,session:ask.session}});
   enqueue(state,ticket.id,{kind:'comment',issue:ticket.issue,body:`${ask.question}\n\n${marker}`,marker:{kind:'ask',key:ask.session}},{state:ASKING,revision:ticket.revision});
+}
+/**
+ * The work state a question was asked from. A question recorded before Dispatch kept that state names it through
+ * its asking session: the work state of the role whose latest session is that file, when the role has only one.
+ */
+function askedFrom(state:Agenda,ticket:Ticket,ask:NonNullable<Ticket['ask']>):string|null {
+  if(ask.from!==null)return ask.from;
+  const role=Object.entries(ticket.sessions).find(([,file])=>file===ask.file)?.[0];
+  const states=Object.entries(state.workflow.ticket.states).filter(([,definition])=>definition.kind==='work'&&definition.role===role);
+  return states.length===1?states[0]![0]:null;
+}
+/**
+ * Settles the question an `Asking` ticket waits on from the markers its issue shows. A `reply` returns the ticket to
+ * the work state it asked from, with the answer kept for the work seat that forks the asking session; a `replaced`
+ * ends it in `Replaced`, with no seat, PR or close; an `escalated` records the council agenda and keeps it waiting.
+ * A settlement marker naming another ask changes nothing and is noted once.
+ */
+function settleAsk(state:Agenda,ticket:Ticket,facts:Facts,at:number):void {
+  const ask=ticket.ask;
+  if(ticket.state!==ASKING||!ask||ask.comment===null)return;
+  const markers=facts.issues.find(issue=>sameRef(issue.ref,ticket.issue))?.pm?.markers;
+  if(!markers)return;
+  const read=settlement(ask.comment,markers);
+  for(const ignored of read.ignored){
+    const text=`ignored settlement ${ignored.commentId} for ask ${ignored.ask??'none'}`;
+    if(!ticket.notes.some(item=>item.text===text))note(ticket,SYSTEM,'sourceChange',text,at);
+  }
+  const settled=read.settlement;
+  if(!settled)return;
+  switch(settled.kind){
+    case 'escalated':
+      if(ask.agenda===settled.agenda)return;
+      ask.agenda=settled.agenda;
+      note(ticket,SYSTEM,'sourceChange',`ask ${ask.comment} was escalated to the council agenda ${settled.agenda} in comment ${settled.commentId}`,at);
+      return;
+    case 'replaced':
+      ticket.revision++;ticket.gates={};ticket.state=REPLACED;ticket.ask=null;ticket.resumeMessage=null;
+      ticket.terminal={kind:'replaced',by:settled.by,comment:settled.commentId,at};
+      note(ticket,SYSTEM,'sourceChange',`ask ${ask.comment} was settled by replacing the issue with ${settled.by} in comment ${settled.commentId}`,at);
+      return;
+    case 'reply':{
+      const from=askedFrom(state,ticket,ask);
+      if(from===null){escalateTicket(ticket,`Ask ${ask.comment} was answered in comment ${settled.commentId}, but the work state it was asked from is unknown.`,at,'escalation');return;}
+      note(ticket,SYSTEM,'sourceChange',`ask ${ask.comment} was answered in comment ${settled.commentId}`,at);
+      ticket.resumeMessage=settled.text;
+      enterTicket(state,ticket,from,facts,at);
+      return;
+    }
+  }
 }
 
 /**
@@ -630,6 +690,8 @@ export function workerStarted(state:Agenda,started:WorkerStarted,pm:PmContext,fa
   enqueue(next,ticket.id,{kind:'comment',issue:ticket.issue,body:`工人会话 ${started.sessionId} 开始实现本 issue。\n\n${marker}`,marker:{kind:'impl',key:started.sessionId}},null);
   if(facts.issues.find(issue=>sameRef(issue.ref,ticket.issue))?.pm?.item?.status!==pm.status.inProgress)
     enqueue(next,ticket.id,{kind:'setProjectField',issue:ticket.issue,field:'status',option:pm.status.inProgress},null);
+  // The answer to its question, if any, has now reached this seat.
+  ticket.resumeMessage=null;
   next.version++;return {ok:true,value:next};
 }
 /** Every ticket that `next` newly entered into the final state `Done` gets its Project Status set to done. */
@@ -712,7 +774,8 @@ function resolveTicket(next:Agenda,ticket:Ticket,operation:Extract<PortInput,{op
     const pr=sourcePr(ticket,facts);if(pr&&pr.state.kind==='open')ticket.pr={ref:pr.ref,headRepo:pr.headRepo,branch:pr.headBranch,head:pr.head,title:pr.title,body:pr.body};
   }
   if(operation.noCode)ticket.terminal={kind:'noCode',bodyHash:source.bodyHash,reason:operation.noCode,at};
-  else if(ticket.terminal?.kind==='noCode')ticket.terminal=null;
+  // A noCode ruling or a replacement holds only where it put the ticket; resolving elsewhere drops it.
+  else if(ticket.terminal?.kind==='noCode'||ticket.terminal?.kind==='replaced')ticket.terminal=null;
   const settled=settleEffects(next,operation,facts,at);if(!settled.ok)return settled;
   // Staying in Asking is no new state entry: the revision, the question and the effects it requested stay current.
   if(!staysAsking)enterTicket(next,ticket,operation.to,facts,at);

@@ -15,11 +15,14 @@ export const replacedMarkerSchema = z.object({ v: version, ask: commentId.nullab
 export const escalatedMarkerSchema = z.object({ v: version, ask: commentId, agenda: issueRef });
 export const markerKindSchema = z.enum(['impl', 'ask', 'reply', 'replaced', 'escalated']);
 export type MarkerKind = z.infer<typeof markerKindSchema>;
-/** A marker as facts carry it: the comment that holds it, its kind and its validated JSON. */
+/**
+ * A marker as facts carry it: the comment that holds it, its kind and its validated JSON. A `reply` also carries its
+ * answer, the comment text above the marker line, which a resumed worker receives.
+ */
 export const markerFactSchema = z.union([
   z.object({ id: commentId, kind: z.literal('impl'), json: implMarkerSchema }).strict(),
   z.object({ id: commentId, kind: z.literal('ask'), json: askMarkerSchema }).strict(),
-  z.object({ id: commentId, kind: z.literal('reply'), json: replyMarkerSchema }).strict(),
+  z.object({ id: commentId, kind: z.literal('reply'), json: replyMarkerSchema, body: z.string() }).strict(),
   z.object({ id: commentId, kind: z.literal('replaced'), json: replacedMarkerSchema }).strict(),
   z.object({ id: commentId, kind: z.literal('escalated'), json: escalatedMarkerSchema }).strict(),
 ]);
@@ -36,13 +39,15 @@ export function formatMarker(marker: Marker): string {
 export type MarkerRead = { kind: 'none' } | { kind: 'invalid'; reason: string } | { kind: 'marker'; fact: MarkerFact };
 /** Reads the marker on the last line of comment `id`; a body without one has none, a malformed one is invalid. */
 export function parseMarker(id: number, body: string): MarkerRead {
-  const last = body.trimEnd().split('\n').at(-1)?.trim() ?? '';
+  const lines = body.trimEnd().split('\n');
+  const last = lines.at(-1)?.trim() ?? '';
   if (!last.startsWith('<!-- pm:')) return { kind: 'none' };
   const match = LINE.exec(last);
   if (!match) return { kind: 'invalid', reason: `comment ${id}: marker line is not <!-- pm:<kind> <JSON> -->` };
   let json: unknown;
   try { json = JSON.parse(match[2]!); } catch { return { kind: 'invalid', reason: `comment ${id}: marker JSON does not parse` }; }
-  const parsed = markerFactSchema.safeParse({ id, kind: match[1], json });
+  const kind = match[1];
+  const parsed = markerFactSchema.safeParse({ id, kind, json, ...(kind === 'reply' ? { body: lines.slice(0, -1).join('\n').trim() } : {}) });
   if (!parsed.success) return { kind: 'invalid', reason: `comment ${id}: ${parsed.error.issues.map(issue => `${issue.path.join('.')}: ${issue.message}`).join('; ')}` };
   return { kind: 'marker', fact: parsed.data };
 }
