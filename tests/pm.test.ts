@@ -20,7 +20,7 @@ const parsedWorkflow=parseWorkflow(YAML.parse(await Bun.file(new URL('../src/def
 if(!parsedWorkflow.ok)throw new Error(parsedWorkflow.error.reason);
 const workflow=parsedWorkflow.value;
 const repository={owner:'test',name:'dispatch'},issue={repo:repository,number:1},base='2'.repeat(40);
-const PM:PmContext={host:'test-host',pid:4242,status:{inProgress:'In Progress',done:'Done'}};
+const PM:PmContext={host:'test-host',pid:4242,status:{inProgress:'In Progress',done:'Done'},ask:{defaultTier:'simple',tierHelp:'simple is one detail; complex crosses modules.'}};
 function facts(pm:Facts['issues'][number]['pm']):Facts {
   return {viewer:'test',issues:[{ref:issue,body:'Deliver.',bodyHash:bodyHash('Deliver.'),updatedAt:1,state:'open',lastClose:null,lastReopen:null,children:[],pm}],prs:[],links:[],
     repos:[{repo:repository,defaultBranch:'main',defaultHead:base,bases:[{name:'main',state:{kind:'present',head:base,isDefault:true,rules:{required:[],strict:false,constraints:[]}}}]}],
@@ -133,7 +133,7 @@ test('a PM record write never escalates its ticket or supersedes the live Owner;
     const state=controller?.snapshot(),comment=state?.effects.filter(effect=>effect.action.kind==='comment').at(-1);
     if(state&&comment)seen.push({comment:comment.state.kind,ticket:state.tickets[0]!.state,revision:state.tickets[0]!.revision,notes:state.tickets[0]!.notes.length,owner:host.active('one','owner')});
   };
-  controller=new DispatchController({files:createAgendaFiles(root),github,host,process:new ProcessTable().spawn(101,'Sat Nov 7 06:00:00 2026'),cwd:root,workflow:async()=>({ok:true,value:workflow}),intervalSeconds:3600,pm:PM,onChange:observe,onError:error=>errors.push(error)});
+  controller=new DispatchController({files:createAgendaFiles(root),github,host,process:new ProcessTable().spawn(101,'Sat Nov 7 06:00:00 2026'),cwd:root,workflow:async()=>({ok:true,value:workflow}),intervalSeconds:3600,pm:{context:PM,guardians:{requestAnswer:unexpected}},onChange:observe,onError:error=>errors.push(error)});
   const dispatch=controller;
   const main:Caller={kind:'main',agentId:'Main',sessionId:'main',sessionFile:null};dispatch.setMain(main);
   const comments=()=>dispatch.snapshot()!.effects.filter(effect=>effect.action.kind==='comment');
@@ -183,7 +183,7 @@ test('retry queues a PM record again when the source lacks it, adopts one the so
   for(const effect of [comment,field,body]){effect.attempt=1;effect.state={kind:'failed',startedAt:1,error:{kind:'uncertainOutcome',message:'Connection ended without an outcome'}};}
   const retry=(source:Facts)=>{
     const resolved=applyOperation(state,{op:'resolve',ticketId:'one',revision:state.tickets[0]!.revision,ruling:'Retry the writes.',to:'Coding',
-      effects:[comment,field,body].map(effect=>({effectId:effect.id,disposition:'retry' as const}))},main,source,2);
+      effects:[comment,field,body].map(effect=>({effectId:effect.id,disposition:'retry' as const}))},main,source,2,null);
     if(!resolved.ok)throw new Error(resolved.error.message);
     return resolved.value.effects.map(effect=>({id:effect.id,attempt:effect.attempt,state:effect.state}));
   };
@@ -232,7 +232,7 @@ async function lostFirstWrites(name:string) {
     launch:async input=>{launches.push(input);live.add(`${input.ticketId}/${input.role}`);return success({agentId:'owner',sessionId:`session-${launches.length}`,sessionFile:join(root,`owner-${launches.length}.jsonl`),jobId:`job-${launches.length}`});},
   };
   const errors:unknown[]=[];
-  const dispatch=new DispatchController({files:createAgendaFiles(root),github,host,process:new ProcessTable().spawn(101,'Sat Nov 7 06:00:00 2026'),cwd:root,workflow:async()=>({ok:true,value:workflow}),intervalSeconds:3600,pm:PM,onChange:()=>{},onError:error=>errors.push(error)});
+  const dispatch=new DispatchController({files:createAgendaFiles(root),github,host,process:new ProcessTable().spawn(101,'Sat Nov 7 06:00:00 2026'),cwd:root,workflow:async()=>({ok:true,value:workflow}),intervalSeconds:3600,pm:{context:PM,guardians:{requestAnswer:unexpected}},onChange:()=>{},onError:error=>errors.push(error)});
   const main:Caller={kind:'main',agentId:'Main',sessionId:'main',sessionFile:null};dispatch.setMain(main);
   // One run executes at most one effect.
   const drain=async():Promise<void>=>{for(let round=0;round<6;round++)await dispatch.run();};

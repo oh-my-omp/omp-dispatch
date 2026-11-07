@@ -173,7 +173,7 @@ function ownerStep(messages: Message[], spec: TicketSpec, brief: string): {step:
   const step = messages.slice(latest + 1).filter(message => message.role === 'assistant').length;
   const note = `round ${round} step ${step} revision ${revision}`;
   if (owner.kind === 'quit') return {step: {text: 'I cannot finish this ticket.'}, note};
-  if (owner.kind === 'escalate') return {step: step === 0 ? {call: {name: 'dispatch', args: {input: {op: 'escalate', ticketId: spec.id, revision, kind: owner.escalation, reason: owner.reason}}}} : {text: 'Escalated.'}, note};
+  if (owner.kind === 'escalate') return {step: step === 0 ? {call: {name: 'dispatch', args: {input: {op: 'escalate', ticketId: spec.id, revision, kind: owner.escalation, reason: owner.reason, ...(owner.tier ? {tier: owner.tier} : {})}}}} : {text: 'Escalated.'}, note};
   const bash = played(messages, latest + 1, 'bash');
   if (step === 0) return {step: {call: {name: 'bash', args: {command: commitScript(spec, owner.write, owner.remove ?? [], `round ${round}`)}}}, note};
   if (step === 1) {

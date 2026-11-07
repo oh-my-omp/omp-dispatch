@@ -1,8 +1,8 @@
-import type {Action,Agenda,Caller,ClosureGate,ConveneInput,DomainError,Effect,EffectResult,Entry,Facts,MergeCommitStamp,NoteAuthor,ParentStamp,PmContext,PortError,PortInput,PrSnapshot,PullRequestStamp,Result,Role,Ticket,WorkerStarted,Workflow} from './model.ts';
+import type {Action,Agenda,Caller,ClosureGate,ConveneInput,DomainError,Effect,EffectResult,Entry,Facts,MergeCommitStamp,NoteAuthor,ParentStamp,PmAsk,PmContext,PortError,PortInput,PrSnapshot,PullRequestStamp,Result,Role,Ticket,Tier,WorkerStarted,Workflow} from './model.ts';
 import {bodyHash,canonical,contains,digest,exactClosingBody,nextId,sameRef,sameRepo,sameTarget,targetHead} from './identity.ts';
 import {formatMarker} from '../pm/markers.ts';
 import {validateTopology} from './parse.ts';
-import {ESCALATE,ESCALATED,openVerdicts,pendingRoles,routeTarget,stagePassed,type Branch,type Condition,type Observe,type ParentState,type TicketState} from './workflow.ts';
+import {ASKING,ESCALATE,ESCALATED,openVerdicts,pendingRoles,routeTarget,stagePassed,type Branch,type Condition,type Observe,type ParentState,type TicketState} from './workflow.ts';
 
 const SYSTEM:NoteAuthor={kind:'system'},MAIN:NoteAuthor={kind:'main'};
 /** A machine that keeps entering states without waiting for a seat, an effect or a source change is misconfigured. */
@@ -12,7 +12,7 @@ type Holds=(condition:Condition)=>boolean;
 function reject(kind:DomainError['kind'],message:string):{ok:false;error:DomainError}{return {ok:false,error:{kind,message}};}
 function note(ticket:Ticket,author:NoteAuthor,kind:NoteKind,text:string,at:number):void {ticket.notes.push({at,author,kind,text});}
 function escalateTicket(ticket:Ticket,text:string,at:number,kind:NoteKind):void {
-  ticket.revision++;ticket.gates={};ticket.state=ESCALATED;note(ticket,SYSTEM,kind,text,at);
+  ticket.revision++;ticket.gates={};ticket.state=ESCALATED;ticket.ask=null;note(ticket,SYSTEM,kind,text,at);
 }
 function escalateClosure(closure:ClosureGate,text:string):void {closure.revision++;closure.gates={};closure.state=ESCALATED;closure.notes.push(text);}
 export function enqueue(state:Agenda,ticketId:string,action:Action,origin:Effect['origin']):Effect {
@@ -22,7 +22,7 @@ export function enqueue(state:Agenda,ticketId:string,action:Action,origin:Effect
 
 /* ------------------------------------------------------------ definitions */
 
-export function ticketDefinition(workflow:Workflow,ticket:Ticket):TicketState|null {return ticket.state===ESCALATED?null:workflow.ticket.states[ticket.state]??null;}
+export function ticketDefinition(workflow:Workflow,ticket:Ticket):TicketState|null {return ticket.state===ESCALATED||ticket.state===ASKING?null:workflow.ticket.states[ticket.state]??null;}
 export function parentDefinition(workflow:Workflow,closure:ClosureGate):ParentState|null {return closure.state===ESCALATED?null:workflow.parent.states[closure.state]??null;}
 /** A ticket is delivered while it rests in a final state of the workflow. */
 export function delivered(state:Agenda,ticket:Ticket):boolean {return ticketDefinition(state.workflow,ticket)?.kind==='final';}
@@ -160,7 +160,7 @@ function enterTicket(state:Agenda,ticket:Ticket,target:string,facts:Facts,at:num
     if(next===ESCALATE){escalateTicket(ticket,'The workflow routed this ticket to Main.',at,'escalation');return;}
     const definition:TicketState=state.workflow.ticket.states[next]!;
     if(definition.guard&&!holds(definition.guard.when)){next=definition.guard.otherwise;continue;}
-    ticket.revision++;ticket.state=next;ticket.visits[next]=(ticket.visits[next]??0)+1;
+    ticket.revision++;ticket.state=next;ticket.ask=null;ticket.visits[next]=(ticket.visits[next]??0)+1;
     const after=arriveTicket(state,ticket,next,definition,facts,at,holds);
     if(after===null)return;
     next=after;
@@ -399,7 +399,7 @@ function ticketFrom(state:Agenda,entry:Entry,facts:Facts,at:number):Result<Ticke
   // A ticket starts in the initial work state; an adopted one starts where its PR stands and never visited it.
   const ticket:Ticket={id:entry.id,revision:1,issue:entry.issue,target:entry.target,dependsOn:entry.dependsOn,
     contract:{revision:1,bodyHash:source.bodyHash,body:source.body},state:initial,started:false,visits:entry.adoptPr?{}:{[initial]:1},sessions:{},pr:null,
-    gates:{},rulings:[],notes:[],terminal:null};
+    gates:{},rulings:[],notes:[],terminal:null,ask:null};
   if(entry.adoptPr){
     const pr=facts.prs.find(pr=>sameRef(pr.ref,entry.adoptPr!));
     if(!pr||!sameTarget(pr.target,ticket.target)||pr.closes.length!==1||!sameRef(pr.closes[0]!,ticket.issue))return reject('sourceChanged','Adopted PR must close exactly this issue at the target');
@@ -436,21 +436,42 @@ export function reconcile(state:Agenda,facts:Facts,at:number):void {
     const result=satisfiedResult(state,effect,facts);
     effect.state=result?{kind:'confirmed',result}:{kind:'failed',startedAt:effect.state.startedAt,error:effect.state.error};
   }
+  // A confirmed `ask` comment hands its decision item to the intent guardians, once per question: the comment id
+  // GitHub shows is recorded on the ticket, and the guardians are asked to answer that comment.
+  for(const ticket of state.tickets){
+    const ask=ticket.ask;
+    if(!ask||ask.comment!==null)continue;
+    const posted=state.effects.some(effect=>effect.ticketId===ticket.id&&effect.state.kind==='confirmed'&&effect.action.kind==='comment'&&effect.action.marker.kind==='ask'&&effect.action.marker.key===ask.session);
+    const marker=posted?facts.issues.find(issue=>sameRef(issue.ref,ticket.issue))?.pm?.markers.find(marker=>marker.kind==='ask'&&marker.json.session===ask.session):undefined;
+    if(!marker)continue;
+    ask.comment=marker.id;
+    enqueue(state,ticket.id,{kind:'requestAnswer',issue:ticket.issue,comment:marker.id,question:ask.question,tier:ask.tier},{state:ASKING,revision:ticket.revision});
+  }
 }
 
 /**
- * Whether a failed or uncertain effect of each kind escalates its ticket. PM records (`comment`, `setProjectField`)
- * are bookkeeping written beside a live seat, so they never escalate the ticket or supersede its seats: an uncertain
- * one is settled by the next complete read, and a failed one is shown to Main and blocks `finish` until Main resolves it.
+ * Whether a failed or uncertain effect of each kind escalates its ticket. PM effects (`comment`, `setProjectField`,
+ * `requestAnswer`) are written beside a live seat or for a ticket that waits on the intent guardians, so they never
+ * escalate the ticket or supersede its seats: an uncertain one is settled by the next complete read, and a failed
+ * one is shown to Main and blocks `finish` until Main resolves it.
  */
-export const ESCALATES_ON_FAILURE:Readonly<Record<Action['kind'],boolean>>={publishPr:true,merge:true,setIssueState:true,replaceBody:true,createIssue:true,attachChild:true,rerunChecks:true,comment:false,setProjectField:false};
+export const ESCALATES_ON_FAILURE:Readonly<Record<Action['kind'],boolean>>={publishPr:true,merge:true,setIssueState:true,replaceBody:true,createIssue:true,attachChild:true,rerunChecks:true,comment:false,setProjectField:false,requestAnswer:false};
+/**
+ * Whether an effect's callee is the authority on its outcome and accepts the same request again. Such an effect is
+ * confirmed by the callee's own success response rather than by a GitHub read, its failure is never uncertain, and
+ * an intent a restart left executing is called again. The intent guardians accept a repeated `requestAnswer` for
+ * the same comment; a GitHub write is confirmed only by reading it back and is never sent twice.
+ */
+export const REPLAYABLE:Readonly<Record<Action['kind'],boolean>>={publishPr:false,merge:false,setIssueState:false,replaceBody:false,createIssue:false,attachChild:false,rerunChecks:false,comment:false,setProjectField:false,requestAnswer:true};
 
 /**
  * Whether `retry` without a source result sends the same effect again. PM records belong to no state entry, so no
  * action state can request them afresh, and they are idempotent by marker key or field value: the executor adopts
- * one the source already shows instead of writing it twice. Every other kind is requested afresh by its action state.
+ * one the source already shows instead of writing it twice. `requestAnswer` is requested only once per ask comment,
+ * and the guardians accept a repeat for that comment; GitHub never shows it, so its retry always sends it again,
+ * provided Main's resolution keeps the ticket in `Asking`. Every other kind is requested afresh by its action state.
  */
-const RETRY_RESENDS:Readonly<Record<Action['kind'],boolean>>={publishPr:false,merge:false,setIssueState:false,replaceBody:false,createIssue:false,attachChild:false,rerunChecks:false,comment:true,setProjectField:true};
+const RETRY_RESENDS:Readonly<Record<Action['kind'],boolean>>={publishPr:false,merge:false,setIssueState:false,replaceBody:false,createIssue:false,attachChild:false,rerunChecks:false,comment:true,setProjectField:true,requestAnswer:true};
 
 /* ------------------------------------------------------------ effects */
 
@@ -495,6 +516,8 @@ export function effectPrecondition(state:Agenda,effect:Effect,facts:Facts):strin
     }
     // PM records have no source precondition: the comment and the field value are confirmed by reading them back.
     case 'comment':case 'setProjectField':return null;
+    // The ticket must still wait on this question, which the effect's origin entry already establishes.
+    case 'requestAnswer':return null;
   }
 }
 export function satisfiedResult(state:Agenda,effect:Effect,facts:Facts):EffectResult|null {
@@ -525,10 +548,13 @@ export function satisfiedResult(state:Agenda,effect:Effect,facts:Facts):EffectRe
       return attempt?{kind:'rerun',repo:action.repo,workflowRunId:action.workflowRunId,attempt:attempt.attempt}:null;
     }
     case 'comment':{
-      const marker=facts.issues.find(issue=>sameRef(issue.ref,action.issue))?.pm?.markers.find(marker=>marker.kind==='impl'&&action.marker.kind==='impl'&&marker.json.session===action.marker.key);
+      const key=action.marker;
+      const marker=facts.issues.find(issue=>sameRef(issue.ref,action.issue))?.pm?.markers.find(marker=>(marker.kind==='impl'||marker.kind==='ask')&&marker.kind===key.kind&&marker.json.session===key.key);
       return marker?{kind:'commented',issue:action.issue,comment:marker.id}:null;
     }
     case 'setProjectField':return facts.issues.find(issue=>sameRef(issue.ref,action.issue))?.pm?.item?.status===action.option?{kind:'projectFieldSet',issue:action.issue,field:action.field,option:action.option}:null;
+    // GitHub holds no trace of a guardians request; only the guardians' own response confirms it.
+    case 'requestAnswer':return null;
   }
 }
 /**
@@ -580,6 +606,16 @@ export function abandonSeat(state:Agenda,ticketId:string,role:Role,revision:numb
 /* ------------------------------------------------------------ PM progress */
 
 /**
+ * A work seat's question under PM integration: the ticket waits in `Asking`, with no seat and no call on Main, and
+ * the decision item is written verbatim to its issue as a comment ending with an `ask` marker keyed by the asking session.
+ */
+function askTicket(state:Agenda,ticket:Ticket,ask:{question:string;tier:Tier;session:string;file:string}):void {
+  ticket.revision++;ticket.gates={};ticket.state=ASKING;ticket.ask={...ask,comment:null};
+  const marker=formatMarker({kind:'ask',json:{v:1,tier:ask.tier,session:ask.session}});
+  enqueue(state,ticket.id,{kind:'comment',issue:ticket.issue,body:`${ask.question}\n\n${marker}`,marker:{kind:'ask',key:ask.session}},{state:ASKING,revision:ticket.revision});
+}
+
+/**
  * A work seat's native session has started on its ticket: its implementation issue gets an `impl` marker keyed by
  * that session, and its Project Status moves to in progress unless the source already shows it. The effects belong
  * to no state entry, so a seat that hands off before they run does not cancel them.
@@ -619,8 +655,8 @@ function settleEffects(next:Agenda,operation:Extract<PortInput,{op:'resolve'}>,f
     switch(resolution.disposition){
       case 'cancel':effect.state={kind:'cancelled',reason:operation.ruling};break;
       case 'adopt':if(!result)return reject('sourceChanged','Source does not confirm the effect');confirmEffect(next,effect,result,facts,at);break;
-      // A source-confirmed effect is adopted. Otherwise a PM record is queued again under its id and intent, and any
-      // other effect is cancelled: resolving to its action state requests it afresh.
+      // A source-confirmed effect is adopted. Otherwise a PM record or a guardians request is queued again under its id
+      // and intent, and any other effect is cancelled: resolving to its action state requests it afresh.
       case 'retry':
         if(result)confirmEffect(next,effect,result,facts,at);
         else effect.state=RETRY_RESENDS[effect.action.kind]?{kind:'ready'}:{kind:'cancelled',reason:`Main requested a retry: ${operation.ruling}`};
@@ -641,9 +677,13 @@ function resolveClosure(next:Agenda,closure:ClosureGate,operation:Extract<PortIn
   return closure.state===ESCALATED?reject('invalidTransition',closure.notes.at(-1)??'The parent closure could not enter that state'):{ok:true,value:null};
 }
 function resolveTicket(next:Agenda,ticket:Ticket,operation:Extract<PortInput,{op:'resolve'}>,facts:Facts,at:number):Result<null,DomainError> {
-  const target=next.workflow.ticket.states[operation.to];
-  if(!target)return reject('invalidTransition',`${operation.to} is not a state of the ticket workflow`);
-  if(operation.noCode&&!(target.kind==='final'||target.kind==='action'&&target.action.kind==='closeIssue'))return reject('invalidTransition','noCode resolves to a closeIssue action state or a final state');
+  // Main may keep an Asking ticket waiting on the guardians, typically to retry its failed request; no other ticket can
+  // enter Asking, because only a worker's question carries one.
+  const staysAsking=operation.to===ASKING;
+  if(staysAsking&&ticket.state!==ASKING)return reject('invalidTransition',`Only a ticket already in ${ASKING} can be resolved to ${ASKING}`);
+  const target=staysAsking?null:next.workflow.ticket.states[operation.to];
+  if(!staysAsking&&!target)return reject('invalidTransition',`${operation.to} is not a state of the ticket workflow`);
+  if(operation.noCode&&!(target?.kind==='final'||target?.kind==='action'&&target.action.kind==='closeIssue'))return reject('invalidTransition','noCode resolves to a closeIssue action state or a final state');
   if(operation.actions?.some(action=>!RESOLVE_ACTIONS.includes(action.kind)))return reject('invalidTransition',`resolve actions are limited to ${RESOLVE_ACTIONS.join(', ')}; the workflow owns publishing, merging and closing`);
   if(operation.add)for(const entry of operation.add){const added=ticketFrom(next,entry,facts,at);if(!added.ok)return added;next.tickets.push(added.value);}
   if(operation.remove){
@@ -674,7 +714,8 @@ function resolveTicket(next:Agenda,ticket:Ticket,operation:Extract<PortInput,{op
   if(operation.noCode)ticket.terminal={kind:'noCode',bodyHash:source.bodyHash,reason:operation.noCode,at};
   else if(ticket.terminal?.kind==='noCode')ticket.terminal=null;
   const settled=settleEffects(next,operation,facts,at);if(!settled.ok)return settled;
-  enterTicket(next,ticket,operation.to,facts,at);
+  // Staying in Asking is no new state entry: the revision, the question and the effects it requested stay current.
+  if(!staysAsking)enterTicket(next,ticket,operation.to,facts,at);
   if(ticket.state===ESCALATED)return reject('invalidTransition',ticket.notes.at(-1)?.text??'The ticket could not enter that state');
   const landed=ticketDefinition(next.workflow,ticket);
   if(operation.noCode&&!(landed?.kind==='final'||landed?.kind==='action'&&landed.action.kind==='closeIssue'))return reject('invalidTransition',`noCode must land in a closeIssue action state or a final state; the entry condition led to ${ticket.state}`);
@@ -683,7 +724,8 @@ function resolveTicket(next:Agenda,ticket:Ticket,operation:Extract<PortInput,{op
   return {ok:true,value:null};
 }
 
-export function applyOperation(state:Agenda,operation:PortInput,caller:Caller,facts:Facts,at:number):Result<Agenda,DomainError> {
+/** `ask` is null while PM integration is off; with it on, a work seat's question waits on the intent guardians instead of Main. */
+export function applyOperation(state:Agenda,operation:PortInput,caller:Caller,facts:Facts,at:number,ask:PmAsk|null):Result<Agenda,DomainError> {
   const next=structuredClone(state);
   if(next.lifecycle!=='active')return reject('invalidTransition','Agenda has completed');
   const main=caller.kind==='main'&&next.run.kind==='attached'&&caller.agentId===next.run.mainAgentId&&caller.sessionId===next.run.mainSessionId;
@@ -728,7 +770,11 @@ export function applyOperation(state:Agenda,operation:PortInput,caller:Caller,fa
       const definition=ticketDefinition(next.workflow,ticket);
       if(!definition||!availableRoles(next,ticket).includes(caller.role))return reject('invalidTransition','Seat is no longer actionable');
       note(ticket,{kind:'seat',role:caller.role},'escalation',`${operation.kind}: ${operation.reason}`,at);
-      if(definition.kind==='work'){ticket.sessions[caller.role]=caller.sessionFile;enterTicket(next,ticket,routeTarget(definition.on.escalated,ticketHolds(ticket,facts)),facts,at);}
+      if(definition.kind==='work'){
+        ticket.sessions[caller.role]=caller.sessionFile;
+        if(ask&&operation.kind==='question')askTicket(next,ticket,{question:operation.reason,tier:operation.tier??ask.defaultTier,session:caller.sessionId,file:caller.sessionFile});
+        else enterTicket(next,ticket,routeTarget(definition.on.escalated,ticketHolds(ticket,facts)),facts,at);
+      }
       else if(definition.kind==='judge'){delete ticket.gates[ticket.state];enterTicket(next,ticket,routeTarget(definition.on.escalated,ticketHolds(ticket,facts)),facts,at);}
     }else if(closure&&closureRoles(next).includes(caller.role)){
       const definition=parentDefinition(next.workflow,closure);

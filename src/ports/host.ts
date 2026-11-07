@@ -15,6 +15,7 @@ import {USER_TODO_EDIT_CUSTOM_TYPE} from '@oh-my-pi/pi-coding-agent/tools/todo';
 import {resolveAgentModelSelection} from '@oh-my-pi/pi-coding-agent/config/model-resolver';
 import {initializeExtensions} from '@oh-my-pi/pi-coding-agent/modes/runtime-init';
 import {buildPublicGrammar} from '../domain/public-grammar.ts';
+import {ASKING} from '../domain/workflow.ts';
 import {parseToolParameters} from '../domain/parse.ts';
 import type {Caller,PortInput,Repo,Result,Role} from '../domain/model.ts';
 import type {HostPort,SeatExit,SeatLaunch,SeatWorkspace} from './contracts.ts';
@@ -146,7 +147,7 @@ export function createHostPort(options:HostOptions):HostPort {
         if(fork&&!savedContract.success)throw new Error('Owner session is missing its original prompt/tool contract');
         const handoff=handoffSchema.safeParse(previousHandoff);
         if(fork&&(!handoff?.success||handoff.data.ticketId!==input.ticketId))throw new Error('Owner fork source does not contain this ticket’s accepted handoff');
-        let handedOff=false;
+        let handedOff=false,asked=false;
         const caller:Caller={kind:'seat',agentId:id,sessionId:manager.getSessionId(),sessionFile,ticketId:input.ticketId,revision:input.revision,role:input.role};
         const nativeManager=manager;
         const tool:ToolDefinition={name:'dispatch',label:tr('Dispatch','调度'),description:'Read or hand off only your bound ticket. A successful submit/verdict/escalate ends this seat.',parameters:buildPublicGrammar(z).toolParametersSchema,
@@ -161,6 +162,8 @@ export function createHostPort(options:HostOptions):HostPort {
                 handedOff=true;
                 if(input.seat==='work'&&'ticket' in response.value&&'sessions' in response.value.ticket){
                   nativeManager.appendCustomEntry('dispatch-handoff',{ticketId:input.ticketId,notes:response.value.ticket.notes.length,rulings:response.value.ticket.rulings.length});
+                  // The engine parks a work seat's question in Asking only under PM integration; that seat stops here.
+                  asked=response.value.ticket.state===ASKING;
                 }
               }
               return {content:[{type:'text',text:JSON.stringify(response)}],details:response,isError:!response.ok};
@@ -233,9 +236,12 @@ export function createHostPort(options:HostOptions):HostPort {
         const session=created.session,disposable=input.seat==='work'?null:tree;
         // Like native terminal-yield handling, abort the obsolete tool loop at a
         // tool-completion boundary. Accepted handoffs have already saved their
-        // checkpoint and must finish normally, even if their transition bumped revision.
+        // checkpoint and must finish normally, even if their transition bumped revision;
+        // a question handed to the intent guardians ends its seat right there.
         const unsubscribe=session.subscribe(event=>{
-          if(event.type!=='tool_execution_end'||handedOff)return;
+          if(event.type!=='tool_execution_end')return;
+          if(asked){session.agent.abort('Dispatch handed this question to the intent guardians');return;}
+          if(handedOff)return;
           const revision=options.ticketRevision(input.ticketId);
           if(revision!==null&&revision!==input.revision)session.agent.abort('Dispatch seat revision was superseded');
         });
