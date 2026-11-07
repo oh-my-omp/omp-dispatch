@@ -81,7 +81,13 @@ export class DispatchController {
   /** The saved active agendas of the launch issue; a storage failure is the caller's to report. */
   private async owned():Promise<Result<Agenda[],RuntimeError>> {
     const list=await this.options.files.list();if(!list.ok)return {ok:false,error:{kind:'storage',error:list.error}};
-    return {ok:true,value:list.value.filter(state=>state.lifecycle==='active'&&belongsTo(state,this.options.issue))};
+    const owned:Agenda[]=[];
+    for(const entry of list.value){
+      if(entry.lifecycle!=='active')continue;
+      const state=await this.options.files.load(entry.id);if(!state.ok)return {ok:false,error:{kind:'storage',error:state.error}};
+      if(belongsTo(state.value,this.options.issue))owned.push(state.value);
+    }
+    return {ok:true,value:owned};
   }
   /** The ids of the launch issue's saved active agendas, for the startup message. */
   async startup(caller:Caller):Promise<Result<string[],RuntimeError>> {

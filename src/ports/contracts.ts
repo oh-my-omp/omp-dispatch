@@ -37,9 +37,12 @@ export interface GuardiansPort {
 export type StateError = {kind:'notFound'|'unsupportedFormat'|'corruptState'|'versionConflict'|'unavailable';message:string};
 /** A workflow that cannot be read or parsed; `source` is the file path the reason refers to. */
 export type WorkflowError = {source:string;reason:string};
+/** One agenda file's indexable head: its id and lifecycle. */
+export type AgendaEntry={id:AgendaId;lifecycle:'active'|'completed'};
 export interface AgendaFiles {
   load(id:AgendaId):Promise<Result<Agenda,StateError>>;
-  list():Promise<Result<readonly Agenda[],StateError>>;
+  /** Indexable facts of each agenda file, without parsing its agenda body. */
+  list():Promise<Result<readonly AgendaEntry[],StateError>>;
   /** Exact-target retries repair durability without inventing a new version. */
   save(expectedVersion:number|null,state:Agenda):Promise<Result<null,StateError>>;
 }

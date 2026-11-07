@@ -153,9 +153,15 @@ async function kill(run: Run): Promise<void> {
 
 /** The run's own agenda: the one that belongs to its launch issue, whatever else the data directory holds. */
 async function agenda(run: Run): Promise<Agenda | null> {
-  const list = await createAgendaFiles(run.data).list();
+  const files = createAgendaFiles(run.data);
+  const list = await files.list();
   if (!list.ok) throw new Error(`Cannot read agendas: ${list.error.message}`);
-  return list.value.find(state => belongsTo(state, {repo: REPO, number: run.rootIssue})) ?? null;
+  for (const entry of list.value) {
+    const state = await files.load(entry.id);
+    if (!state.ok) throw new Error(`Cannot read agenda ${entry.id}: ${state.error.message}`);
+    if (belongsTo(state.value, {repo: REPO, number: run.rootIssue})) return state.value;
+  }
+  return null;
 }
 
 const ticketOf = (state: Agenda | null, id: string) => state?.tickets.find(ticket => ticket.id === id);
