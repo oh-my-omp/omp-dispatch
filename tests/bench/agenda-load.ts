@@ -1,7 +1,7 @@
 /**
  * The #218 §7 load: a real DispatchController on fixture ports and real agenda files, holding a large agenda
  * (20 tickets × 200 notes, 100 settled effects per ticket). It runs N unchanged `run()` ticks, N `status` and
- * N `read` calls, and N Main resolutions that each persist the agenda, and prints one JSON line of metrics per
+ * N `read` calls, up to 20 ticks that each escalate one ticket, and N Main resolutions that each persist the agenda, and prints one JSON line of metrics per
  * phase. The tool texts and agenda files it writes to `<out>` are normalized (agenda id, run id, data root) so
  * runs on different commits diff byte for byte.
  *
@@ -109,6 +109,14 @@ try {
   await phase('read',async()=>{for(let index=0;index<N;index++)read=JSON.stringify(await dispatch.execute(main,{op:'read',ticketId:`T${index%TICKETS+1}`}));});
   await writeFile(join(out,'status.json'),normalize(status));
   await writeFile(join(out,'read.json'),normalize(read));
+  // Ticks that do change the agenda: each rewrites one ticket's issue body, which escalates that ticket.
+  await phase('changed-tick',async()=>{
+    for(let index=0;index<Math.min(N,TICKETS);index++){
+      const issue=source.issues[index]!;issue.body=`Deliver ${index+1}, rewritten.`;issue.bodyHash=bodyHash(issue.body);
+      await dispatch.run();
+    }
+  });
+  await writeFile(join(out,'agenda-after-changes.json'),normalize(await readFile(path,'utf8')));
   let resolved='';
   await phase('resolve',async()=>{
     for(let index=0;index<N;index++){
