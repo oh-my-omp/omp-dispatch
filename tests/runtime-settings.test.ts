@@ -11,7 +11,7 @@ const stubApi={registerFlag() {},registerTool() {},registerCommand() {},on() {}}
 describe('dispatch runtime settings',()=>{
   test('the extension registers no root settings',()=>{
     dispatch(stubApi);
-    for(const id of ['dispatch.dataDir','dispatch.recomputeIntervalSeconds','dispatch.pmConfigDir','dispatch.workflowFile'])expect(lookup(id)).toBeUndefined();
+    for(const key of ['dataDir','recomputeIntervalSeconds','pmConfigDir','workflowFile'])expect(lookup(`dispatch.${key}`)).toBeUndefined();
   });
 
   test('unset settings keep the defaults',()=>{
