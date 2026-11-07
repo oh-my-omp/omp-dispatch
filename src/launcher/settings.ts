@@ -18,6 +18,15 @@ function invalid(raw:Readonly<Record<string,unknown>>,key:string,expected:string
   return {ok:false,error:`omp-dispatch.${key} must be ${expected}, not ${JSON.stringify(raw[key])}`};
 }
 
+/**
+ * A TCP port setting. `omp plugin config set` stores every value as a string, so a plain decimal string is read as its
+ * number; anything else (a sign, a fraction, a suffix, an empty value) is not a port.
+ */
+function portValue(value:unknown):number|null {
+  const number=typeof value==='number'?value:typeof value==='string'&&/^\d+$/.test(value.trim())?Number(value.trim()):null;
+  return number!==null&&Number.isInteger(number)&&number>=1&&number<=65535?number:null;
+}
+
 /** The omp-dispatch plugin settings the launcher reads, with the defaults package.json declares. */
 export function parseLauncherSettings(raw:Readonly<Record<string,unknown>>):Result<LauncherSettings,string> {
   const mode=raw.githubTrigger??'link';
@@ -28,8 +37,8 @@ export function parseLauncherSettings(raw:Readonly<Record<string,unknown>>):Resu
   if(associations===null||associations.length===0)return invalid(raw,'githubTriggerAssociations','a nonempty comma-separated list of author associations');
   const host=raw.webhookHost??'127.0.0.1';
   if(typeof host!=='string'||host.trim().length===0)return invalid(raw,'webhookHost','a nonempty host');
-  const port=raw.webhookPort??DEFAULT_WEBHOOK_PORT;
-  if(typeof port!=='number'||!Number.isInteger(port)||port<1||port>65535||port===LAUNCHER_PORT)return invalid(raw,'webhookPort',`a TCP port other than ${LAUNCHER_PORT}`);
+  const port=portValue(raw.webhookPort??DEFAULT_WEBHOOK_PORT);
+  if(port===null||port===LAUNCHER_PORT)return invalid(raw,'webhookPort',`a TCP port other than ${LAUNCHER_PORT}`);
   return {ok:true,value:{trigger:{mode,labels:list(labels),associations},webhook:{host:host.trim(),port}}};
 }
 
@@ -40,9 +49,9 @@ export function parseLauncherSettings(raw:Readonly<Record<string,unknown>>):Resu
 export function parseConfigCheckSettings(raw:Readonly<Record<string,unknown>>):Result<ConfigCheckAddress,string> {
   const host=raw.configCheckHost??'127.0.0.1';
   if(typeof host!=='string'||host.trim().length===0)return invalid(raw,'configCheckHost','a nonempty host');
-  const port=raw.configCheckPort??DEFAULT_CONFIG_CHECK_PORT;
-  const webhookPort=raw.webhookPort??DEFAULT_WEBHOOK_PORT;
-  if(typeof port!=='number'||!Number.isInteger(port)||port<1||port>65535||port===LAUNCHER_PORT||port===webhookPort)
+  const port=portValue(raw.configCheckPort??DEFAULT_CONFIG_CHECK_PORT);
+  const webhookPort=portValue(raw.webhookPort??DEFAULT_WEBHOOK_PORT);
+  if(port===null||port===LAUNCHER_PORT||port===webhookPort)
     return invalid(raw,'configCheckPort',`a TCP port other than ${LAUNCHER_PORT} and the webhook port`);
   return {ok:true,value:{host:host.trim(),port}};
 }

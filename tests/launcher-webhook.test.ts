@@ -119,7 +119,7 @@ describe('launcher settings',()=>{
   });
 
   test('refuses values that would disable or collide silently',()=>{
-    for(const raw of [{githubTrigger:'any'},{githubTriggerAssociations:' , '},{webhookPort:47591},{webhookPort:0},{webhookPort:'47592'},{webhookHost:''}])
+    for(const raw of [{githubTrigger:'any'},{githubTriggerAssociations:' , '},{webhookPort:47591},{webhookPort:'47591'},{webhookPort:0},{webhookPort:'47592x'},{webhookPort:'4.5'},{webhookHost:''}])
       expect(parseLauncherSettings(raw).ok).toBe(false);
   });
 });

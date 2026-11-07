@@ -1,7 +1,7 @@
 import {describe,expect,test} from 'bun:test';
 import {validatePmFiles} from '../src/pm/config.ts';
 import {serveConfigCheck} from '../src/launcher/config-check.ts';
-import {parseConfigCheckSettings} from '../src/launcher/settings.ts';
+import {parseConfigCheckSettings,parseLauncherSettings} from '../src/launcher/settings.ts';
 
 const SIM=new URL('./sim/pm-config/',import.meta.url);
 const validDelivery='guardiansURL: http://127.0.0.1:7410\ndefaultTier: simple\ntierHelp: x\nresumePrompt: y\n';
@@ -61,13 +61,27 @@ describe('validatePmFiles',()=>{
   });
 });
 
-describe('config check settings',()=>{
+describe('port settings',()=>{
   test('unset settings take the declared defaults',()=>{
     expect(parseConfigCheckSettings({})).toEqual({ok:true,value:{host:'127.0.0.1',port:47593}});
   });
 
+  test('a decimal string is read as its port, the way omp plugin config stores it',()=>{
+    expect(parseConfigCheckSettings({configCheckPort:'47593'})).toEqual({ok:true,value:{host:'127.0.0.1',port:47593}});
+    expect(parseConfigCheckSettings({configCheckPort:' 48000 '})).toEqual({ok:true,value:{host:'127.0.0.1',port:48000}});
+    const webhook=parseLauncherSettings({webhookPort:'47592'});
+    expect(webhook.ok&&webhook.value.webhook.port).toBe(47592);
+  });
+
+  test('anything but a plain decimal port is refused',()=>{
+    for(const value of ['47593x','','4.5','-1','0x10','',' ',4.5,0,65536])
+      expect(parseConfigCheckSettings({configCheckPort:value}).ok).toBe(false);
+    for(const value of ['47592x','4.5','',true])
+      expect(parseLauncherSettings({webhookPort:value}).ok).toBe(false);
+  });
+
   test('a port equal to the link port or the webhook port disables only this listener',()=>{
-    for(const raw of [{configCheckPort:47591},{configCheckPort:47592},{webhookPort:47600,configCheckPort:47600},{configCheckPort:0},{configCheckPort:'47593'},{configCheckHost:''}])
+    for(const raw of [{configCheckPort:47591},{configCheckPort:'47591'},{configCheckPort:47592},{configCheckPort:'47592'},{webhookPort:'47600',configCheckPort:'47600'},{configCheckPort:0},{configCheckPort:'47593',configCheckHost:''}])
       expect(parseConfigCheckSettings(raw).ok).toBe(false);
   });
 
