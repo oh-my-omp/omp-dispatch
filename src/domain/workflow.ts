@@ -1,4 +1,4 @@
-import type {ChecksSnapshot,ParseError,PrSnapshot,Result,Role,Verdict} from './model.ts';
+import type {ChecksSnapshot,DeepReadonly,ParseError,PrSnapshot,Result,Role,Verdict} from './model.ts';
 
 /** The built-in transition target: hand the ticket or closure to Main as `Escalated`. */
 export const ESCALATE='escalate';
@@ -316,7 +316,7 @@ export function parseWorkflow(value:unknown):Result<Workflow,ParseError> {
 /* ------------------------------------------------------------ queries */
 
 /** Every seat a delivery ticket can hold: its work roles, then its judges, in configured order. */
-export function ticketSeatRoles(workflow:Workflow):Role[] {
+export function ticketSeatRoles(workflow:DeepReadonly<Workflow>):Role[] {
   const roles:Role[]=[];
   for(const state of Object.values(workflow.ticket.states)){
     if(state.kind==='work'&&!roles.includes(state.role))roles.push(state.role);
@@ -324,7 +324,7 @@ export function ticketSeatRoles(workflow:Workflow):Role[] {
   }
   return roles;
 }
-export function parentSeatRoles(workflow:Workflow):Role[] {
+export function parentSeatRoles(workflow:DeepReadonly<Workflow>):Role[] {
   return Object.values(workflow.parent.states).flatMap(state=>state.kind==='judge'?state.judges.map(judge=>judge.role):[]);
 }
 /** Every agent the workflow names, checked before the workflow is frozen into an agenda. */
@@ -345,7 +345,7 @@ export function verdictsMatch(roster:readonly Judge[],verdicts:readonly Verdict[
   return roster.length===verdicts.length&&roster.every((judge,index)=>verdicts[index]!.role===judge.role);
 }
 /** The first branch whose condition holds decides the target; otherwise the route's fallback. */
-export function routeTarget(route:Route,holds:(condition:Condition)=>boolean):string {
+export function routeTarget(route:DeepReadonly<Route>,holds:(condition:DeepReadonly<Condition>)=>boolean):string {
   return route.branches.find(branch=>holds(branch.when))?.to??route.otherwise;
 }
 

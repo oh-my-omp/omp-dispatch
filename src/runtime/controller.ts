@@ -1,7 +1,7 @@
 import {randomUUID} from 'node:crypto';
-import type {Agenda,Caller,DomainError,Effect,EffectResult,Facts,IssueRef,PmContext,PortError,PortInput,Result,Role,Workflow} from '../domain/model.ts';
-import {REPLAYABLE,abandonSeat,applyOperation,availableRoles,awaitsLaunch,belongsTo,closureRoles,confirmEffect,createAgenda,currentSeat,effectPrecondition,failEffect,reconcile,satisfiedResult,statusOnDone,ticketDefinition,workerStarted} from '../domain/engine.ts';
-import {canonical,refKey,sameRef} from '../domain/identity.ts';
+import {draftAgenda,type Agenda,type Caller,type DeepReadonly,type DomainError,type Effect,type EffectResult,type Facts,type IssueRef,type PmContext,type PortError,type PortInput,type ReadonlyAgenda,type Result,type Role,type Workflow} from '../domain/model.ts';
+import {REPLAYABLE,abandonSeat,applyOperation,availableRoles,awaitsLaunch,belongsTo,closureRoles,confirmEffect,createAgenda,currentSeat,effectPrecondition,failEffect,reconciled,satisfiedResult,statusOnDone,ticketDefinition,workerStarted} from '../domain/engine.ts';
+import {refKey,sameRef} from '../domain/identity.ts';
 import {seatBrief} from '../domain/briefs.ts';
 import {parentSeatRoles,ticketSeatRoles,workflowAgents} from '../domain/workflow.ts';
 import type {AgendaFiles,GitHubPort,GuardiansPort,HostPort,ProcessPort,SeatExit,SeatHandle,SeatLaunch,SeatWorkspace,StateError,WorkflowError} from '../ports/contracts.ts';
@@ -10,10 +10,11 @@ import {createSourceReader,type SourceReceipt} from './source.ts';
 export type RuntimeError={kind:'domain';error:DomainError}|{kind:'storage';error:StateError}|{kind:'source'|'host'|'process';error:PortError}|{kind:'workflow';error:WorkflowError};
 /**
  * Main's view: which tickets it may launch, which wait on a worker's question to the intent guardians (with the
- * council agenda once the question went to the council), and which seats the relay currently runs.
+ * council agenda once the question went to the council), and which seats the relay currently runs. `agenda` is the
+ * live agenda itself, shared read-only: a transition replaces it and never writes it.
  */
-export type AgendaView={agenda:Agenda;launchable:string[];asking:{ticketId:string;question:string;comment:number|null;agenda:string|null}[];seated:{ticketId:string;roles:Role[]}[]};
-export type ControllerOutput=AgendaView|{ticket:Agenda['tickets'][number]|NonNullable<Agenda['closure']>}|{launched:SeatHandle[]};
+export type AgendaView={agenda:ReadonlyAgenda;launchable:string[];asking:{ticketId:string;question:string;comment:number|null;agenda:string|null}[];seated:{ticketId:string;roles:Role[]}[]};
+export type ControllerOutput=AgendaView|{ticket:DeepReadonly<Agenda['tickets'][number]|NonNullable<Agenda['closure']>>}|{launched:SeatHandle[]};
 /**
  * `issue` is the launch issue: only the active agendas that belong to it are listed at startup, resumed, or block
  * a new convene; the active agendas of other issues are left alone.
@@ -28,7 +29,7 @@ function domain(kind:DomainError['kind'],message:string):{ok:false;error:Runtime
 export class DispatchController {
   readonly runId=randomUUID();
   private readonly source;
-  private state:Agenda|null=null;
+  private state:ReadonlyAgenda|null=null;
   private main:Extract<Caller,{kind:'main'}>|null=null;
   private tail:Promise<void>=Promise.resolve();
   private pending:{expected:number|null;state:Agenda}|null=null;
@@ -75,7 +76,7 @@ export class DispatchController {
     const seated=[...state.tickets.map(ticket=>({ticketId:ticket.id,roles:ticketRoles})),...(state.closure?[{ticketId:state.closure.id,roles:parentRoles}]:[])]
       .map(({ticketId,roles})=>({ticketId,roles:roles.filter(role=>host.active(ticketId,role))})).filter(item=>item.roles.length>0);
     const asking=state.tickets.flatMap(ticket=>ticket.ask?[{ticketId:ticket.id,question:ticket.ask.question,comment:ticket.ask.comment,agenda:ticket.ask.agenda}]:[]);
-    return {ok:true,value:{agenda:structuredClone(state),launchable:state.tickets.filter(ticket=>awaitsLaunch(state,ticket)).map(ticket=>ticket.id),asking,seated}};
+    return {ok:true,value:{agenda:state,launchable:state.tickets.filter(ticket=>awaitsLaunch(state,ticket)).map(ticket=>ticket.id),asking,seated}};
   }
   /** The saved active agendas of the launch issue; a storage failure is the caller's to report. */
   private async owned():Promise<Result<Agenda[],RuntimeError>> {
@@ -132,7 +133,7 @@ export class DispatchController {
       if(operation.op==='read'){
         if(caller.kind==='seat'&&caller.ticketId!==operation.ticketId)return domain('unauthorized','A seat can read only its bound ticket');
         const ticket=this.state.tickets.find(ticket=>ticket.id===operation.ticketId)??(this.state.closure?.id===operation.ticketId?this.state.closure:null);
-        return ticket?{ok:true,value:{ticket:structuredClone(ticket)}}:domain('notFound','Unknown ticket');
+        return ticket?{ok:true,value:{ticket}}:domain('notFound','Unknown ticket');
       }
       if(operation.op==='status'||operation.op==='tickets'){
         if(caller.kind!=='main')return domain('unauthorized','A seat reads its one ticket with read');
@@ -161,16 +162,15 @@ export class DispatchController {
       // A seat's result exposes its own ticket, never the other tickets or effects.
       if(caller.kind==='seat'){
         const ticket=this.state.tickets.find(ticket=>ticket.id===caller.ticketId)??this.state.closure;
-        return ticket?{ok:true,value:{ticket:structuredClone(ticket)}}:domain('notFound','Ticket was removed');
+        return ticket?{ok:true,value:{ticket}}:domain('notFound','Ticket was removed');
       }
       return this.view();
     });
   }
   private async settle(facts:Facts):Promise<Result<null,RuntimeError>> {
     if(!this.state)return {ok:true,value:null};
-    const next=structuredClone(this.state);
-    reconcile(next,facts,Date.now());
-    if(canonical(next)===canonical(this.state))return {ok:true,value:null};
+    // The reconcile pass reports its own change; an unchanged agenda is neither copied nor written.
+    const next=reconciled(this.state,facts,Date.now());if(!next)return {ok:true,value:null};
     next.version++;return this.save(next,this.state.version);
   }
   private kick():void {
@@ -187,7 +187,7 @@ export class DispatchController {
     if(!handedOff)void this.serial(async()=>{
       const flushed=await this.flush();if(!flushed.ok){this.options.onError(flushed.error);return;}
       if(this.closed||this.state?.lifecycle!=='active')return;
-      const next=structuredClone(this.state);
+      const next=draftAgenda(this.state);
       if(!abandonSeat(next,seat.ticketId,seat.role,seat.revision,error??'the session ended without submit, verdict, or escalate',Date.now()))return;
       next.version++;const saved=await this.save(next,this.state.version);if(!saved.ok)this.options.onError(saved.error);
     }).catch(error=>this.unexpected(error));
@@ -256,7 +256,7 @@ export class DispatchController {
       this.options.onError({kind:'host',error:result.error});
       // A precondition refusal (a seat already live, a host shutting down) is a race, not a broken seat.
       if(result.error.kind==='precondition')continue;
-      const next=structuredClone(this.state);
+      const next=draftAgenda(this.state);
       if(!abandonSeat(next,ticketId,role,input.revision,`launch failed: ${result.error.message}`,Date.now()))continue;
       next.version++;const saved=await this.save(next,this.state.version);if(!saved.ok)return saved;
     }
@@ -285,40 +285,40 @@ export class DispatchController {
       if(this.state.effects.some(effect=>runnable(effect)||effect.state.kind==='executing'))this.kick();
     });
   }
-  private async drive(effect:Effect,facts:Facts):Promise<Result<null,RuntimeError>> {
+  private async drive(effect:DeepReadonly<Effect>,facts:Facts):Promise<Result<null,RuntimeError>> {
     if(!this.state)return domain('notFound','Agenda was detached');
     const confirmed=satisfiedResult(this.state,effect,facts);
     if(confirmed){
-      const next=structuredClone(this.state),item=next.effects.find(item=>item.id===effect.id)!;
+      const next=draftAgenda(this.state),item=next.effects.find(item=>item.id===effect.id)!;
       confirmEffect(next,item,confirmed,facts,Date.now());next.version++;return this.save(next,this.state.version);
     }
     if(effect.state.kind==='uncertain')return {ok:true,value:null};
     if(effect.state.kind==='executing'){
-      const next=structuredClone(this.state),item=next.effects.find(item=>item.id===effect.id)!;
+      const next=draftAgenda(this.state),item=next.effects.find(item=>item.id===effect.id)!;
       if(REPLAYABLE[item.action.kind])item.state={kind:'ready'};
       else failEffect(next,item,{kind:'uncertainOutcome',message:'Executing intent has no source-confirmed result; explicit Main resolution is required'},true,Date.now());
       next.version++;return this.save(next,this.state.version);
     }
     const premise=effectPrecondition(this.state,effect,facts);
     if(premise){
-      const next=structuredClone(this.state),item=next.effects.find(item=>item.id===effect.id)!;
+      const next=draftAgenda(this.state),item=next.effects.find(item=>item.id===effect.id)!;
       failEffect(next,item,{kind:'precondition',message:premise},false,Date.now());next.version++;return this.save(next,this.state.version);
     }
-    const executing=structuredClone(this.state),item=executing.effects.find(item=>item.id===effect.id)!;
+    const executing=draftAgenda(this.state),item=executing.effects.find(item=>item.id===effect.id)!;
     item.attempt++;item.state={kind:'executing',startedAt:Date.now()};executing.version++;
     const started=await this.save(executing,this.state.version);if(!started.ok)return started;
     let called:Result<EffectResult|null,PortError>;
     try {called=await this.call(item);}catch(error){called={ok:false,error:{kind:'uncertainOutcome',message:error instanceof Error?error.message:String(error)}};}
     // The callee's own response is the confirmation of a replayable effect; its failure is final, never uncertain.
     if(REPLAYABLE[item.action.kind]){
-      const next=structuredClone(this.state),current=next.effects.find(effect=>effect.id===item.id)!;
+      const next=draftAgenda(this.state),current=next.effects.find(effect=>effect.id===item.id)!;
       if(called.ok&&called.value)confirmEffect(next,current,called.value,facts,Date.now());
       else failEffect(next,current,called.ok?{kind:'invalidResponse',message:'The callee answered without a result'}:called.error,false,Date.now());
       next.version++;return this.save(next,this.state.version);
     }
     const receipt:SourceReceipt|undefined=called.ok&&called.value?{effectId:item.id,result:called.value}:undefined;
     const observed=await this.source.read(this.state,null,'effectConfirmation',receipt);
-    const next=structuredClone(this.state),current=next.effects.find(effect=>effect.id===item.id)!;
+    const next=draftAgenda(this.state),current=next.effects.find(effect=>effect.id===item.id)!;
     const result=observed.ok?satisfiedResult(next,current,observed.value):null;
     if(result&&observed.ok)confirmEffect(next,current,result,observed.value,Date.now());
     else {
@@ -328,7 +328,7 @@ export class DispatchController {
     }
     next.version++;return this.save(next,this.state.version);
   }
-  private async call(effect:Effect):Promise<Result<EffectResult|null,PortError>> {
+  private async call(effect:DeepReadonly<Effect>):Promise<Result<EffectResult|null,PortError>> {
     const action=effect.action,github=this.options.github;
     switch(action.kind){
       case 'publishPr':{
@@ -352,7 +352,8 @@ export class DispatchController {
       }
     }
   }
-  snapshot():Agenda|null{return this.state?structuredClone(this.state):null;}
+  /** The live agenda, shared read-only like every view of it. */
+  snapshot():ReadonlyAgenda|null{return this.state;}
   /** The run ends with this process: its seats end first, then the agenda is written back to detached. */
   async shutdown():Promise<void> {
     this.closed=true;clearInterval(this.timer??undefined);clearTimeout(this.scheduled??undefined);this.timer=null;this.scheduled=null;
@@ -360,7 +361,7 @@ export class DispatchController {
     await this.serial(async()=>{
       const flushed=await this.flush();if(!flushed.ok){this.options.onError(flushed.error);return;}
       const state=this.state;if(state?.run.kind!=='attached'||state.run.id!==this.runId)return;
-      const next=structuredClone(state);next.version++;next.run={kind:'detached'};
+      const next=draftAgenda(state);next.version++;next.run={kind:'detached'};
       const saved=await this.save(next,state.version);if(!saved.ok)this.options.onError(saved.error);
     });
   }

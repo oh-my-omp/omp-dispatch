@@ -1,7 +1,8 @@
 import {describe,expect,test} from 'bun:test';
 import {createHash} from 'node:crypto';
 import type {Agenda,Caller,DomainError,Effect,Facts,IssueRef,IssueSnapshot,MaintenanceObservation,PrSnapshot,Repo,RepoSnapshot,Result,Role,Target,Ticket,Workflow} from '../src/domain/model.ts';
-import {applyOperation,availableRoles,closureRoles,confirmEffect,createAgenda,effectPrecondition,failEffect,reconcile,satisfiedResult} from '../src/domain/engine.ts';
+import {applyOperation,availableRoles,closureRoles,confirmEffect,createAgenda,effectPrecondition,failEffect,satisfiedResult} from '../src/domain/engine.ts';
+import {checkedReconcile as reconcile} from './reconcile-check.ts';
 import {YAML} from 'bun';
 import {encodeAgenda,parseAgenda} from '../src/domain/parse.ts';
 import {encodeWorkflow,parseWorkflow,type TicketState} from '../src/domain/workflow.ts';
@@ -907,5 +908,60 @@ describe('review regressions',()=>{
     const agenda=adoptOpen(workflow,scenario({prHead:HEAD,baseHead:BASE,prState:OPEN_STATE,issueState:'open'}));
     expect(ticketOf(agenda).state).toBe('Reviewing');
     expect(availableRoles(agenda,ticketOf(agenda))).toEqual(['review','accept']);
+  });
+});
+
+// Each reconcile above and below also runs the controller's copy-on-write pass on a shared copy (reconcile-check.ts);
+// these cases reach the write sites the delivery scenarios above leave unvisited.
+describe('reconcile writes reached only by source changes',()=>{
+  test('unknown required checks on an observed PR escalate the ticket',()=>{
+    const {agenda,facts}=publishTicket(),revision=ticketOf(agenda).revision;
+    facts.prs[0]!.checks={kind:'unknown',reason:'The required check runs cannot be listed.'};
+    reconcile(agenda,facts,AT+1);
+    expect(ticketOf(agenda)).toMatchObject({state:'Escalated',revision:revision+1});
+  });
+  test('a stale merge-commit gate restarts its judge state on the current fingerprint',()=>{
+    const {agenda}=driveToMerging();
+    const mergedFacts=scenario({prHead:HEAD,baseHead:MERGE,prState:MERGED_STATE,issueState:'open'});
+    const merge=effectOf(agenda,item=>item.action.kind==='merge'),merged=satisfiedResult(agenda,merge,mergedFacts);
+    if(!merged)throw new Error('merge was not source-confirmed');
+    confirmEffect(agenda,merge,merged,mergedFacts,AT);
+    const gate=ticketOf(agenda).gates.Verifying!,revision=ticketOf(agenda).revision;
+    gate.stamp={...gate.stamp,rulingsHash:'0'.repeat(64)};
+    reconcile(agenda,mergedFacts,AT+1);
+    expect(ticketOf(agenda)).toMatchObject({state:'Verifying',revision:revision+1,gates:{Verifying:{verdicts:[{role:'postMerge',status:'pending'}]}}});
+    expect(ticketOf(agenda).gates.Verifying?.stamp.rulingsHash).not.toBe('0'.repeat(64));
+  });
+  test('an approval on another fingerprint escalates Merging and cancels its queued merge in the same pass',()=>{
+    const {agenda,facts}=driveToMerging();
+    const gate=ticketOf(agenda).gates.Reviewing!;
+    gate.stamp={...gate.stamp,rulingsHash:'0'.repeat(64)};
+    reconcile(agenda,facts,AT+1);
+    expect(ticketOf(agenda).state).toBe('Escalated');
+    expect(effectOf(agenda,item=>item.action.kind==='merge').state.kind).toBe('cancelled');
+  });
+  function parentClosure():{agenda:Agenda;source:Facts} {
+    const parent={repo:REPO,number:1};
+    const source=scenario({prHead:HEAD,baseHead:MERGE,prState:MERGED_STATE,issueState:'closed',lastClose:{id:'child-close',at:MERGED_AT}});
+    source.issues.push({...issueSnapshot('open',null),ref:parent,children:[ISSUE]});
+    const agenda=unwrap(verdict(unwrap(createAgenda({op:'convene',parent,tickets:[{id:TICKET,issue:ISSUE,target:TARGET,dependsOn:[],adoptPr:PR}]},defaultWorkflow,source,AT,'closure-pass'),'adopt merged child'),source,'postMerge'),'postMerge');
+    confirmSourceEffects(agenda,source);
+    if(agenda.closure?.state!=='Reviewing')throw new Error('Expected the closure in Reviewing');
+    return {agenda,source};
+  }
+  test('a changed parent contract restarts the parent machine on the new fingerprint',()=>{
+    const {agenda,source}=parentClosure(),revision=agenda.closure!.revision,parent=source.issues[1]!;
+    parent.body='The parent contract was rewritten.';parent.bodyHash=sha256(parent.body);
+    reconcile(agenda,source,AT+1);
+    expect(agenda.closure).toMatchObject({state:'Reviewing',revision:revision+1,stamp:{bodyHash:parent.bodyHash},gates:{Reviewing:{verdicts:[{role:'closure',status:'pending'}]}}});
+  });
+  test('a parent decision state that now holds a branch moves the closure on',()=>{
+    const {agenda,source}=parentClosure(),closure=agenda.closure!,revision=closure.revision;
+    agenda.workflow.parent.states.Waiting={kind:'decision',guard:null,branches:[{when:{kind:'visits',state:'Reviewing',atLeast:1},to:'Closing'}],otherwise:null};
+    closure.state='Waiting';
+    reconcile(agenda,source,AT+1);
+    // Closing requires a passed Reviewing gate the closure does not hold yet, so the move lands with Main.
+    expect(agenda.closure).toMatchObject({state:'Escalated'});
+    expect(agenda.closure!.revision).toBeGreaterThan(revision);
   });
 });

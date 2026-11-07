@@ -1,4 +1,4 @@
-import type {Agenda,Role} from '../domain/model.ts';
+import type {ReadonlyAgenda,Role} from '../domain/model.ts';
 import {ESCALATES_ON_FAILURE,awaitsLaunch,delivered,parentDefinition} from '../domain/engine.ts';
 import {ESCALATED,parentSeatRoles,ticketSeatRoles} from '../domain/workflow.ts';
 
@@ -8,7 +8,7 @@ import {ESCALATED,parentSeatRoles,ticketSeatRoles} from '../domain/workflow.ts';
  * ticket and blocks `finish` until Main resolves it, and a finished agenda awaiting `finish`. Seats running and
  * effects in flight are not decisions.
  */
-export function attentionKeys(agenda:Agenda,active:(ticketId:string,role:Role)=>boolean):string[] {
+export function attentionKeys(agenda:ReadonlyAgenda,active:(ticketId:string,role:Role)=>boolean):string[] {
   if(agenda.lifecycle!=='active')return [];
   const keys:string[]=[];
   for(const ticket of agenda.tickets){
@@ -31,7 +31,7 @@ export function attentionKeys(agenda:Agenda,active:(ticketId:string,role:Role)=>
 export class Attention {
   private notified=new Set<string>();
   /** The decisions that are new since the previous observation, or an empty list when Main need not wake. */
-  observe(agenda:Agenda,active:(ticketId:string,role:Role)=>boolean):string[] {
+  observe(agenda:ReadonlyAgenda,active:(ticketId:string,role:Role)=>boolean):string[] {
     const keys=attentionKeys(agenda,active);
     const fresh=keys.filter(key=>!this.notified.has(key));
     this.notified=new Set(keys);

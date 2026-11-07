@@ -1,4 +1,4 @@
-import type {Agenda,PmAsk} from './model.ts';
+import type {PmAsk,ReadonlyAgenda} from './model.ts';
 import type {SeatSpec} from './engine.ts';
 
 /** The handoff contract of a seat's kind and subject; the workflow supplies only the seat's duty. */
@@ -17,7 +17,7 @@ function askProtocol(ask:PmAsk):string {
 }
 
 /** Seat scope is one ticket. Ordinary user/tool messages carry it once at entry. `ask` is null while PM integration is off. */
-export function seatBrief(state:Agenda,ticketId:string,seat:SeatSpec,ask:PmAsk|null):string {
+export function seatBrief(state:ReadonlyAgenda,ticketId:string,seat:SeatSpec,ask:PmAsk|null):string {
   const ticket=state.tickets.find(ticket=>ticket.id===ticketId)??(state.closure?.id===ticketId?state.closure:null);
   if(!ticket)throw new Error('Cannot brief an unknown ticket');
   return [

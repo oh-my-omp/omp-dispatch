@@ -1,10 +1,10 @@
-import type {Action,Agenda,ConveneInput,EffectResult,Facts,IssueRef,PortError,PortInput,PrRef,Repo,Result,SourceScope,Target} from '../domain/model.ts';
+import type {Action,ReadonlyAgenda,ConveneInput,EffectResult,Facts,IssueRef,PortError,PortInput,PrRef,Repo,Result,SourceScope,Target} from '../domain/model.ts';
 import {sameRef,sameRepo,targetHead} from '../domain/identity.ts';
 import type {GitHubPort} from '../ports/contracts.ts';
 
 export type SourceReceipt={effectId:string;result:EffectResult};
 export function createSourceReader(github:GitHubPort) {
-  return {async read(state:Agenda|null,operation:PortInput|null,cause:string,receipt?:SourceReceipt):Promise<Result<Facts,PortError>> {
+  return {async read(state:ReadonlyAgenda|null,operation:PortInput|null,cause:string,receipt?:SourceReceipt):Promise<Result<Facts,PortError>> {
     const scope:SourceScope={issues:[],prs:[],repos:[],branches:[],commits:[],checkRuns:[],creations:[],maintenanceIntents:[]};
     function repo(value:Repo):void {if(!scope.repos.some(item=>sameRepo(item.repo,value)))scope.repos.push({repo:value,bases:[]});}
     function target(value:Target):void {
