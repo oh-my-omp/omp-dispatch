@@ -41,6 +41,8 @@ test('only markers naming the waited ask settle it; reply or replaced wins over 
   expect(settlement(10,[escalated(11,10,'o/agenda#3'),replaced(12,10,'o/r#9'),reply(13,10,ANSWER)])).toEqual({settlement:{kind:'replaced',by:'o/r#9',commentId:12},ignored:[]});
   expect(settlement(10,[reply(11,7,'Old answer.'),reply(12,10,ANSWER),escalated(13,10,'o/agenda#3')])).toEqual({settlement:{kind:'reply',text:ANSWER,commentId:12},ignored:[{commentId:11,ask:7}]});
   expect(settlement(10,[fact(14,'<!-- pm:replaced {"v":1,"ask":null,"by":"o/r#9"} -->')])).toEqual({settlement:null,ignored:[{commentId:14,ask:null}]});
+  // Comments up to the ask settled earlier asks of the issue: they neither settle this one nor count as ignored.
+  expect(settlement(10,[reply(8,7,'Old answer.'),replaced(9,10,'o/r#9'),reply(11,7,'Late answer.')])).toEqual({settlement:null,ignored:[{commentId:11,ask:7}]});
 });
 
 type Harness={controller:DispatchController;launches:SeatLaunch[];errors:unknown[];host:HostPort};
@@ -143,16 +145,20 @@ test('an escalated ask keeps waiting with its council agenda in status, then a r
   }finally {await h.controller.shutdown();await rm(root,{recursive:true,force:true});}
 });
 
-test('a settlement of another ask leaves the ticket Asking with one note, and the right reply still resumes it',async()=>{
+test('an earlier answer on the issue is skipped silently; a later settlement of another ask is noted once, and the right reply still resumes it',async()=>{
   const root=await mkdtemp(join(tmpdir(),'dispatch-pm-settle-ignored-'));
   const facts=source(),h=harness(root,facts,101);
   try {
     const ask=await asked(h,facts);
+    // The reply to an older ask of this issue, posted before the current ask.
+    facts.issues[0]!.pm!.markers.unshift(reply(4000,3999,'An answer to the earlier question.'));
+    await drain(h.controller);
+    expect(h.controller.snapshot()!.tickets[0]!.notes.filter(note=>note.text.startsWith('ignored settlement'))).toEqual([]);
     facts.issues[0]!.pm!.markers.push(reply(9005,ask+100,'An answer to something else.'));
     await drain(h.controller);
     const waiting=h.controller.snapshot()!.tickets[0]!;
     expect(waiting.state).toBe('Asking');
-    expect(waiting.notes.filter(note=>note.text===`ignored settlement 9005 for ask ${ask+100}`)).toHaveLength(1);
+    expect(waiting.notes.filter(note=>note.text.startsWith('ignored settlement')).map(note=>note.text)).toEqual([`ignored settlement 9005 for ask ${ask+100}`]);
     expect(h.launches).toHaveLength(1);
     facts.issues[0]!.pm!.markers.push(reply(9006,ask,ANSWER));
     await h.controller.run();
