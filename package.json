@@ -17,6 +17,23 @@
         "description": "Workflow file path, relative to the coordinator working directory",
         "env": "OMP_DISPATCH_WORKFLOW"
       },
+      "dataDir": {
+        "type": "string",
+        "description": "Directory for agenda state, repository caches, seat worktrees and sessions, relative to the coordinator working directory; unset means <agentDir>/omp-dispatch; read when the coordinator starts",
+        "env": "OMP_DISPATCH_DIR"
+      },
+      "recomputeIntervalSeconds": {
+        "type": "number",
+        "default": 120,
+        "description": "Seconds between agenda recomputes, a whole number from 1 to 2147483; read when the coordinator starts",
+        "env": "OMP_DISPATCH_RECOMPUTE_SECONDS"
+      },
+      "pmConfigDir": {
+        "type": "string",
+        "default": "",
+        "description": "PM configuration repository root, relative to the coordinator working directory; empty leaves PM integration off; read when the coordinator starts",
+        "env": "OMP_DISPATCH_PM_CONFIG"
+      },
       "githubTrigger": {
         "type": "enum",
         "values": ["link", "label"],

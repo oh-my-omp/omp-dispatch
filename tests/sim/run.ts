@@ -19,7 +19,7 @@ import type {Expect, Scenario, TicketSpec} from './scenario.ts';
 import {askCases} from './ask.ts';
 
 const ROOT = resolve(import.meta.dir, '../..');
-/** The PM configuration PM-on scenarios point `dispatch.pmConfigDir` at; its Project is the simulated `sim` #1. */
+/** The PM configuration PM-on scenarios point the `pmConfigDir` plugin setting at; its Project is the simulated `sim` #1. */
 const PM_CONFIG = join(ROOT, 'tests/sim/pm-config');
 const REPO = {owner: 'sim', name: 'arena'};
 const KEY = `${REPO.owner}/${REPO.name}`;
@@ -52,7 +52,7 @@ const workRoles = (workflow: Workflow) => [...new Set(Object.values(workflow.tic
 
 export type Run = {
   name: string; dir: string; github: string; bin: string; work: string; data: string; mainSessions: string;
-  /** `pm` is the PM configuration directory the run points `dispatch.pmConfigDir` at, or null with PM integration off. */
+  /** `pm` is the PM configuration directory the run's `pmConfigDir` plugin setting names, or null with PM integration off. */
   scenarioFile: string; scenario: Scenario; workflow: Workflow; rootIssue: number; pm: string | null; proc: Subprocess<'pipe', number, number> | null; starts: number;
 };
 export type Case = {
@@ -103,6 +103,9 @@ function setup(spec: Case): Run {
     const delivery = join(pm, 'dispatch', 'delivery.yaml');
     writeFileSync(delivery, readFileSync(delivery, 'utf8').replace(/^guardiansURL: .*$/m, `guardiansURL: ${spec.pm.guardiansURL}`));
   }
+  // The coordinator's own settings come only from the work directory's project plugin overrides, the store
+  // `/settings` and `omp plugin config` write; `start` keeps their environment variables out of omp.
+  writeFileSync(join(work, '.omp', 'plugin-overrides.json'), JSON.stringify({settings: {'omp-dispatch': {dataDir: data, recomputeIntervalSeconds: '1', pmConfigDir: pm ?? ''}}}, null, 1));
   return {name: spec.name, dir, github, bin, work, data, mainSessions: join(dir, 'main-sessions'), scenarioFile, scenario, workflow, rootIssue: spec.rootIssue, pm, proc: null, starts: 0};
 }
 
@@ -112,11 +115,12 @@ function start(run: Run): void {
   // The injected provider failure must surface at once: omp's automatic retry would otherwise wait out its budget.
   const config = join(run.dir, 'omp-config.yml');
   writeFileSync(config, 'retry:\n  enabled: false\n');
+  // The operator's environment would take precedence over the run's plugin settings, so none of it reaches omp.
+  const {OMP_DISPATCH_DIR: _dir, OMP_DISPATCH_RECOMPUTE_SECONDS: _interval, OMP_DISPATCH_PM_CONFIG: _pm, ...inherited} = process.env;
   run.proc = Bun.spawn(['omp', '--mode', 'rpc', '--no-ui', '--no-extensions', '-e', join(ROOT, 'index.ts'), '-e', join(ROOT, 'tests/sim/extension.ts'),
     '--model', 'sim/main', '--session-dir', run.mainSessions, '--dispatch', `${KEY}#${run.rootIssue}`, '--config', config], {
     cwd: run.work, stdin: 'pipe', stdout, stderr,
-    // An empty PM setting keeps PM integration off whatever the operator's environment says.
-    env: {...process.env, PATH: `${run.bin}:${process.env.PATH}`, OMP_DISPATCH_DIR: run.data, OMP_DISPATCH_RECOMPUTE_SECONDS: '1', SIM_SCENARIO: run.scenarioFile, OMP_DISPATCH_PM_CONFIG: run.pm ?? ''},
+    env: {...inherited, PATH: `${run.bin}:${process.env.PATH}`, SIM_SCENARIO: run.scenarioFile},
   });
   closeSync(stdout); closeSync(stderr);
 }
