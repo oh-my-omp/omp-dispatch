@@ -100,7 +100,7 @@ class ProcessRuntime {
     this.controller=new DispatchController({files:createAgendaFiles(directory),
       github:createGitHubPort({pm:pm?{owner:pm.repos.pm.project.owner,number:pm.repos.pm.project.number,statusField:pm.project.fields.status.name}:null}),host:this.host,process:createProcessPort(),cwd:ctx.cwd,
       pm:pm?{context:{host:hostname(),pid:process.pid,status:{inProgress:pm.project.fields.status.options.inProgress,done:pm.project.fields.status.options.done},
-        ask:{defaultTier:pm.delivery.defaultTier,tierHelp:pm.delivery.tierHelp}},guardians:createGuardiansPort(pm.delivery.guardiansURL)}:null,
+        ask:{defaultTier:pm.delivery.defaultTier,tierHelp:pm.delivery.tierHelp,resumePrompt:pm.delivery.resumePrompt}},guardians:createGuardiansPort(pm.delivery.guardiansURL)}:null,
       // Read at each convene: a configured file must exist; otherwise the data directory may override the built-in workflow.
       workflow:()=>configuredWorkflow(ctx.cwd,directory),
       intervalSeconds:this.interval.get(root.settings),onChange:()=>this.changed(),onError:error=>this.report(error)});
@@ -130,7 +130,7 @@ const slots=globalThis as typeof globalThis&{[SLOT]?:ProcessRuntime};
 export default function dispatch(pi:ExtensionAPI):void {
   const runtime=slots[SLOT]??(slots[SLOT]=new ProcessRuntime());
   pi.registerFlag('dispatch',{description:tr('Start Main as coordinator for <owner>/<repo>#<number>','将 Main 启动为 <owner>/<repo>#<number> 的协调者'),type:'string'});
-  pi.registerTool({name:'dispatch',label:tr('Dispatch','调度'),description:'Main coordinates a durable ticket graph and launches each ticket once; Dispatch then relays its seats until Done, Escalated, or Asking (a work seat\'s question with the intent guardians). Seats read one ticket and hand off with submit/verdict/escalate. GitHub writes are performed and freshly confirmed by the state machine.',parameters:buildPublicGrammar(z).toolParametersSchema,defaultInactive:true,
+  pi.registerTool({name:'dispatch',label:tr('Dispatch','调度'),description:'Main coordinates a durable ticket graph and launches each ticket once; Dispatch then relays its seats until Done, Escalated, or Asking (a work seat\'s question with the intent guardians, which resumes the worker on a reply or ends the ticket Replaced). Seats read one ticket and hand off with submit/verdict/escalate. GitHub writes are performed and freshly confirmed by the state machine.',parameters:buildPublicGrammar(z).toolParametersSchema,defaultInactive:true,
     async execute(_id,params,_signal,_update,ctx){const response=await runtime.execute(ctx,params);return {content:[{type:'text',text:JSON.stringify(response)}],details:response,isError:!response.ok};},
   });
   pi.registerCommand('dispatch-launcher',{description:tr('Install, uninstall, or inspect the local Dispatch launcher, or register its GitHub App (install|uninstall|status|github-app register --webhook-url <url>)','安装、卸载或查看本地调度启动器，或注册其 GitHub App（install|uninstall|status|github-app register --webhook-url <url>）'),async handler(args,ctx){const result=await launcherCommand(args.trim().split(/\s+/).filter(part=>part.length>0));ctx.ui.notify(result.ok?result.value:result.error,result.ok?'info':'error');}});

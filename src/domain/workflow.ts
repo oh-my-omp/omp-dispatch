@@ -6,6 +6,8 @@ export const ESCALATE='escalate';
 export const ESCALATED='Escalated';
 /** The built-in holding state a work seat's question enters under PM integration; no workflow state may take its name. */
 export const ASKING='Asking';
+/** The built-in final state of a ticket whose issue was replaced while it asked; no workflow state may take its name. */
+export const REPLACED='Replaced';
 
 /** A predicate over source-confirmed facts and the machine's own visit counts. */
 export type Condition=
@@ -212,6 +214,7 @@ function states<S>(value:unknown,path:string,parse:(value:unknown,path:string)=>
     name(key,`${path}.${key}`);
     if(key===ESCALATE||key===ESCALATED)throw new Invalid(`${path}.${key}`,`${key} is reserved for Main's escalation`);
     if(key===ASKING)throw new Invalid(`${path}.${key}`,`${key} is reserved for a worker question the intent guardians settle`);
+    if(key===REPLACED)throw new Invalid(`${path}.${key}`,`${key} is reserved for a ticket whose issue was replaced while it asked`);
     result[key]=parse(item,`${path}.${key}`);
   }
   if(!Object.keys(result).length)throw new Invalid(path,'must define at least one state');

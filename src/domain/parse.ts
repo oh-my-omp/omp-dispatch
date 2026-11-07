@@ -1,6 +1,6 @@
 import type {ZodLikeSchema} from '@oh-my-pi/omptype/zod';
 import {agendaSchema,toolParametersSchema,type Agenda,type ParseError,type Result,type ToolParameters} from './model.ts';
-import {ASKING,ESCALATED,encodeWorkflow,parseWorkflow,verdictsMatch} from './workflow.ts';
+import {ASKING,ESCALATED,REPLACED,encodeWorkflow,parseWorkflow,verdictsMatch} from './workflow.ts';
 import {sameRef} from './identity.ts';
 
 function parse<T>(schema:ZodLikeSchema<T>,value:unknown):Result<T,ParseError> {
@@ -56,8 +56,10 @@ export function parseAgenda(value:unknown):Result<Agenda,ParseError> {
   const ticketStates=workflow.value.ticket.states,parentStates=workflow.value.parent.states;
   for(const ticket of agenda.tickets){
     const fail=(reason:string):Result<Agenda,ParseError>=>({ok:false,error:{path:'tickets',reason:`Ticket ${ticket.id} ${reason}`}});
-    if(ticket.state!==ESCALATED&&ticket.state!==ASKING&&!(ticket.state in ticketStates))return fail(`is in ${ticket.state}, which the agenda workflow does not define`);
+    if(ticket.state!==ESCALATED&&ticket.state!==ASKING&&ticket.state!==REPLACED&&!(ticket.state in ticketStates))return fail(`is in ${ticket.state}, which the agenda workflow does not define`);
     if((ticket.state===ASKING)!==(ticket.ask!==null))return fail(ticket.ask?`records a question outside ${ASKING}`:`is ${ASKING} without its question`);
+    if((ticket.state===REPLACED)!==(ticket.terminal?.kind==='replaced'))return fail(ticket.state===REPLACED?`is ${REPLACED} without the replacement`:`records a replacement outside ${REPLACED}`);
+    if(ticket.ask&&ticket.ask.from!==null&&ticketStates[ticket.ask.from]?.kind!=='work')return fail(`asked from ${ticket.ask.from}, which is not a work state of the agenda workflow`);
     for(const [name,gate] of Object.entries(ticket.gates)){
       const state=ticketStates[name];
       if(state?.kind!=='judge'||state.subject!==gate.stamp.kind||!verdictsMatch(state.judges,gate.verdicts))return fail(`holds a ${name} gate that does not match the agenda workflow`);

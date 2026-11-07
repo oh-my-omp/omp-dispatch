@@ -737,7 +737,7 @@ const cases: Case[] = [
 // PM-on variant of tree: the same delivery, plus the PM records it must leave.
 const tree = cases.find(item => item.name === 'tree')!;
 cases.push({...tree, name: 'tree-pm', pm: {holdComment: null}, check: async run => [...await tree.check(run), ...await pmChecks(run)]});
-cases.push(...askCases({agenda, waitUntil, start, kill, modelLog, seatSessions, simState}));
+cases.push(...askCases({agenda, waitUntil, start, kill, modelLog, seatSessions, simState, commonChecks}));
 
 /* ------------------------------------------------------------ main */
 

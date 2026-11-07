@@ -229,9 +229,11 @@ export function createHostPort(options:HostOptions):HostPort {
           manager.appendCustomEntry('dispatch-session-contract',{systemPrompt:created.session.systemPrompt,tools,mountedTools:created.session.getMountedXdevToolNames()});
           manager.appendSessionInit({systemPrompt:created.session.systemPrompt,task:input.prompt,tools,agent:agent.name,readOnly:input.seat!=='work',spawns});
         }
-        const prompt=fork&&handoff?.success
+        const opening=fork&&handoff?.success
           ? `Continue ticket ${input.ticketId} at revision ${input.revision}. Only the incremental handoff follows. Call dispatch read if the current contract or PR is needed.\n${JSON.stringify({notes:input.ticket.notes.slice(handoff.data.notes),rulings:input.ticket.rulings.slice(handoff.data.rulings)})}`
           : input.prompt;
+        // A seat resumed after its question was answered reads the answer first.
+        const prompt=input.resume===null?opening:`${input.resume}\n\n${opening}`;
         // A work seat's checkout outlives the seat for rework forks until finish; a judge checkout ends with its seat.
         const session=created.session,disposable=input.seat==='work'?null:tree;
         // Like native terminal-yield handling, abort the obsolete tool loop at a

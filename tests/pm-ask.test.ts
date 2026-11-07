@@ -20,7 +20,7 @@ const parsedWorkflow=parseWorkflow(YAML.parse(await Bun.file(new URL('../src/def
 if(!parsedWorkflow.ok)throw new Error(parsedWorkflow.error.reason);
 const workflow=parsedWorkflow.value;
 const repository={owner:'test',name:'dispatch'},issue={repo:repository,number:1},base='2'.repeat(40);
-const PM:PmContext={host:'test-host',pid:4242,status:{inProgress:'In Progress',done:'Done'},ask:{defaultTier:'simple',tierHelp:'simple is one detail; complex crosses modules.'}};
+const PM:PmContext={host:'test-host',pid:4242,status:{inProgress:'In Progress',done:'Done'},ask:{defaultTier:'simple',tierHelp:'simple is one detail; complex crosses modules.',resumePrompt:'Your question was answered:'}};
 const QUESTION='Should the cache key include the tenant id?';
 function source():Facts {
   return {viewer:'test',issues:[{ref:issue,body:'Deliver.',bodyHash:bodyHash('Deliver.'),updatedAt:1,state:'open',lastClose:null,lastReopen:null,children:[],pm:{markers:[],item:{id:'item',status:'Todo'}}}],prs:[],links:[],
@@ -142,7 +142,7 @@ test('the guardians receive the ask comment once; a request cut by a restart is 
     expect(facts.issues[0]!.pm!.markers.filter(marker=>marker.kind==='ask')).toHaveLength(1);
     expect(state.tickets[0]).toMatchObject({state:'Asking',ask:{comment:comment.id}});
     const status=await second.controller.execute({...MAIN,sessionId:'successor'},{op:'status'});
-    expect(status.ok&&(status.value as AgendaView).asking).toEqual([{ticketId:'one',question:QUESTION,comment:comment.id}]);
+    expect(status.ok&&(status.value as AgendaView).asking).toEqual([{ticketId:'one',question:QUESTION,comment:comment.id,agenda:null}]);
     expect(second.launches).toEqual([]);
     expect(new Attention().observe(state,second.host.active)).toEqual([]);
     expect(second.errors).toEqual([]);

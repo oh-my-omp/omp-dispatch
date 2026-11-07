@@ -20,7 +20,7 @@ const parsedWorkflow=parseWorkflow(YAML.parse(await Bun.file(new URL('../src/def
 if(!parsedWorkflow.ok)throw new Error(parsedWorkflow.error.reason);
 const workflow=parsedWorkflow.value;
 const repository={owner:'test',name:'dispatch'},issue={repo:repository,number:1},base='2'.repeat(40);
-const PM:PmContext={host:'test-host',pid:4242,status:{inProgress:'In Progress',done:'Done'},ask:{defaultTier:'simple',tierHelp:'simple is one detail; complex crosses modules.'}};
+const PM:PmContext={host:'test-host',pid:4242,status:{inProgress:'In Progress',done:'Done'},ask:{defaultTier:'simple',tierHelp:'simple is one detail; complex crosses modules.',resumePrompt:'Your question was answered:'}};
 function facts(pm:Facts['issues'][number]['pm']):Facts {
   return {viewer:'test',issues:[{ref:issue,body:'Deliver.',bodyHash:bodyHash('Deliver.'),updatedAt:1,state:'open',lastClose:null,lastReopen:null,children:[],pm}],prs:[],links:[],
     repos:[{repo:repository,defaultBranch:'main',defaultHead:base,bases:[{name:'main',state:{kind:'present',head:base,isDefault:true,rules:{required:[],strict:false,constraints:[]}}}]}],
@@ -41,7 +41,9 @@ test('a marker line round-trips; a malformed or incomplete one is invalid and pl
   expect(parseMarker(9,'<!-- pm:impl {"v":1,"host":"h"} -->').kind).toBe('invalid');
   expect(parseMarker(9,'<!-- pm:impl {"v":2,"host":"h","pid":7,"agenda":"a","session":"s","file":"f"} -->').kind).toBe('invalid');
   expect(parseMarker(9,'<!-- pm:vote {"v":1} -->').kind).toBe('invalid');
-  expect(parseMarker(9,'<!-- pm:reply {"v":1,"ask":12,"decision":null} -->')).toEqual({kind:'marker',fact:{id:9,kind:'reply',json:{v:1,ask:12,decision:null}}});
+  expect(parseMarker(9,'<!-- pm:reply {"v":1,"ask":12,"decision":null} -->')).toEqual({kind:'marker',fact:{id:9,kind:'reply',json:{v:1,ask:12,decision:null},body:''}});
+  // A reply carries the comment text above its marker line, its answer.
+  expect(parseMarker(9,'Use JSON.\n\nOne file per export.\n\n<!-- pm:reply {"v":1,"ask":12,"decision":null} -->')).toEqual({kind:'marker',fact:{id:9,kind:'reply',json:{v:1,ask:12,decision:null},body:'Use JSON.\n\nOne file per export.'}});
 });
 
 test('the PM configuration loads strictly and names the file and key path of every problem',async()=>{

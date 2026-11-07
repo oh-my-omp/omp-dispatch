@@ -8,8 +8,11 @@ import type {AgendaFiles,GitHubPort,GuardiansPort,HostPort,ProcessPort,SeatExit,
 import {createSourceReader,type SourceReceipt} from './source.ts';
 
 export type RuntimeError={kind:'domain';error:DomainError}|{kind:'storage';error:StateError}|{kind:'source'|'host'|'process';error:PortError}|{kind:'workflow';error:WorkflowError};
-/** Main's view: which tickets it may launch, which wait on a worker's question to the intent guardians, and which seats the relay currently runs. */
-export type AgendaView={agenda:Agenda;launchable:string[];asking:{ticketId:string;question:string;comment:number|null}[];seated:{ticketId:string;roles:Role[]}[]};
+/**
+ * Main's view: which tickets it may launch, which wait on a worker's question to the intent guardians (with the
+ * council agenda once the question went to the council), and which seats the relay currently runs.
+ */
+export type AgendaView={agenda:Agenda;launchable:string[];asking:{ticketId:string;question:string;comment:number|null;agenda:string|null}[];seated:{ticketId:string;roles:Role[]}[]};
 export type ControllerOutput=AgendaView|{active:string[]}|{ticket:Agenda['tickets'][number]|NonNullable<Agenda['closure']>}|{launched:SeatHandle[]};
 /**
  * `workflow` reads the workflow a new agenda will freeze; an attached agenda never consults it.
@@ -69,7 +72,7 @@ export class DispatchController {
     const ticketRoles=ticketSeatRoles(state.workflow),parentRoles=parentSeatRoles(state.workflow);
     const seated=[...state.tickets.map(ticket=>({ticketId:ticket.id,roles:ticketRoles})),...(state.closure?[{ticketId:state.closure.id,roles:parentRoles}]:[])]
       .map(({ticketId,roles})=>({ticketId,roles:roles.filter(role=>host.active(ticketId,role))})).filter(item=>item.roles.length>0);
-    const asking=state.tickets.flatMap(ticket=>ticket.ask?[{ticketId:ticket.id,question:ticket.ask.question,comment:ticket.ask.comment}]:[]);
+    const asking=state.tickets.flatMap(ticket=>ticket.ask?[{ticketId:ticket.id,question:ticket.ask.question,comment:ticket.ask.comment,agenda:ticket.ask.agenda}]:[]);
     return {ok:true,value:{agenda:structuredClone(state),launchable:state.tickets.filter(ticket=>awaitsLaunch(state,ticket)).map(ticket=>ticket.id),asking,seated}};
   }
   async startup(caller:Caller):Promise<Result<ControllerOutput,RuntimeError>> {
@@ -200,8 +203,11 @@ export class DispatchController {
     }else if(closure&&closureRoles(state).includes(role)){
       revision=closure.revision;workspace={kind:'base',target:state.tickets[0]!.target};
     }else return null;
+    const ask=this.options.pm?.context.ask??null;
+    // The answer to the ticket's question opens the first message of the work seat that resumes it.
+    const resume=seat.kind==='work'&&ticket&&ticket.resumeMessage!==null&&ask?`${ask.resumePrompt}\n\n${ticket.resumeMessage}`:null;
     return {agendaId:state.id,ticketId,revision,role,seat:seat.kind,agent:seat.agent,cwd:this.options.cwd,
-      prompt:seatBrief(state,ticketId,seat,this.options.pm?.context.ask??null),ticket:ticket??closure!,workspace};
+      prompt:seatBrief(state,ticketId,seat,ask),resume,ticket:ticket??closure!,workspace};
   }
   /**
    * Seats follow from ticket state alone: every started ticket and the parent closure receive their due seats

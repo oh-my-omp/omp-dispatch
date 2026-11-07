@@ -57,7 +57,7 @@ describe('workflow validation',()=>{
     const text=source.replace('submitted: Publishing','submitted: [{to: Publishing}, {when: {checks: passing}, to: Coding}]');
     expect(parseWorkflow(YAML.parse(text)).ok).toBe(false);
   });
-  for(const name of ['escalate','Escalated'])test(`parseWorkflow rejects reserved state name ${name}`,()=>invalid(workflow=>{workflow.ticket.states[name]={kind:'final',guard:null};}));
+  for(const name of ['escalate','Escalated','Asking','Replaced'])test(`parseWorkflow rejects reserved state name ${name}`,()=>invalid(workflow=>{workflow.ticket.states[name]={kind:'final',guard:null};}));
   test('parseWorkflow rejects unknown fields at workflow, machine, state and judge boundaries',()=>{
     for(const text of [source+'extra: true\n',source.replace('  initial: Coding','  extra: true\n  initial: Coding'),source.replace('      role: owner','      extra: true\n      role: owner'),source.replace('        - role: review','        - extra: true\n          role: review')])expect(parseWorkflow(YAML.parse(text)).ok).toBe(false);
   });
