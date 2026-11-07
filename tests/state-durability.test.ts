@@ -6,6 +6,7 @@ import type {Agenda} from '../src/domain/model.ts';
 import {createAgendaFiles} from '../src/ports/state.ts';
 import {z} from '@oh-my-pi/omptype/zod';
 import {YAML} from 'bun';
+import {encodeAgenda} from '../src/domain/parse.ts';
 import {parseWorkflow} from '../src/domain/workflow.ts';
 
 const parsedWorkflow=parseWorkflow(YAML.parse(await Bun.file(new URL('../src/default-workflow.yml',import.meta.url)).text()));
@@ -29,13 +30,15 @@ describe('durable ticket agenda files',()=>{
       if(!loaded.ok)throw new Error(loaded.error.message);
       expect(loaded.value.version).toBe(1);
       const advanced=structuredClone(state);advanced.version=2;advanced.tickets[0]!.notes.push({at:2,author:{kind:'main'},kind:'ruling',text:'Advance only after a durable predecessor.'});
-      expect(await files.save(9,advanced)).toMatchObject({ok:false,error:{kind:'versionConflict'}});
+      expect(await files.save(9,advanced)).toEqual({ok:false,error:{kind:'versionConflict',message:`Agenda ${state.id}: expected 9, found 1`}});
       expect(await files.save(1,advanced)).toEqual({ok:true,value:null});
-      const path=join(root,'state',`${state.id}.json`);
-      const encoded:unknown=JSON.parse(await readFile(path,'utf8'));
+      const path=join(root,'state',`${state.id}.json`),written=await readFile(path,'utf8');
+      expect(written).toBe(`${JSON.stringify({format:9,state:encodeAgenda(advanced)})}\n`);
+      const encoded:unknown=JSON.parse(written);
       expect(encoded).toMatchObject({format:9,state:{version:2}});
       await writeFile(path,JSON.stringify({format:8,state}));
       expect(await files.load(state.id)).toMatchObject({ok:false,error:{kind:'unsupportedFormat'}});
+      expect(await files.save(null,state)).toEqual({ok:false,error:{kind:'unsupportedFormat',message:`Agenda ${state.id}: unsupported format 8`}});
     }finally {await rm(root,{recursive:true,force:true});}
   });
 
@@ -63,6 +66,42 @@ console.log(JSON.stringify({result,directories}));`);
       if(errors)throw new Error(errors);
       const parsed=z.object({result:z.object({ok:z.literal(true),value:z.literal(null)}),directories:z.array(z.string())}).parse(JSON.parse(output));
       expect(new Set(parsed.directories)).toEqual(new Set([join(root,'state')]));
+    }finally {await rm(root,{recursive:true,force:true});}
+  });
+
+  test('an unchanged save repairs durability without replacing, whatever expectedVersion was passed',async()=>{
+    const root=await mkdtemp(join(tmpdir(),'dispatch-retry-'));
+    try {
+      const metrics={replaces:0,unchangedReplaces:0},files=createAgendaFiles(root,metrics),state=agenda();
+      expect(await files.save(null,state)).toEqual({ok:true,value:null});
+      expect(metrics.replaces).toBe(1);
+      expect(await files.save(null,state)).toEqual({ok:true,value:null});
+      expect(await files.save(9,state)).toEqual({ok:true,value:null});
+      expect(metrics.replaces).toBe(1);
+      const conflicted=structuredClone(state);conflicted.version=2;
+      expect(await files.save(5,conflicted)).toEqual({ok:false,error:{kind:'versionConflict',message:`Agenda ${state.id}: expected 5, found 1`}});
+      expect(metrics.replaces).toBe(1);
+    }finally {await rm(root,{recursive:true,force:true});}
+  });
+
+  test('list reads only the envelope head of each file and reports corrupt heads unchanged',async()=>{
+    const root=await mkdtemp(join(tmpdir(),'dispatch-list-'));
+    try {
+      const files=createAgendaFiles(root),state=agenda();
+      expect(await files.save(null,state)).toEqual({ok:true,value:null});
+      const own=await readFile(join(root,'state',`${state.id}.json`),'utf8');
+      const completed=(id:string,text:string)=>writeFile(join(root,'state',`${id}.json`),text.replace(state.id,id).replace('"lifecycle":"active"','"lifecycle":"completed"').slice(0,-10));
+      await completed('bbbbcccc-2222-4222-8222-222222222222',own);
+      await completed('ccccdddd-3333-4333-8333-333333333333',own);
+      expect(await files.list()).toEqual({ok:true,value:[
+        {id:'aaaabbbb-1111-4111-8111-111111111111',lifecycle:'active'},
+        {id:'bbbbcccc-2222-4222-8222-222222222222',lifecycle:'completed'},
+        {id:'ccccdddd-3333-4333-8333-333333333333',lifecycle:'completed'},
+      ]});
+      await writeFile(join(root,'state','99999999-9999-4999-8999-999999999999.json'),'{"format":9,"state":{"id":"99999999-9999-4999-8999-999999999999","version":1');
+      expect(await files.list()).toEqual({ok:false,error:{kind:'corruptState',message:'Agenda 99999999-9999-4999-8999-999999999999: invalid JSON'}});
+      await writeFile(join(root,'state','88888888-8888-4888-8888-888888888888.json'),own);
+      expect(await files.list()).toEqual({ok:false,error:{kind:'corruptState',message:'Agenda 88888888-8888-4888-8888-888888888888: envelope identity does not match filename'}});
     }finally {await rm(root,{recursive:true,force:true});}
   });
 });

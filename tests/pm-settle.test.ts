@@ -176,8 +176,9 @@ test('a question recorded before Dispatch kept its work state loads unchanged an
     const ask=await asked(h,facts);
     await h.controller.shutdown();
     // Rewrite the agenda file as an earlier Dispatch wrote it: no work state on the question, no answer on the ticket.
-    const saved=await createAgendaFiles(root).list();if(!saved.ok)throw new Error(saved.error.message);
-    const agenda=saved.value[0]!;
+    const files=createAgendaFiles(root),saved=await files.list();if(!saved.ok)throw new Error(saved.error.message);
+    const loaded=await files.load(saved.value[0]!.id);if(!loaded.ok)throw new Error(loaded.error.message);
+    const agenda=loaded.value;
     const {resumeMessage:_answer,...ticket}=agenda.tickets[0]!,{from:_from,agenda:_council,...question}=ticket.ask!;
     const legacy={...agenda,workflow:encodeWorkflow(agenda.workflow),tickets:[{...ticket,ask:question}]};
     await Bun.write(join(root,'state',`${agenda.id}.json`),`${JSON.stringify({format:9,state:legacy})}\n`);

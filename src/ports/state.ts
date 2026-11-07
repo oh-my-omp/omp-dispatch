@@ -5,7 +5,7 @@ import { z } from '@oh-my-pi/omptype/zod';
 import { agendaIdSchema } from '../domain/model.ts';
 import type { Agenda, AgendaId, Result } from '../domain/model.ts';
 import { encodeAgenda, parseAgenda } from '../domain/parse.ts';
-import type { AgendaFiles, FileMetrics, StateError } from './contracts.ts';
+import type { AgendaEntry, AgendaFiles, FileMetrics, StateError } from './contracts.ts';
 
 const envelopeSchema = z.object({
   format: z.number().int().min(Number.MIN_SAFE_INTEGER).max(Number.MAX_SAFE_INTEGER),
@@ -39,6 +39,19 @@ function decode(contents: string, id: AgendaId): StateResult<Agenda> {
   if (!state.ok) return failure('corruptState', `Agenda ${id}: ${state.error.path}: ${state.error.reason}`);
   if (state.value.id !== id) return failure('corruptState', `Agenda ${id}: envelope identity does not match filename`);
   return state;
+}
+
+type EnvelopeHead = { format: number; id: string; version: number; lifecycle: 'active' | 'completed' };
+
+const ENVELOPE_HEAD = /^\{"format":(-?\d+),"state":\{"id":"([^"]+)","version":(-?\d+),"nextId":-?\d+,"convenedAt":-?\d+,"lifecycle":"(active|completed)"/;
+
+/** The envelope head exactly as this module writes it; null on any older or foreign shape. */
+function envelopeHead(text: string): EnvelopeHead | null {
+  const head = ENVELOPE_HEAD.exec(text);
+  if (head === null) return null;
+  const format = head[1], id = head[2], version = head[3], lifecycle = head[4];
+  if (format === undefined || id === undefined || version === undefined || (lifecycle !== 'active' && lifecycle !== 'completed')) return null;
+  return { format: Number(format), id, version: Number(version), lifecycle };
 }
 
 async function syncDirectory(directory: string): Promise<void> {
@@ -79,7 +92,7 @@ export function createAgendaFiles(dataDir: string, metrics?: FileMetrics): Agend
     return decode(contents, id);
   }
 
-  async function list(): Promise<StateResult<readonly Agenda[]>> {
+  async function list(): Promise<StateResult<readonly AgendaEntry[]>> {
     let names: string[];
     try {
       names = await readdir(directory);
@@ -88,14 +101,35 @@ export function createAgendaFiles(dataDir: string, metrics?: FileMetrics): Agend
         ? { ok: true, value: [] }
         : unavailable('List agendas', error);
     }
-    const states: Agenda[] = [];
+    const entries: AgendaEntry[] = [];
     for (const name of names.sort()) {
       if (!name.endsWith('.json')) continue;
-      const state = await load(name.slice(0, -5));
+      const id = name.slice(0, -5);
+      if (!agendaIdSchema.safeParse(id).success) return failure('corruptState', 'Invalid agenda filename identity');
+      let head: EnvelopeHead | null = null;
+      try {
+        const handle = await open(join(directory, name), 'r');
+        try {
+          const buffer = Buffer.alloc(512);
+          const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+          head = envelopeHead(buffer.toString('utf8', 0, bytesRead));
+        } finally {
+          await handle.close();
+        }
+      } catch (error) {
+        return typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT'
+          ? failure('notFound', `Agenda ${id} was not found`)
+          : unavailable(`Read agenda ${id}`, error);
+      }
+      if (head !== null && head.format === 9 && head.id === id) {
+        entries.push({ id, lifecycle: head.lifecycle });
+        continue;
+      }
+      const state = await load(id);
       if (!state.ok) return state;
-      states.push(state.value);
+      entries.push({ id: state.value.id, lifecycle: state.value.lifecycle });
     }
-    return { ok: true, value: states };
+    return { ok: true, value: entries };
   }
 
   async function save(expectedVersion: number | null, supplied: Agenda): Promise<StateResult<null>> {
@@ -110,10 +144,16 @@ export function createAgendaFiles(dataDir: string, metrics?: FileMetrics): Agend
     const target = join(directory, `${state.id}.json`);
     // Capture the complete target once, before any I/O. Retrying never recomputes a transition.
     const contents = `${JSON.stringify({ format: 9, state: encoded })}\n`;
-    const previous = await load(state.id);
-    if (!previous.ok && previous.error.kind !== 'notFound') return previous;
+    let previousText: string | null;
+    try {
+      previousText = await readFile(target, 'utf8');
+    } catch (error) {
+      const missing = typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT';
+      if (!missing) return unavailable(`Read agenda ${state.id}`, error);
+      previousText = null;
+    }
 
-    if (previous.ok && JSON.stringify(previous.value) === JSON.stringify(state)) {
+    if (previousText === contents) {
       // Rename may already have succeeded while directory fsync failed. Repair
       // durability against the actual target without replacing unchanged content.
       try {
@@ -132,8 +172,23 @@ export function createAgendaFiles(dataDir: string, metrics?: FileMetrics): Agend
       }
     }
 
-    if (previous.ok ? previous.value.version !== expectedVersion : expectedVersion !== null) {
-      return failure('versionConflict', `Agenda ${state.id}: expected ${expectedVersion ?? 'no existing state'}, found ${previous.ok ? previous.value.version : 'no existing state'}`);
+    let previousVersion: number | null;
+    if (previousText === null) {
+      previousVersion = null;
+    } else {
+      const head = envelopeHead(previousText);
+      if (head !== null && head.format === 9 && head.id === state.id) {
+        previousVersion = head.version;
+      } else {
+        // Anything this module would not have written gets the full decode, so
+        // corrupt, unsupported or mismatched files report exactly as before.
+        const previous = decode(previousText, state.id);
+        if (!previous.ok) return previous;
+        previousVersion = previous.value.version;
+      }
+    }
+    if (previousVersion !== expectedVersion) {
+      return failure('versionConflict', `Agenda ${state.id}: expected ${expectedVersion ?? 'no existing state'}, found ${previousVersion ?? 'no existing state'}`);
     }
 
     const temporary = join(directory, `.${state.id}.${randomUUID()}.tmp`);
