@@ -32,26 +32,52 @@ const deliverySchema = object({
 export type PmRepos = z.infer<typeof reposSchema>;
 export type PmProject = z.infer<typeof projectSchema>;
 export type PmDelivery = z.infer<typeof deliverySchema>;
-export type PmConfig = { root: string; repos: PmRepos; project: PmProject; delivery: PmDelivery };
+export type PmParts = { repos: PmRepos; project: PmProject; delivery: PmDelivery };
+export type PmConfig = PmParts & { root: string };
 
 export const PM_FILES = { repos: 'shared/repos.yaml', project: 'shared/project.yaml', delivery: 'dispatch/delivery.yaml' } as const;
+const PM_FILE_LIST: readonly string[] = Object.values(PM_FILES);
 
-/** Each problem is one line `<file>: <key path>: <problem>`. */
-async function readConfig<T>(root: string, file: string, schema: ZodLikeSchema<T>): Promise<Result<T, string[]>> {
-  const path = join(root, file);
-  let source: string;
-  try { source = await readFile(path, 'utf8'); } catch (error) { return { ok: false, error: [`${path}: (file): cannot be read: ${error instanceof Error ? error.message : String(error)}`] }; }
+/** One problem: the file (relative to the PM config directory), the key path (`(file)` when the file as a whole is at fault), and the reason. */
+export type PmFileError = { file: string; key: string; message: string };
+
+function parseFile<T>(file: string, source: string, schema: ZodLikeSchema<T>): Result<T, PmFileError[]> {
   let value: unknown;
-  try { value = YAML.parse(source); } catch (error) { return { ok: false, error: [`${path}: (file): invalid YAML: ${error instanceof Error ? error.message : String(error)}`] }; }
+  try { value = YAML.parse(source); } catch (error) { return { ok: false, error: [{ file, key: '(file)', message: `invalid YAML: ${error instanceof Error ? error.message : String(error)}` }] }; }
   const parsed = schema.safeParse(value);
   if (parsed.success) return { ok: true, value: parsed.data };
-  return { ok: false, error: parsed.error.issues.map(issue => `${path}: ${issue.path.length ? issue.path.join('.') : '(root)'}: ${issue.message}`) };
+  return { ok: false, error: parsed.error.issues.map(issue => ({ file, key: issue.path.length ? issue.path.join('.') : '(root)', message: issue.message })) };
 }
 
-/** Reads and strictly validates every PM file under `root`; any unknown or missing key refuses the whole configuration. */
+function checkFile<T>(files: Readonly<Record<string, string>>, file: string, schema: ZodLikeSchema<T>): Result<T, PmFileError[]> {
+  const source = files[file];
+  if (source === undefined) return { ok: false, error: [{ file, key: '(file)', message: 'is missing' }] };
+  return parseFile(file, source, schema);
+}
+
+/**
+ * Strictly validates the full text of every PM file, keyed by its path relative to the PM config directory.
+ * Exactly the three PM files are accepted; each problem names its file and key path.
+ */
+export function validatePmFiles(files: Readonly<Record<string, string>>): Result<PmParts, PmFileError[]> {
+  const unknown: PmFileError[] = Object.keys(files)
+    .filter(file => !PM_FILE_LIST.includes(file))
+    .map(file => ({ file, key: '(file)', message: 'is not a PM configuration file' }));
+  const repos = checkFile(files, PM_FILES.repos, reposSchema);
+  const project = checkFile(files, PM_FILES.project, projectSchema);
+  const delivery = checkFile(files, PM_FILES.delivery, deliverySchema);
+  if (repos.ok && project.ok && delivery.ok && unknown.length === 0) return { ok: true, value: { repos: repos.value, project: project.value, delivery: delivery.value } };
+  return { ok: false, error: [...unknown, ...(repos.ok ? [] : repos.error), ...(project.ok ? [] : project.error), ...(delivery.ok ? [] : delivery.error)] };
+}
+
+/** Reads the three PM files under `root` and validates them; any unknown or missing key refuses the whole configuration. */
 export async function loadPmConfig(root: string): Promise<Result<PmConfig, string>> {
-  const [repos, project, delivery] = await Promise.all([
-    readConfig(root, PM_FILES.repos, reposSchema), readConfig(root, PM_FILES.project, projectSchema), readConfig(root, PM_FILES.delivery, deliverySchema)]);
-  if (repos.ok && project.ok && delivery.ok) return { ok: true, value: { root, repos: repos.value, project: project.value, delivery: delivery.value } };
-  return { ok: false, error: [repos, project, delivery].flatMap(item => item.ok ? [] : item.error).join('\n') };
+  const files: Record<string, string> = {};
+  const unreadable: PmFileError[] = [];
+  for (const file of PM_FILE_LIST) {
+    try { files[file] = await readFile(join(root, file), 'utf8'); } catch (error) { unreadable.push({ file, key: '(file)', message: `cannot be read: ${error instanceof Error ? error.message : String(error)}` }); }
+  }
+  const problems = unreadable.length > 0 ? { ok: false as const, error: unreadable } : validatePmFiles(files);
+  if (!problems.ok) return { ok: false, error: problems.error.map(item => `${join(root, item.file)}: ${item.key}: ${item.message}`).join('\n') };
+  return { ok: true, value: { root, ...problems.value } };
 }
