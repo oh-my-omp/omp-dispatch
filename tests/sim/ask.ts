@@ -159,6 +159,7 @@ export function askCases(sim: SimApi): Case[] {
     const ticket = (await sim.agenda(run))?.tickets[0];
     if (ticket?.state !== 'Asking') throw new Error(`${label}: the ticket is ${ticket?.state}, not still Asking`);
     if ((await owners(run)).length !== 1) throw new Error(`${label}: an Owner was seated while the ticket waited`);
+    console.log(`  ${run.name}: ${label}: ticket Asking at revision ${ticket.revision}, ask comment ${ticket.ask?.comment}, council agenda ${ticket.ask?.agenda}, one Owner session, notes ${JSON.stringify(ticket.notes.filter(note => note.kind === 'sourceChange').map(note => note.text))}`);
   };
   const userText = (content: unknown): string => typeof content === 'string' ? content
     : Array.isArray(content) ? content.flatMap(block => typeof block === 'object' && block !== null && 'text' in block && typeof block.text === 'string' ? [block.text] : []).join('') : '';
@@ -176,9 +177,10 @@ export function askCases(sim: SimApi): Case[] {
     const sessions = await owners(run);
     const [asking, resumed] = sessions;
     if (sessions.length !== 2 || !asking || !resumed || resumed.parent !== asking.id) failures.push(`expected the asking Owner and one fork of it, found ${sessions.map(session => `${session.id}<-${session.parent}`).join(', ')}`);
+    let first: string | undefined;
     if (asking && resumed) {
       const users = (session: SeatSession) => session.lines.flatMap(line => { const parsed = messageSchema.safeParse(line); return parsed.success && parsed.data.message.role === 'user' ? [userText(parsed.data.message.content)] : []; });
-      const first = users(resumed)[users(asking).length];
+      first = users(resumed)[users(asking).length];
       const prompt = run.pm ? z.object({resumePrompt: z.string()}).passthrough().parse(YAML.parse(readFileSync(join(run.pm, 'dispatch', 'delivery.yaml'), 'utf8'))).resumePrompt : '';
       if (!first?.startsWith(`${prompt}\n\n${ANSWER}\n\n`)) failures.push(`the resumed Owner's first message does not open with the resume prompt and the answer: ${JSON.stringify(first?.slice(0, 300))}`);
     }
@@ -189,6 +191,11 @@ export function askCases(sim: SimApi): Case[] {
     if (impls.length !== 2 || impls[0] !== asking?.id || impls[1] !== resumed?.id) failures.push(`impl markers name ${impls.join(', ')}, not the asking then the resumed Owner`);
     const woken = mainWoken(run).filter(note => /escalated:|failed:/.test(note));
     if (woken.length) failures.push(`Main was woken: ${woken.join('; ')}`);
+    console.log(`  ${run.name}: ticket ${ticket?.state} at revision ${ticket?.revision}, notes ${JSON.stringify(ticket?.notes.filter(note => note.kind === 'sourceChange').map(note => note.text))}`);
+    console.log(`  ${run.name}: Owner sessions ${sessions.map(session => `${session.id} (parentSession ${session.parent})`).join(', ')}`);
+    console.log(`  ${run.name}: issue markers ${markers.map(marker => `${marker.kind}#${marker.id}`).join(', ')}; impl sessions ${impls.join(', ')}`);
+    console.log(`  ${run.name}: resumed Owner's first user message: ${JSON.stringify(first?.slice(0, 200))}`);
+    console.log(`  ${run.name}: Main woken for ${JSON.stringify(mainWoken(run))}`);
     return failures;
   }
 
@@ -284,6 +291,7 @@ export function askCases(sim: SimApi): Case[] {
         if (sim.simState(run).prs.length) failures.push('a PR was opened for the replaced issue');
         const unhandled = readFileSync(`${run.github}/requests.jsonl`, 'utf8').split('\n').filter(line => line.includes('"unhandled":true'));
         if (unhandled.length) failures.push(`simulated GitHub got ${unhandled.length} unmodelled requests, first: ${unhandled[0]!.slice(0, 400)}`);
+        console.log(`  ask-replace: ticket ${ticket?.state}, terminal ${JSON.stringify(ticket?.terminal)}; Owner sessions ${sessions.map(session => session.id).join(', ')}; PRs ${sim.simState(run).prs.length}; agenda ${state?.lifecycle} after Main's finish`);
         return failures;
       },
     },
