@@ -20,6 +20,7 @@ import {runtimeErrorText} from './src/runtime/error-text.ts';
 import type {HostPort} from './src/ports/contracts.ts';
 import {coordinatorBriefing,parseCoordinatorFlag,type CoordinatorIdentity} from './src/runtime/coordinator.ts';
 import {DispatchController,type RuntimeError} from './src/runtime/controller.ts';
+import {RuntimeExit} from './src/runtime/exit.ts';
 
 const SLOT=Symbol.for('omp-dispatch.runtime.v4');
 type Identity={kind:'absent'}|{kind:'invalid';message:string}|({kind:'coordinator'}&CoordinatorIdentity);
@@ -38,6 +39,8 @@ class ProcessRuntime {
   private controller:DispatchController|null=null;
   private host:HostPort|null=null;
   private readonly attention=new Attention();
+  /** The host's graceful exit, granted only to a coordinator identity and spent once at an honest finish. */
+  private readonly exit=new RuntimeExit();
   private started=false;
   private deferred=false;
   readIdentity(pi:ExtensionAPI):Identity {
@@ -62,6 +65,11 @@ class ProcessRuntime {
     if(!turnEnded&&!binding.ctx.isIdle()){this.deferred=true;return;}
     this.deferred=false;
     const fresh=this.attention.observe(agenda,(ticketId,role)=>host.active(ticketId,role));
+    // A completed agenda has no decisions; the process may end with it. The tool's accepted `finish` and every
+    // relay path that confirms completion surface here through the controller's own snapshot, so the exit fires
+    // at this one gate and `session_shutdown` later keeps its `shutdown()` closing order. Unfinished states
+    // (Asking, Escalated, open decisions) pass the gate unspent and the coordinator keeps running.
+    this.exit.commit(agenda.lifecycle==='completed',agenda);
     if(!fresh.length)return;
     binding.pi.sendMessage({customType:'dispatch-attention',display:true,content:`Dispatch needs Main: ${fresh.join(', ')}. launch:<ticket> may be launched; escalated:<ticket>:<revision> awaits read and resolve; failed:<ticket>:<effect> is a failed PM effect (a record write, or the request asking the intent guardians to settle a worker question) that blocks finish until resolve settles it with retry, adopt or cancel, and a failed guardians request is sent again by resolve to Asking with retry on it; finish means every ticket and the closure are Done. Call dispatch status for the source-confirmed agenda; this notification is not a ticket snapshot.`},{triggerTurn:true,deliverAs:'nextTurn'});
   }
@@ -73,6 +81,8 @@ class ProcessRuntime {
     const root=AgentRegistry.global().get(MAIN_AGENT_ID)?.session;
     if(ctx.agent.id!==MAIN_AGENT_ID||ctx.agent.kind!=='main'||!root||root.sessionManager!==ctx.sessionManager)throw new Error('Dispatch requires the actual native Main');
     this.started=true;this.binding={pi,ctx};
+    // Only a coordinator identity reaches start, so the exit request binds to the exact context it was granted for.
+    this.exit.grant(()=>ctx.shutdown());
     const directory=resolve(ctx.cwd,this.directory.get(root.settings));
     const pmDirectory=this.pmConfigDir.get(root.settings).trim();
     let pm:PmConfig|null=null;
