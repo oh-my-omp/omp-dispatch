@@ -1,7 +1,7 @@
 import { z } from '@oh-my-pi/omptype/zod';
 
 /**
- * PM machine markers: the last line of a GitHub comment body, `<!-- pm:<kind> <compact JSON> -->`, whose JSON
+ * Meerkat machine markers: the last line of a GitHub comment body, `<!-- meerkat:<kind> <compact JSON> -->`, whose JSON
  * carries `"v":1` and every field of its kind. Fields a kind does not define are dropped when it is read.
  */
 const text = z.string().min(1);
@@ -29,11 +29,11 @@ export const markerFactSchema = z.union([
 export type MarkerFact = z.infer<typeof markerFactSchema>;
 export type Marker = { [Kind in MarkerKind]: { kind: Kind; json: Extract<MarkerFact, { kind: Kind }>['json'] } }[MarkerKind];
 
-const LINE = /^<!-- pm:([a-z]+) (\{.*\}) -->$/;
+const LINE = /^<!-- meerkat:([a-z]+) (\{.*\}) -->$/;
 
 /** The marker line for `marker`; a comment body ends with it. */
 export function formatMarker(marker: Marker): string {
-  return `<!-- pm:${marker.kind} ${JSON.stringify(marker.json)} -->`;
+  return `<!-- meerkat:${marker.kind} ${JSON.stringify(marker.json)} -->`;
 }
 
 export type MarkerRead = { kind: 'none' } | { kind: 'invalid'; reason: string } | { kind: 'marker'; fact: MarkerFact };
@@ -41,9 +41,9 @@ export type MarkerRead = { kind: 'none' } | { kind: 'invalid'; reason: string } 
 export function parseMarker(id: number, body: string): MarkerRead {
   const lines = body.trimEnd().split('\n');
   const last = lines.at(-1)?.trim() ?? '';
-  if (!last.startsWith('<!-- pm:')) return { kind: 'none' };
+  if (!last.startsWith('<!-- meerkat:')) return { kind: 'none' };
   const match = LINE.exec(last);
-  if (!match) return { kind: 'invalid', reason: `comment ${id}: marker line is not <!-- pm:<kind> <JSON> -->` };
+  if (!match) return { kind: 'invalid', reason: `comment ${id}: marker line is not <!-- meerkat:<kind> <JSON> -->` };
   let json: unknown;
   try { json = JSON.parse(match[2]!); } catch { return { kind: 'invalid', reason: `comment ${id}: marker JSON does not parse` }; }
   const kind = match[1];

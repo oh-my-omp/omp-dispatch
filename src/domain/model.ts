@@ -1,5 +1,5 @@
 import { z, type ZodLikeSchema } from '@oh-my-pi/omptype/zod';
-import { markerFactSchema } from '../pm/markers.ts';
+import { markerFactSchema } from '../meerkat/markers.ts';
 import { buildPublicGrammar } from './public-grammar.ts';
 
 export const {text,ordinal,revision,millisSchema,shaSchema,hashSchema,idSchema,agendaIdSchema,repoSchema,issueRefSchema,prRefSchema,shaRefSchema,targetSchema,roleSchema,tierSchema,entrySchema,conveneSchema,actionSchema,portInputSchema,toolParametersSchema} = buildPublicGrammar(z);
@@ -28,10 +28,10 @@ export type {Workflow};
 export type Action = z.infer<typeof actionSchema>;
 export const lifecycleEventSchema = object({ id: text, at: millisSchema });
 export type LifecycleEvent = z.infer<typeof lifecycleEventSchema>;
-/** What PM integration observes on an issue: its marker comments and its item in the configured Project; null when PM is off. */
-export const issuePmSchema = object({ markers: z.array(markerFactSchema), item: object({ id: text, status: text.nullable() }).nullable() });
-export type IssuePm = z.infer<typeof issuePmSchema>;
-export const issueSnapshotSchema = object({ ref: issueRefSchema, body: z.string(), bodyHash: hashSchema, updatedAt: millisSchema, state: z.enum(['open','closed']), lastClose: lifecycleEventSchema.nullable(), lastReopen: lifecycleEventSchema.nullable(), children: z.array(issueRefSchema), pm: issuePmSchema.nullable() });
+/** What Meerkat integration observes on an issue: its marker comments and its item in the configured Project; null when Meerkat is off. */
+export const issueMeerkatSchema = object({ markers: z.array(markerFactSchema), item: object({ id: text, status: text.nullable() }).nullable() });
+export type IssueMeerkat = z.infer<typeof issueMeerkatSchema>;
+export const issueSnapshotSchema = object({ ref: issueRefSchema, body: z.string(), bodyHash: hashSchema, updatedAt: millisSchema, state: z.enum(['open','closed']), lastClose: lifecycleEventSchema.nullable(), lastReopen: lifecycleEventSchema.nullable(), children: z.array(issueRefSchema), meerkat: issueMeerkatSchema.nullable() });
 export type IssueSnapshot = z.infer<typeof issueSnapshotSchema>;
 export const requiredCheckIdentitySchema = object({ name: text, source: z.union([object({kind:z.literal('any')}),object({kind:z.literal('app'),id:revision})]) });
 export type RequiredCheckIdentity = z.infer<typeof requiredCheckIdentitySchema>;
@@ -191,11 +191,11 @@ export type Caller = {agentId:string;sessionId:string;sessionFile:string|null;ki
 /** Internal operation from the controller, never part of the public grammar: a work seat's native session has started. */
 export type WorkerStarted = {ticketId:string;revision:number;role:Role;sessionId:string;sessionFile:string};
 /**
- * How a work seat's question is asked under PM integration: the tier it defaults to and the tier help its brief
+ * How a work seat's question is asked under Meerkat integration: the tier it defaults to and the tier help its brief
  * carries; and how the answer reaches the resumed seat: `resumePrompt` opens its first message, before the answer.
  */
-export type PmAsk = {defaultTier:Tier;tierHelp:string;resumePrompt:string};
-/** What the engine needs for PM integration: this coordinator process, the configured Status option names, and how a worker's question is asked. */
-export type PmContext = {host:string;pid:number;status:{inProgress:string;done:string};ask:PmAsk};
+export type MeerkatAsk = {defaultTier:Tier;tierHelp:string;resumePrompt:string};
+/** What the engine needs for Meerkat integration: this coordinator process, the configured Status option names, and how a worker's question is asked. */
+export type MeerkatContext = {host:string;pid:number;status:{inProgress:string;done:string};ask:MeerkatAsk};
 export type DomainError = {kind:'unauthorized'|'invalidTransition'|'staleRevision'|'sourceUnavailable'|'sourceChanged'|'notFound'|'ownershipBlocked'|'invalidTopology'|'agenda_attached';message:string};
 export type ParseError = {path:string;reason:string};

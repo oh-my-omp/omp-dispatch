@@ -1,9 +1,9 @@
 import {describe,expect,test} from 'bun:test';
-import {validatePmFiles} from '../src/pm/config.ts';
+import {validateMeerkatFiles} from '../src/meerkat/config.ts';
 import {serveConfigCheck} from '../src/launcher/config-check.ts';
 import {parseConfigCheckSettings,parseLauncherSettings} from '../src/launcher/settings.ts';
 
-const SIM=new URL('./sim/pm-config/',import.meta.url);
+const SIM=new URL('./sim/meerkat-config/',import.meta.url);
 const validDelivery='guardiansURL: http://127.0.0.1:7410\ndefaultTier: simple\ntierHelp: x\nresumePrompt: y\n';
 
 async function validFiles():Promise<Record<string,string>> {
@@ -14,9 +14,9 @@ async function validFiles():Promise<Record<string,string>> {
   };
 }
 
-describe('validatePmFiles',()=>{
+describe('validateMeerkatFiles',()=>{
   test('the valid set passes and yields the three parts',async()=>{
-    const checked=validatePmFiles(await validFiles());
+    const checked=validateMeerkatFiles(await validFiles());
     expect(checked.ok).toBe(true);
     if(checked.ok)expect(checked.value.delivery.defaultTier).toBe('simple');
   });
@@ -24,7 +24,7 @@ describe('validatePmFiles',()=>{
   test('an unknown key names its file and key',async()=>{
     const files=await validFiles();
     files['dispatch/delivery.yaml']=`${validDelivery}extra: 1\n`;
-    const checked=validatePmFiles(files);
+    const checked=validateMeerkatFiles(files);
     expect(checked.ok).toBe(false);
     if(!checked.ok)expect(checked.error).toEqual([expect.objectContaining({file:'dispatch/delivery.yaml',key:'extra'})]);
   });
@@ -32,7 +32,7 @@ describe('validatePmFiles',()=>{
   test('a missing key names its file and key',async()=>{
     const files=await validFiles();
     files['dispatch/delivery.yaml']=validDelivery.replace('resumePrompt: y\n','');
-    const checked=validatePmFiles(files);
+    const checked=validateMeerkatFiles(files);
     expect(checked.ok).toBe(false);
     if(!checked.ok)expect(checked.error).toEqual([expect.objectContaining({file:'dispatch/delivery.yaml',key:'resumePrompt'})]);
   });
@@ -40,14 +40,14 @@ describe('validatePmFiles',()=>{
   test('a missing referenced file is refused as the file itself',async()=>{
     const files=await validFiles();
     delete files['shared/repos.yaml'];
-    const checked=validatePmFiles(files);
+    const checked=validateMeerkatFiles(files);
     expect(checked.ok).toBe(false);
     if(!checked.ok)expect(checked.error).toEqual([{file:'shared/repos.yaml',key:'(file)',message:'is missing'}]);
   });
 
-  test('a file that is not one of the three PM files is refused',async()=>{
+  test('a file that is not one of the three Meerkat files is refused',async()=>{
     const files={...await validFiles(),'shared/extra.yaml':'a: 1\n'};
-    const checked=validatePmFiles(files);
+    const checked=validateMeerkatFiles(files);
     expect(checked.ok).toBe(false);
     if(!checked.ok)expect(checked.error).toEqual([expect.objectContaining({file:'shared/extra.yaml',key:'(file)'})]);
   });
@@ -55,7 +55,7 @@ describe('validatePmFiles',()=>{
   test('a value outside its enum names the key',async()=>{
     const files=await validFiles();
     files['dispatch/delivery.yaml']=validDelivery.replace('defaultTier: simple','defaultTier: urgent');
-    const checked=validatePmFiles(files);
+    const checked=validateMeerkatFiles(files);
     expect(checked.ok).toBe(false);
     if(!checked.ok)expect(checked.error).toEqual([expect.objectContaining({file:'dispatch/delivery.yaml',key:'defaultTier'})]);
   });
@@ -94,7 +94,7 @@ describe('config check listener',()=>{
   test('judges candidates over POST, refuses bad requests and methods, and answers preflight',async()=>{
     const logs:Readonly<Record<string,unknown>>[]=[];
     const listener=await serveConfigCheck({host:'127.0.0.1',port:0,log:entry=>logs.push(entry)});
-    const url=`http://127.0.0.1:${listener.port}/pm-config/check`;
+    const url=`http://127.0.0.1:${listener.port}/meerkat-config/check`;
     try {
       const files=await validFiles();
       const ok=await fetch(url,{method:'POST',body:JSON.stringify({files})});

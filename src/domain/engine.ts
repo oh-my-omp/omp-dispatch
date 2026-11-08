@@ -1,7 +1,7 @@
-import {draftAgenda,type Action,type Agenda,type Caller,type ClosureGate,type ConveneInput,type DeepReadonly,type DomainError,type Effect,type EffectResult,type Entry,type Facts,type IssueRef,type MergeCommitStamp,type NoteAuthor,type ParentStamp,type PmAsk,type PmContext,type PortError,type PortInput,type PrSnapshot,type PullRequestStamp,type ReadonlyAgenda,type Result,type Role,type Ticket,type Tier,type WorkerStarted,type Workflow} from './model.ts';
+import {draftAgenda,type Action,type Agenda,type Caller,type ClosureGate,type ConveneInput,type DeepReadonly,type DomainError,type Effect,type EffectResult,type Entry,type Facts,type IssueRef,type MeerkatAsk,type MeerkatContext,type MergeCommitStamp,type NoteAuthor,type ParentStamp,type PortError,type PortInput,type PrSnapshot,type PullRequestStamp,type ReadonlyAgenda,type Result,type Role,type Ticket,type Tier,type WorkerStarted,type Workflow} from './model.ts';
 import {bodyHash,canonical,contains,digest,exactClosingBody,nextId,sameRef,sameRepo,sameTarget,targetHead} from './identity.ts';
-import {formatMarker} from '../pm/markers.ts';
-import {settlement} from '../pm/settlement.ts';
+import {formatMarker} from '../meerkat/markers.ts';
+import {settlement} from '../meerkat/settlement.ts';
 import {validateTopology} from './parse.ts';
 import {ASKING,ESCALATE,ESCALATED,REPLACED,openVerdicts,pendingRoles,routeTarget,stagePassed,type Branch,type Condition,type Observe,type ParentState,type TicketState} from './workflow.ts';
 
@@ -498,7 +498,7 @@ function reconcilePass(pass:Pass,facts:Facts,at:number):void {
     const state=pass.state,ticket=state.tickets[index]!,ask=ticket.ask;
     if(!ask||ask.comment!==null)continue;
     const posted=state.effects.some(effect=>effect.ticketId===ticket.id&&effect.state.kind==='confirmed'&&effect.action.kind==='comment'&&effect.action.marker.kind==='ask'&&effect.action.marker.key===ask.session);
-    const marker=posted?facts.issues.find(issue=>sameRef(issue.ref,ticket.issue))?.pm?.markers.find(marker=>marker.kind==='ask'&&marker.json.session===ask.session):undefined;
+    const marker=posted?facts.issues.find(issue=>sameRef(issue.ref,ticket.issue))?.meerkat?.markers.find(marker=>marker.kind==='ask'&&marker.json.session===ask.session):undefined;
     if(!marker)continue;
     const writable=pass.ticket(index),asked=writable.ticket.ask!;
     asked.comment=marker.id;
@@ -507,7 +507,7 @@ function reconcilePass(pass:Pass,facts:Facts,at:number):void {
 }
 
 /**
- * Whether a failed or uncertain effect of each kind escalates its ticket. PM effects (`comment`, `setProjectField`,
+ * Whether a failed or uncertain effect of each kind escalates its ticket. Meerkat effects (`comment`, `setProjectField`,
  * `requestAnswer`) are written beside a live seat or for a ticket that waits on the intent guardians, so they never
  * escalate the ticket or supersede its seats: an uncertain one is settled by the next complete read, and a failed
  * one is shown to Main and blocks `finish` until Main resolves it.
@@ -522,7 +522,7 @@ export const ESCALATES_ON_FAILURE:Readonly<Record<Action['kind'],boolean>>={publ
 export const REPLAYABLE:Readonly<Record<Action['kind'],boolean>>={publishPr:false,merge:false,setIssueState:false,replaceBody:false,createIssue:false,attachChild:false,rerunChecks:false,comment:false,setProjectField:false,requestAnswer:true};
 
 /**
- * Whether `retry` without a source result sends the same effect again. PM records belong to no state entry, so no
+ * Whether `retry` without a source result sends the same effect again. Meerkat records belong to no state entry, so no
  * action state can request them afresh, and they are idempotent by marker key or field value: the executor adopts
  * one the source already shows instead of writing it twice. `requestAnswer` is requested only once per ask comment,
  * and the guardians accept a repeat for that comment; GitHub never shows it, so its retry always sends it again,
@@ -571,7 +571,7 @@ export function effectPrecondition(state:ReadonlyAgenda,effect:DeepReadonly<Effe
       const pr=facts.prs.find(pr=>sameRef(pr.ref,action.pr)),attempt=facts.checkAttempts.find(item=>sameRepo(item.repo,action.repo)&&item.workflowRunId===action.workflowRunId);
       return pr?.head===action.head&&attempt?.attempt===action.previousAttempt?null:'Workflow attempt or PR head changed';
     }
-    // PM records have no source precondition: the comment and the field value are confirmed by reading them back.
+    // Meerkat records have no source precondition: the comment and the field value are confirmed by reading them back.
     case 'comment':case 'setProjectField':return null;
     // The ticket must still wait on this question, which the effect's origin entry already establishes.
     case 'requestAnswer':return null;
@@ -606,10 +606,10 @@ export function satisfiedResult(state:ReadonlyAgenda,effect:DeepReadonly<Effect>
     }
     case 'comment':{
       const key=action.marker;
-      const marker=facts.issues.find(issue=>sameRef(issue.ref,action.issue))?.pm?.markers.find(marker=>(marker.kind==='impl'||marker.kind==='ask')&&marker.kind===key.kind&&marker.json.session===key.key);
+      const marker=facts.issues.find(issue=>sameRef(issue.ref,action.issue))?.meerkat?.markers.find(marker=>(marker.kind==='impl'||marker.kind==='ask')&&marker.kind===key.kind&&marker.json.session===key.key);
       return marker?{kind:'commented',issue:action.issue,comment:marker.id}:null;
     }
-    case 'setProjectField':return facts.issues.find(issue=>sameRef(issue.ref,action.issue))?.pm?.item?.status===action.option?{kind:'projectFieldSet',issue:action.issue,field:action.field,option:action.option}:null;
+    case 'setProjectField':return facts.issues.find(issue=>sameRef(issue.ref,action.issue))?.meerkat?.item?.status===action.option?{kind:'projectFieldSet',issue:action.issue,field:action.field,option:action.option}:null;
     // GitHub holds no trace of a guardians request; only the guardians' own response confirms it.
     case 'requestAnswer':return null;
   }
@@ -660,10 +660,10 @@ export function abandonSeat(state:Agenda,ticketId:string,role:Role,revision:numb
   escalateClosure(closure,`The ${role} seat ended without a handoff: ${reason}`);return true;
 }
 
-/* ------------------------------------------------------------ PM progress */
+/* ------------------------------------------------------------ Meerkat progress */
 
 /**
- * A work seat's question under PM integration: the ticket waits in `Asking`, with no seat and no call on Main, and
+ * A work seat's question under Meerkat integration: the ticket waits in `Asking`, with no seat and no call on Main, and
  * the decision item is written verbatim to its issue as a comment ending with an `ask` marker keyed by the asking session.
  * The work state it was asked from is kept, so an answer returns the ticket there.
  */
@@ -692,7 +692,7 @@ function askedFrom(state:ReadonlyAgenda,ticket:ReadonlyTicket,ask:DeepReadonly<N
 function settleAsk(pass:Pass,index:number,facts:Facts,at:number):void {
   const ticket=pass.state.tickets[index]!,ask=ticket.ask;
   if(ticket.state!==ASKING||!ask||ask.comment===null)return;
-  const markers=facts.issues.find(issue=>sameRef(issue.ref,ticket.issue))?.pm?.markers;
+  const markers=facts.issues.find(issue=>sameRef(issue.ref,ticket.issue))?.meerkat?.markers;
   if(!markers)return;
   const read=settlement(ask.comment,markers);
   for(const ignored of read.ignored){
@@ -728,27 +728,27 @@ function settleAsk(pass:Pass,index:number,facts:Facts,at:number):void {
  * that session, and its Project Status moves to in progress unless the source already shows it. The effects belong
  * to no state entry, so a seat that hands off before they run does not cancel them.
  */
-export function workerStarted(state:ReadonlyAgenda,started:WorkerStarted,pm:PmContext,facts:Facts):Result<Agenda,DomainError> {
+export function workerStarted(state:ReadonlyAgenda,started:WorkerStarted,meerkat:MeerkatContext,facts:Facts):Result<Agenda,DomainError> {
   const next=draftAgenda(state),ticket=next.tickets.find(ticket=>ticket.id===started.ticketId);
   if(!ticket)return reject('notFound','Unknown ticket');
   if(ticket.revision!==started.revision)return reject('staleRevision','The seat revision has been superseded');
   const definition=ticketDefinition(next.workflow,ticket);
   if(definition?.kind!=='work'||definition.role!==started.role)return reject('invalidTransition','Only the ticket\u2019s work seat starts its implementation');
-  const marker=formatMarker({kind:'impl',json:{v:1,host:pm.host,pid:pm.pid,agenda:next.id,session:started.sessionId,file:started.sessionFile}});
+  const marker=formatMarker({kind:'impl',json:{v:1,host:meerkat.host,pid:meerkat.pid,agenda:next.id,session:started.sessionId,file:started.sessionFile}});
   enqueue(next,ticket.id,{kind:'comment',issue:ticket.issue,body:`工人会话 ${started.sessionId} 开始实现本 issue。\n\n${marker}`,marker:{kind:'impl',key:started.sessionId}},null);
-  if(facts.issues.find(issue=>sameRef(issue.ref,ticket.issue))?.pm?.item?.status!==pm.status.inProgress)
-    enqueue(next,ticket.id,{kind:'setProjectField',issue:ticket.issue,field:'status',option:pm.status.inProgress},null);
+  if(facts.issues.find(issue=>sameRef(issue.ref,ticket.issue))?.meerkat?.item?.status!==meerkat.status.inProgress)
+    enqueue(next,ticket.id,{kind:'setProjectField',issue:ticket.issue,field:'status',option:meerkat.status.inProgress},null);
   // The answer to its question, if any, has now reached this seat.
   ticket.resumeMessage=null;
   next.version++;return {ok:true,value:next};
 }
 /** Every ticket that `next` newly entered into the final state `Done` gets its Project Status set to done. */
-export function statusOnDone(previous:ReadonlyAgenda,next:Agenda,pm:PmContext):void {
+export function statusOnDone(previous:ReadonlyAgenda,next:Agenda,meerkat:MeerkatContext):void {
   if(previous.id!==next.id)return;
   for(const ticket of next.tickets){
     if(ticket.state!=='Done'||ticketDefinition(next.workflow,ticket)?.kind!=='final')continue;
     const before=previous.tickets.find(item=>item.id===ticket.id);
-    if((ticket.visits.Done??0)>(before?.visits.Done??0))enqueue(next,ticket.id,{kind:'setProjectField',issue:ticket.issue,field:'status',option:pm.status.done},null);
+    if((ticket.visits.Done??0)>(before?.visits.Done??0))enqueue(next,ticket.id,{kind:'setProjectField',issue:ticket.issue,field:'status',option:meerkat.status.done},null);
   }
 }
 
@@ -765,7 +765,7 @@ function settleEffects(next:Agenda,operation:Extract<PortInput,{op:'resolve'}>,f
     switch(resolution.disposition){
       case 'cancel':effect.state={kind:'cancelled',reason:operation.ruling};break;
       case 'adopt':if(!result)return reject('sourceChanged','Source does not confirm the effect');confirmEffect(next,effect,result,facts,at);break;
-      // A source-confirmed effect is adopted. Otherwise a PM record or a guardians request is queued again under its id
+      // A source-confirmed effect is adopted. Otherwise a Meerkat record or a guardians request is queued again under its id
       // and intent, and any other effect is cancelled: resolving to its action state requests it afresh.
       case 'retry':
         if(result)confirmEffect(next,effect,result,facts,at);
@@ -835,8 +835,8 @@ function resolveTicket(next:Agenda,ticket:Ticket,operation:Extract<PortInput,{op
   return {ok:true,value:null};
 }
 
-/** `ask` is null while PM integration is off; with it on, a work seat's question waits on the intent guardians instead of Main. */
-export function applyOperation(state:ReadonlyAgenda,operation:PortInput,caller:Caller,facts:Facts,at:number,ask:PmAsk|null):Result<Agenda,DomainError> {
+/** `ask` is null while Meerkat integration is off; with it on, a work seat's question waits on the intent guardians instead of Main. */
+export function applyOperation(state:ReadonlyAgenda,operation:PortInput,caller:Caller,facts:Facts,at:number,ask:MeerkatAsk|null):Result<Agenda,DomainError> {
   const next=draftAgenda(state);
   if(next.lifecycle!=='active')return reject('invalidTransition','Agenda has completed');
   const main=caller.kind==='main'&&next.run.kind==='attached'&&caller.agentId===next.run.mainAgentId&&caller.sessionId===next.run.mainSessionId;

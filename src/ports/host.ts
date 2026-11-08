@@ -121,7 +121,7 @@ export function createHostPort(options:HostOptions):HostPort {
                 handedOff=true;
                 if(input.seat==='work'&&'ticket' in response.value&&'sessions' in response.value.ticket){
                   nativeManager.appendCustomEntry('dispatch-handoff',{ticketId:input.ticketId,notes:response.value.ticket.notes.length,rulings:response.value.ticket.rulings.length});
-                  // The engine parks a work seat's question in Asking only under PM integration; that seat stops here.
+                  // The engine parks a work seat's question in Asking only under Meerkat integration; that seat stops here.
                   asked=response.value.ticket.state===ASKING;
                 }
               }

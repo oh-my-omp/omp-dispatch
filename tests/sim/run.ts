@@ -11,7 +11,7 @@ import {basename, join, resolve} from 'node:path';
 import {YAML, type Subprocess} from 'bun';
 import {z} from '@oh-my-pi/omptype/zod';
 import type {Agenda} from '../../src/domain/model.ts';
-import {parseMarker} from '../../src/pm/markers.ts';
+import {parseMarker} from '../../src/meerkat/markers.ts';
 import {encodeWorkflow, parseWorkflow, parentSeatRoles, workflowAgents, type ParentState, type TicketState, type Workflow} from '../../src/domain/workflow.ts';
 import {belongsTo} from '../../src/domain/engine.ts';
 import {createAgendaFiles} from '../../src/ports/state.ts';
@@ -20,8 +20,8 @@ import type {Expect, Scenario, TicketSpec} from './scenario.ts';
 import {askCases} from './ask.ts';
 
 const ROOT = resolve(import.meta.dir, '../..');
-/** The PM configuration PM-on scenarios point the `pmConfigDir` plugin setting at; its Project is the simulated `sim` #1. */
-const PM_CONFIG = join(ROOT, 'tests/sim/pm-config');
+/** The Meerkat configuration Meerkat-on scenarios point the `meerkatConfigDir` plugin setting at; its Project is the simulated `sim` #1. */
+const MEERKAT_CONFIG = join(ROOT, 'tests/sim/meerkat-config');
 const REPO = {owner: 'sim', name: 'arena'};
 const KEY = `${REPO.owner}/${REPO.name}`;
 // Long enough for the abandon scenario's injected provider failure: omp retries it eleven times, about 30 seconds apart.
@@ -53,8 +53,8 @@ const workRoles = (workflow: Workflow) => [...new Set(Object.values(workflow.tic
 
 export type Run = {
   name: string; dir: string; github: string; bin: string; work: string; data: string; mainSessions: string;
-  /** `pm` is the PM configuration directory the run's `pmConfigDir` plugin setting names, or null with PM integration off. */
-  scenarioFile: string; scenario: Scenario; workflow: Workflow; rootIssue: number; pm: string | null; proc: Subprocess<'pipe', number, number> | null; starts: number;
+  /** `meerkat` is the Meerkat configuration directory the run's `meerkatConfigDir` plugin setting names, or null with Meerkat integration off. */
+  scenarioFile: string; scenario: Scenario; workflow: Workflow; rootIssue: number; meerkat: string | null; proc: Subprocess<'pipe', number, number> | null; starts: number;
 };
 export type Case = {
   name: string;
@@ -63,12 +63,12 @@ export type Case = {
   /** Agenda state files the data directory holds before the first start, copied unchanged; each is named `<agenda id>.json`. */
   saved?: string[];
   /**
-   * PM integration on, with PM_CONFIG. `holdComment` makes the simulated GitHub hold the comment request that finds
+   * Meerkat integration on, with MEERKAT_CONFIG. `holdComment` makes the simulated GitHub hold the comment request that finds
    * `skip` comments, `at` before or after recording it, touching `markers/comment-arrived` until `markers/release-comment`
    * or `markers/drop-comment` exists. `guardiansURL` replaces the configuration's intent guardians address in a copy made
    * for the run.
    */
-  pm?: {holdComment: Pick<NonNullable<SimState['commentHold']>, 'skip' | 'at'> | null; guardiansURL?: string};
+  meerkat?: {holdComment: Pick<NonNullable<SimState['commentHold']>, 'skip' | 'at'> | null; guardiansURL?: string};
   files: Record<string, string>;
   /** Issue titles in creation order; issue N is the Nth entry. The first may list children. */
   issues: {title: string; children?: number[]}[];
@@ -89,7 +89,7 @@ function setup(spec: Case): Run {
   const bin = seedGitHub(github, {viewer: 'sim', ciDefault: spec.ci.default, ciFailMarker: spec.ci.failMarker,
     repos: [{...REPO, defaultBranch: 'main', requiredChecks: spec.requiredChecks, files: spec.files}],
     issues: spec.issues.map(issue => ({repo: KEY, title: issue.title, body: `Simulated ${issue.title}.`, ...(issue.children ? {children: issue.children} : {})})),
-    commentHold: spec.pm?.holdComment ? {...spec.pm.holdComment, arrived: join(markers, 'comment-arrived'), release: join(markers, 'release-comment'), drop: join(markers, 'drop-comment')} : null});
+    commentHold: spec.meerkat?.holdComment ? {...spec.meerkat.holdComment, arrived: join(markers, 'comment-arrived'), release: join(markers, 'release-comment'), drop: join(markers, 'drop-comment')} : null});
   const workflow = spec.workflow ?? SIM_WORKFLOW;
   // Every agent the workflow names is a scripted seat; the data directory's workflow.yml is the override convene reads (JSON is YAML).
   for (const agent of workflowAgents(workflow))
@@ -103,17 +103,17 @@ function setup(spec: Case): Run {
   const scenarioFile = join(dir, 'scenario.json');
   writeFileSync(scenarioFile, JSON.stringify(scenario, null, 1));
   writeFileSync(scenario.log, '');
-  let pm: string | null = spec.pm ? PM_CONFIG : null;
-  if (spec.pm?.guardiansURL) {
-    pm = join(dir, 'pm-config');
-    cpSync(PM_CONFIG, pm, {recursive: true});
-    const delivery = join(pm, 'dispatch', 'delivery.yaml');
-    writeFileSync(delivery, readFileSync(delivery, 'utf8').replace(/^guardiansURL: .*$/m, `guardiansURL: ${spec.pm.guardiansURL}`));
+  let meerkat: string | null = spec.meerkat ? MEERKAT_CONFIG : null;
+  if (spec.meerkat?.guardiansURL) {
+    meerkat = join(dir, 'meerkat-config');
+    cpSync(MEERKAT_CONFIG, meerkat, {recursive: true});
+    const delivery = join(meerkat, 'dispatch', 'delivery.yaml');
+    writeFileSync(delivery, readFileSync(delivery, 'utf8').replace(/^guardiansURL: .*$/m, `guardiansURL: ${spec.meerkat.guardiansURL}`));
   }
   // The coordinator's own settings come only from the work directory's project plugin overrides, the store
   // `/settings` and `omp plugin config` write; `start` keeps their environment variables out of omp.
-  writeFileSync(join(work, '.omp', 'plugin-overrides.json'), JSON.stringify({settings: {'omp-dispatch': {dataDir: data, recomputeIntervalSeconds: '1', pmConfigDir: pm ?? ''}}}, null, 1));
-  return {name: spec.name, dir, github, bin, work, data, mainSessions: join(dir, 'main-sessions'), scenarioFile, scenario, workflow, rootIssue: spec.rootIssue, pm, proc: null, starts: 0};
+  writeFileSync(join(work, '.omp', 'plugin-overrides.json'), JSON.stringify({settings: {'omp-dispatch': {dataDir: data, recomputeIntervalSeconds: '1', meerkatConfigDir: meerkat ?? ''}}}, null, 1));
+  return {name: spec.name, dir, github, bin, work, data, mainSessions: join(dir, 'main-sessions'), scenarioFile, scenario, workflow, rootIssue: spec.rootIssue, meerkat, proc: null, starts: 0};
 }
 
 function start(run: Run): void {
@@ -123,7 +123,7 @@ function start(run: Run): void {
   const config = join(run.dir, 'omp-config.yml');
   writeFileSync(config, 'retry:\n  enabled: false\n');
   // The operator's environment would take precedence over the run's plugin settings, so none of it reaches omp.
-  const {OMP_DISPATCH_DIR: _dir, OMP_DISPATCH_RECOMPUTE_SECONDS: _interval, OMP_DISPATCH_PM_CONFIG: _pm, ...inherited} = process.env;
+  const {OMP_DISPATCH_DIR: _dir, OMP_DISPATCH_RECOMPUTE_SECONDS: _interval, OMP_DISPATCH_MEERKAT_CONFIG: _meerkat, ...inherited} = process.env;
   run.proc = Bun.spawn(['omp', '--mode', 'rpc', '--no-ui', '--no-extensions', '-e', join(ROOT, 'index.ts'), '-e', join(ROOT, 'tests/sim/extension.ts'),
     '--model', 'sim/main', '--session-dir', run.mainSessions, '--dispatch', `${KEY}#${run.rootIssue}`, '--config', config], {
     cwd: run.work, stdin: 'pipe', stdout, stderr,
@@ -314,11 +314,11 @@ async function commonChecks(run: Run, expectOnMain: Expect, expected?: Record<st
     }
   }
   for (const issue of sim.issues) if (issue.state !== 'CLOSED') failures.push(`issue #${issue.number} is still open`);
-  // Without PM integration, Dispatch leaves no PM record on GitHub.
-  if (!run.pm) {
-    const marked = sim.issues.flatMap(issue => issue.comments.filter(comment => comment.body.includes('<!-- pm:')).map(() => issue.number));
-    if (marked.length) failures.push(`PM is off, but issues ${marked.join(', ')} carry pm: comments`);
-    if (sim.project.items.length) failures.push(`PM is off, but the Project holds items ${JSON.stringify(sim.project.items)}`);
+  // Without Meerkat integration, Dispatch leaves no Meerkat record on GitHub.
+  if (!run.meerkat) {
+    const marked = sim.issues.flatMap(issue => issue.comments.filter(comment => comment.body.includes('<!-- meerkat:')).map(() => issue.number));
+    if (marked.length) failures.push(`Meerkat is off, but issues ${marked.join(', ')} carry meerkat: comments`);
+    if (sim.project.items.length) failures.push(`Meerkat is off, but the Project holds items ${JSON.stringify(sim.project.items)}`);
   }
   for (const [path, content] of Object.entries(expectOnMain)) {
     const actual = gitIn(run, ['show', `main:${path}`]);
@@ -332,10 +332,10 @@ function owners(sessions: SeatSession[], ticket: string, role = 'owner'): SeatSe
 }
 
 /**
- * PM records of a completed PM-on run: every work seat session has exactly one `impl` marker on its ticket's issue,
+ * Meerkat records of a completed Meerkat-on run: every work seat session has exactly one `impl` marker on its ticket's issue,
  * naming that session, its file, this host and the agenda, and every ticket's Project Status went In Progress, then Done.
  */
-async function pmChecks(run: Run): Promise<string[]> {
+async function meerkatChecks(run: Run): Promise<string[]> {
   const failures: string[] = [];
   const state = await agenda(run), sim = simState(run);
   if (!state) return ['no agenda'];
@@ -356,7 +356,7 @@ async function pmChecks(run: Run): Promise<string[]> {
   }
   if (run.scenario.parent !== null && sim.project.items.some(item => item.number === run.scenario.parent)) failures.push('the parent issue was given a Project Status');
   const unconfirmed = state.effects.filter(effect => (effect.action.kind === 'comment' || effect.action.kind === 'setProjectField') && effect.state.kind !== 'confirmed');
-  if (unconfirmed.length) failures.push(`PM effects not source-confirmed: ${JSON.stringify(unconfirmed.map(effect => ({id: effect.id, kind: effect.action.kind, state: effect.state.kind})))}`);
+  if (unconfirmed.length) failures.push(`Meerkat effects not source-confirmed: ${JSON.stringify(unconfirmed.map(effect => ({id: effect.id, kind: effect.action.kind, state: effect.state.kind})))}`);
   return failures;
 }
 
@@ -368,13 +368,13 @@ const ticket = (id: string, issue: number, owner: TicketSpec['owner'], gate: Exp
 const TREE_FILES = {'a1.txt': '0\n', 'a2.txt': '0\n', 'shared.txt': 'L1=0\nL2=0\n', 'c.txt': '0\n', 'd.txt': '0\n', 'e.txt': '1\n'};
 const TREE_DONE = {'a1.txt': '1\n', 'a2.txt': '1\n', 'shared.txt': 'L1=1\nL2=1\n', 'c.txt': '1\n', 'c.verify': '1\n', 'd.txt': '1\n', 'e.txt': '1\n'};
 
-/** The leftover agenda of the 2026-11-07 incident: active, Escalated, `parent: null`, one ticket on oh-my-omp/pm-e2e-code#100. */
+/** The leftover agenda of the 2026-11-07 incident: active, Escalated, `parent: null`, one ticket on mouriya-s-lab/meerkat-e2e-code#100. */
 const FOREIGN_AGENDA = join(ROOT, 'tests/sim/fixtures/9c825bdb-049d-4098-8836-0559bfd96760.json');
 
-// restart-pm: the gates reject round one, and the simulated GitHub holds the rework Owner's impl comment, the second
+// restart-meerkat: the gates reject round one, and the simulated GitHub holds the rework Owner's impl comment, the second
 // comment request; the driver kills the coordinator once the hold is reached, so the order of the write and the kill is fixed.
-const RESTART_PM = {files: {'m.txt': '0\n'}, issues: [{title: 'M'}], requiredChecks: [], ci: {default: 'SUCCESS' as const, failMarker: null}, rootIssue: 1};
-const RESTART_PM_TICKET = ticket('M', 1, [commit({'m.txt': '1\n'}), commit({'m.verify': '1\n'})], {'m.txt': '1\n', 'm.verify': '1\n'});
+const RESTART_MEERKAT = {files: {'m.txt': '0\n'}, issues: [{title: 'M'}], requiredChecks: [], ci: {default: 'SUCCESS' as const, failMarker: null}, rootIssue: 1};
+const RESTART_MEERKAT_TICKET = ticket('M', 1, [commit({'m.txt': '1\n'}), commit({'m.verify': '1\n'})], {'m.txt': '1\n', 'm.verify': '1\n'});
 /** The held comment's effect: the rework Owner's impl comment, the second comment effect. */
 const heldComment = (state: Agenda | null) => state?.effects.filter(effect => effect.action.kind === 'comment')[1];
 const commentCount = (run: Run) => simState(run).issues.reduce((count, issue) => count + issue.comments.length, 0);
@@ -385,11 +385,11 @@ const heldBody = (state: Agenda | null) => { const held = heldComment(state); re
 const mainNotifications = (run: Run) => modelLog(run).filter(entry => entry.kind === 'main').map(entry => entry.note.slice(entry.note.indexOf(':') + 1).split(', '));
 
 /**
- * Every restart-pm branch: the delivery and PM records hold, the held comment's effect is source-confirmed after
+ * Every restart-meerkat branch: the delivery and Meerkat records hold, the held comment's effect is source-confirmed after
  * `attempts` sends, M never escalated, and GitHub recorded one comment request per Owner session.
  */
-async function restartPmChecks(run: Run, attempts: number): Promise<string[]> {
-  const failures = [...await commonChecks(run, {'m.txt': '1\n', 'm.verify': '1\n'}), ...await pmChecks(run)];
+async function restartMeerkatChecks(run: Run, attempts: number): Promise<string[]> {
+  const failures = [...await commonChecks(run, {'m.txt': '1\n', 'm.verify': '1\n'}), ...await meerkatChecks(run)];
   const state = await agenda(run);
   const held = heldComment(state);
   const m = ticketOf(state, 'M');
@@ -425,7 +425,7 @@ async function killBeforeWrite(run: Run, outcome: 'release' | 'drop'): Promise<v
 
 /** A branch Main settled by retry: the failed: notification, a refused finish, then the accepted retry, and one comment with the held body. */
 async function retriedChecks(run: Run, attempts: number): Promise<string[]> {
-  const failures = await restartPmChecks(run, attempts);
+  const failures = await restartMeerkatChecks(run, attempts);
   const state = await agenda(run);
   const held = heldComment(state)!;
   const key = `failed:M:${held.id}`;
@@ -638,10 +638,10 @@ const cases: Case[] = [
   {
     // The comment is recorded before the kill and only its response is lost: after resume the next GitHub read
     // confirms it, Main is never asked about it, and M takes no ruling.
-    name: 'restart-pm/arrived',
-    pm: {holdComment: {skip: 1, at: 'afterWrite'}},
-    ...RESTART_PM,
-    scenario: () => ({parent: null, closure: {}, tickets: [RESTART_PM_TICKET]}),
+    name: 'restart-meerkat/arrived',
+    meerkat: {holdComment: {skip: 1, at: 'afterWrite'}},
+    ...RESTART_MEERKAT,
+    scenario: () => ({parent: null, closure: {}, tickets: [RESTART_MEERKAT_TICKET]}),
     async drive(run) {
       await waitUntil(run, 'the held impl comment recorded', () => existsSync(join(run.dir, 'markers', 'comment-arrived')));
       if (commentCount(run) !== 2) throw new Error(`the held comment is not on the simulated GitHub before the kill: ${commentCount(run)} comments`);
@@ -651,7 +651,7 @@ const cases: Case[] = [
       await waitUntil(run, 'completion after resume', completed);
     },
     async check(run) {
-      const failures = await restartPmChecks(run, 1);
+      const failures = await restartMeerkatChecks(run, 1);
       const m = ticketOf(await agenda(run), 'M');
       if (m?.rulings.length) failures.push(`M took rulings: ${JSON.stringify(m.rulings)}`);
       const failed = mainNotifications(run).flat().filter(key => key.startsWith('failed:'));
@@ -663,20 +663,20 @@ const cases: Case[] = [
     // The kill lands before the comment is recorded. Resume finds no comment, so the effect fails, Main is woken with
     // failed:M:<effect> and finish is refused. The killed process's request reaches GitHub late, and Main's
     // resolve with retry adopts that source copy as confirmed without sending it again.
-    name: 'restart-pm/lost',
-    pm: {holdComment: {skip: 1, at: 'beforeWrite'}},
-    ...RESTART_PM,
-    scenario: markers => ({parent: null, closure: {}, retryFailed: join(markers, 'retry-failed'), tickets: [RESTART_PM_TICKET]}),
+    name: 'restart-meerkat/lost',
+    meerkat: {holdComment: {skip: 1, at: 'beforeWrite'}},
+    ...RESTART_MEERKAT,
+    scenario: markers => ({parent: null, closure: {}, retryFailed: join(markers, 'retry-failed'), tickets: [RESTART_MEERKAT_TICKET]}),
     drive: run => killBeforeWrite(run, 'release'),
     check: run => retriedChecks(run, 1),
   },
   {
     // As lost, but the killed process's request never reaches GitHub: Main's resolve with retry sends the comment
     // again, and the next GitHub read confirms it.
-    name: 'restart-pm/dropped',
-    pm: {holdComment: {skip: 1, at: 'beforeWrite'}},
-    ...RESTART_PM,
-    scenario: markers => ({parent: null, closure: {}, retryFailed: join(markers, 'retry-failed'), tickets: [RESTART_PM_TICKET]}),
+    name: 'restart-meerkat/dropped',
+    meerkat: {holdComment: {skip: 1, at: 'beforeWrite'}},
+    ...RESTART_MEERKAT,
+    scenario: markers => ({parent: null, closure: {}, retryFailed: join(markers, 'retry-failed'), tickets: [RESTART_MEERKAT_TICKET]}),
     drive: run => killBeforeWrite(run, 'drop'),
     check: run => retriedChecks(run, 2),
   },
@@ -782,9 +782,9 @@ const cases: Case[] = [
     },
   },
 ];
-// PM-on variant of tree: the same delivery, plus the PM records it must leave.
+// Meerkat-on variant of tree: the same delivery, plus the Meerkat records it must leave.
 const tree = cases.find(item => item.name === 'tree')!;
-cases.push({...tree, name: 'tree-pm', pm: {holdComment: null}, check: async run => [...await tree.check(run), ...await pmChecks(run)]});
+cases.push({...tree, name: 'tree-meerkat', meerkat: {holdComment: null}, check: async run => [...await tree.check(run), ...await meerkatChecks(run)]});
 cases.push(...askCases({agenda, waitUntil, start, kill, modelLog, seatSessions, simState, commonChecks}));
 
 /* ------------------------------------------------------------ main */

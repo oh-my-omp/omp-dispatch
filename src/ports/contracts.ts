@@ -3,8 +3,8 @@ import type {Agenda,AgendaId,Caller,CheckAttempt,ClosureGate,CoordinatorProcess,
 
 export type PrWrite = {headRepo:Repo;branch:string;head:Sha;target:Target;title:string;body:string};
 export type IssueWrite = {repo:Repo;title:string;body:string};
-/** The Project PM integration reads and writes: its owner login, number, and the name of its Status field. */
-export type PmProjectSource = {owner:string;number:number;statusField:string};
+/** The Project Meerkat integration reads and writes: its owner login, number, and the name of its Status field. */
+export type MeerkatProjectSource = {owner:string;number:number;statusField:string};
 export interface GitHubPort {
   facts(scope:SourceScope,cause:string):Promise<Result<Facts,PortError>>;
   contains(repo:Repo,ancestor:Sha,descendant:Sha):Promise<Result<'contains'|'notContained'|'missing',PortError>>;

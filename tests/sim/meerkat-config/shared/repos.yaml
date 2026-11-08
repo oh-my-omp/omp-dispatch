@@ -1,0 +1,9 @@
+# Meerkat configuration the Meerkat-on simulations point the meerkatConfigDir plugin setting at; the simulated GitHub serves Project sim #1.
+agenda:
+  repo: sim/agenda
+  project: {owner: sim, number: 1}
+code:
+  - repo: sim/arena
+    cwd: /tmp/dispatch-sim-arena
+design: [sim/design]
+omp: []

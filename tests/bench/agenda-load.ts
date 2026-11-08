@@ -37,7 +37,7 @@ function success<T>(value:T):Result<T,PortError>{return {ok:true,value};}
 function unexpected():never {throw new Error('Unexpected port call');}
 
 const source:Facts={viewer:'bench',prs:[],links:[],maintenance:[],commits:[],checkAttempts:[],createdIssues:[],branches:[],
-  issues:issues.map(ref=>({ref,body:`Deliver ${ref.number}.`,bodyHash:bodyHash(`Deliver ${ref.number}.`),updatedAt:1,state:'open' as const,lastClose:null,lastReopen:null,children:[],pm:null})),
+  issues:issues.map(ref=>({ref,body:`Deliver ${ref.number}.`,bodyHash:bodyHash(`Deliver ${ref.number}.`),updatedAt:1,state:'open' as const,lastClose:null,lastReopen:null,children:[],meerkat:null})),
   repos:[{repo:repository,defaultBranch:'main',defaultHead:BASE,bases:[{name:'main',state:{kind:'present',head:BASE,isDefault:true,rules:{required:[],strict:false,constraints:[]}}}]}]};
 // The fixture's own copies are not agenda copies, so they bypass the clone counter below.
 const realClone=globalThis.structuredClone;
@@ -56,7 +56,7 @@ const root=await mkdtemp(join(tmpdir(),'dispatch-bench-'));
 const counters={saves:0,changes:0};
 function controller(pid:number,files:AgendaFiles):DispatchController {
   const counted:AgendaFiles={load:id=>files.load(id),list:()=>files.list(),save:(expected,state)=>{counters.saves++;return files.save(expected,state);}};
-  const dispatch=new DispatchController({issue:issues[0]!,files:counted,github,host,process:processPort(pid),cwd:root,workflow:async()=>({ok:true,value:workflow}),intervalSeconds:3600,pm:null,
+  const dispatch=new DispatchController({issue:issues[0]!,files:counted,github,host,process:processPort(pid),cwd:root,workflow:async()=>({ok:true,value:workflow}),intervalSeconds:3600,meerkat:null,
     onChange:()=>{counters.changes++;},onError:error=>{throw new Error(`Dispatch runtime error: ${JSON.stringify(error)}`);}});
   dispatch.setMain(main);return dispatch;
 }

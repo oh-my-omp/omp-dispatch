@@ -1,4 +1,4 @@
-// PM ask scenarios: an Owner's question goes to the intent guardians instead of Main. The guardians are a fake
+// Meerkat ask scenarios: an Owner's question goes to the intent guardians instead of Main. The guardians are a fake
 // HTTP endpoint inside this driver process that records every POST /v1/asks and answers 202 for a comment it has
 // not seen and 200 for a repeat, as the real guardians do. The settlement scenarios then write the guardians' or
 // the council's settlement comment on the issue at scripted points, as those programs do.
@@ -8,7 +8,7 @@ import {join} from 'node:path';
 import {YAML} from 'bun';
 import {z} from '@oh-my-pi/omptype/zod';
 import type {Agenda} from '../../src/domain/model.ts';
-import {parseMarker} from '../../src/pm/markers.ts';
+import {parseMarker} from '../../src/meerkat/markers.ts';
 import {withState, type SimState} from './github-sim.ts';
 import type {Expect} from './scenario.ts';
 import type {Case, LogEntry, Run, SeatSession} from './run.ts';
@@ -131,7 +131,7 @@ export function askCases(sim: SimApi): Case[] {
 
   /** The Owner asks, then, once the answer arrives, resumes as a fork of its asking session and delivers a.txt = 1. */
   const settled = {
-    ...base, pm: {holdComment: null, guardiansURL: guardians.url},
+    ...base, meerkat: {holdComment: null, guardiansURL: guardians.url},
     scenario: () => ({parent: null, closure: {}, tickets: [
       {id: 'A', issue: 1, dependsOn: [], gate: {'a.txt': '1\n'}, owner: [{kind: 'escalate' as const, escalation: 'question' as const, reason: QUESTION}, {kind: 'commit' as const, write: {'a.txt': '1\n'}}]},
     ]}),
@@ -152,7 +152,7 @@ export function askCases(sim: SimApi): Case[] {
     return id;
   }
   const ANSWER = 'Include the tenant id: caches are shared across tenants in one process.';
-  const reply = (ask: number, text: string) => `${text}\n\n<!-- pm:reply {"v":1,"ask":${ask},"decision":null} -->`;
+  const reply = (ask: number, text: string) => `${text}\n\n<!-- meerkat:reply {"v":1,"ask":${ask},"decision":null} -->`;
   /** One recompute runs every second in a simulation; this outlasts two. */
   const twoCycles = () => Bun.sleep(2500);
   const stillAsking = async (run: Run, label: string): Promise<void> => {
@@ -181,7 +181,7 @@ export function askCases(sim: SimApi): Case[] {
     if (asking && resumed) {
       const users = (session: SeatSession) => session.lines.flatMap(line => { const parsed = messageSchema.safeParse(line); return parsed.success && parsed.data.message.role === 'user' ? [userText(parsed.data.message.content)] : []; });
       first = users(resumed)[users(asking).length];
-      const prompt = run.pm ? z.object({resumePrompt: z.string()}).passthrough().parse(YAML.parse(readFileSync(join(run.pm, 'dispatch', 'delivery.yaml'), 'utf8'))).resumePrompt : '';
+      const prompt = run.meerkat ? z.object({resumePrompt: z.string()}).passthrough().parse(YAML.parse(readFileSync(join(run.meerkat, 'dispatch', 'delivery.yaml'), 'utf8'))).resumePrompt : '';
       if (!first?.startsWith(`${prompt}\n\n${ANSWER}\n\n`)) failures.push(`the resumed Owner's first message does not open with the resume prompt and the answer: ${JSON.stringify(first?.slice(0, 300))}`);
     }
     const markers = sim.simState(run).issues.find(issue => issue.number === 1)?.comments.flatMap(item => { const read = parseMarker(item.id, item.body); return read.kind === 'marker' ? [read.fact] : []; }) ?? [];
@@ -201,7 +201,7 @@ export function askCases(sim: SimApi): Case[] {
 
   return [
     {
-      ...base, name: 'ask', pm: {holdComment: null, guardiansURL: guardians.url}, scenario: base.scenario('complex'),
+      ...base, name: 'ask', meerkat: {holdComment: null, guardiansURL: guardians.url}, scenario: base.scenario('complex'),
       async drive(run) {
         guardians.reset(false);
         await sim.waitUntil(run, 'the guardians request confirmed and the Owner stopped', async state => askState(state) === 'confirmed' && await stopped(run));
@@ -219,7 +219,7 @@ export function askCases(sim: SimApi): Case[] {
     },
     {
       // The coordinator dies while the guardians hold their answer; after resume the request is sent again and answered 200.
-      ...base, name: 'ask-restart', pm: {holdComment: null, guardiansURL: guardians.url}, scenario: base.scenario('complex'),
+      ...base, name: 'ask-restart', meerkat: {holdComment: null, guardiansURL: guardians.url}, scenario: base.scenario('complex'),
       async drive(run) {
         guardians.reset(true);
         await sim.waitUntil(run, 'the guardians request executing', state => askState(state) === 'executing' && guardians.received().length === 1);
@@ -246,7 +246,7 @@ export function askCases(sim: SimApi): Case[] {
     },
     {
       // Row 3: nothing listens at the guardians address; the request fails with the connection error and wakes Main.
-      ...base, name: 'ask-unreachable', pm: {holdComment: null, guardiansURL: unreachable}, scenario: base.scenario(undefined),
+      ...base, name: 'ask-unreachable', meerkat: {holdComment: null, guardiansURL: unreachable}, scenario: base.scenario(undefined),
       async drive(run) {
         guardians.reset(false);
         await sim.waitUntil(run, 'the failed guardians request reaching Main', async state => askState(state) === 'failed' && mainWoken(run).some(note => note.includes('failed:A:')) && await stopped(run));
@@ -277,7 +277,7 @@ export function askCases(sim: SimApi): Case[] {
       ...settled, name: 'ask-replace',
       async drive(run) {
         const ask = await waitAsked(run);
-        comment(run, `Superseded by sim/arena#9.\n\n<!-- pm:replaced {"v":1,"ask":${ask},"by":"sim/arena#9"} -->`, true);
+        comment(run, `Superseded by sim/arena#9.\n\n<!-- meerkat:replaced {"v":1,"ask":${ask},"by":"sim/arena#9"} -->`, true);
         await sim.waitUntil(run, 'finish after the replacement', state => state?.lifecycle === 'completed');
       },
       async check(run) {
@@ -300,7 +300,7 @@ export function askCases(sim: SimApi): Case[] {
       ...settled, name: 'ask-escalate',
       async drive(run) {
         const ask = await waitAsked(run);
-        comment(run, `Taken to the council.\n\n<!-- pm:escalated {"v":1,"ask":${ask},"agenda":"sim/agenda#5"} -->`);
+        comment(run, `Taken to the council.\n\n<!-- meerkat:escalated {"v":1,"ask":${ask},"agenda":"sim/agenda#5"} -->`);
         await sim.waitUntil(run, 'the council agenda recorded on the ask', state => state?.tickets[0]?.ask?.agenda === 'sim/agenda#5');
         await twoCycles();
         await stillAsking(run, 'two recomputes after the escalation');
@@ -323,7 +323,7 @@ export function askCases(sim: SimApi): Case[] {
       },
       async check(run) {
         const failures = await resumedChecks(run, 'impl,ask,reply,reply,impl');
-        const state = await sim.agenda(run), ticket = state?.tickets[0], ask = sim.simState(run).issues[0]?.comments.find(item => item.body.includes('<!-- pm:ask '))?.id;
+        const state = await sim.agenda(run), ticket = state?.tickets[0], ask = sim.simState(run).issues[0]?.comments.find(item => item.body.includes('<!-- meerkat:ask '))?.id;
         const ignored = ticket?.notes.filter(note => note.text.startsWith('ignored settlement ')) ?? [];
         if (ignored.length !== 1 || ask === undefined || !ignored[0]!.text.endsWith(` for ask ${ask + 1000}`)) failures.push(`expected one note ignoring the reply to ask ${ask === undefined ? '?' : ask + 1000}, found ${JSON.stringify(ignored)}`);
         return failures;

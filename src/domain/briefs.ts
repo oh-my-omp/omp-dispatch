@@ -1,4 +1,4 @@
-import type {PmAsk,ReadonlyAgenda} from './model.ts';
+import type {MeerkatAsk,ReadonlyAgenda} from './model.ts';
 import type {SeatSpec} from './engine.ts';
 
 /** The handoff contract of a seat's kind and subject; the workflow supplies only the seat's duty. */
@@ -9,15 +9,15 @@ function protocol(seat:SeatSpec):string {
 }
 
 /**
- * Under PM integration a work seat's question goes to the intent guardians: the brief explains the tier from the
- * PM configuration and that asking ends the session.
+ * Under Meerkat integration a work seat's question goes to the intent guardians: the brief explains the tier from the
+ * Meerkat configuration and that asking ends the session.
  */
-function askProtocol(ask:PmAsk):string {
+function askProtocol(ask:MeerkatAsk):string {
   return `A question goes to the intent guardians, not to Main: escalate with kind question, reason holding the decision item exactly as they should read it, and tier simple or complex (${ask.defaultTier} when omitted). ${ask.tierHelp} Asking ends this session at once: Dispatch stops it right after the escalate succeeds, so ask only when you cannot continue without the answer, and make the question complete on its own.`;
 }
 
-/** Seat scope is one ticket. Ordinary user/tool messages carry it once at entry. `ask` is null while PM integration is off. */
-export function seatBrief(state:ReadonlyAgenda,ticketId:string,seat:SeatSpec,ask:PmAsk|null):string {
+/** Seat scope is one ticket. Ordinary user/tool messages carry it once at entry. `ask` is null while Meerkat integration is off. */
+export function seatBrief(state:ReadonlyAgenda,ticketId:string,seat:SeatSpec,ask:MeerkatAsk|null):string {
   const ticket=state.tickets.find(ticket=>ticket.id===ticketId)??(state.closure?.id===ticketId?state.closure:null);
   if(!ticket)throw new Error('Cannot brief an unknown ticket');
   return [

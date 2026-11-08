@@ -28,11 +28,11 @@
         "description": "Seconds between agenda recomputes, a whole number from 1 to 2147483; read when the coordinator starts",
         "env": "OMP_DISPATCH_RECOMPUTE_SECONDS"
       },
-      "pmConfigDir": {
+      "meerkatConfigDir": {
         "type": "string",
         "default": "",
-        "description": "PM configuration repository root, relative to the coordinator working directory; empty leaves PM integration off; read when the coordinator starts",
-        "env": "OMP_DISPATCH_PM_CONFIG"
+        "description": "Meerkat configuration repository root, relative to the coordinator working directory; empty leaves Meerkat integration off; read when the coordinator starts",
+        "env": "OMP_DISPATCH_MEERKAT_CONFIG"
       },
       "githubTrigger": {
         "type": "enum",
@@ -63,12 +63,12 @@
       "configCheckHost": {
         "type": "string",
         "default": "127.0.0.1",
-        "description": "Host the PM configuration check listener binds (POST /pm-config/check); read when the launcher starts"
+        "description": "Host the Meerkat configuration check listener binds (POST /meerkat-config/check); read when the launcher starts"
       },
       "configCheckPort": {
         "type": "number",
         "default": 47593,
-        "description": "Port the PM configuration check listener binds; must differ from the link port 47591 and webhookPort; read when the launcher starts"
+        "description": "Port the Meerkat configuration check listener binds; must differ from the link port 47591 and webhookPort; read when the launcher starts"
       }
     }
   },

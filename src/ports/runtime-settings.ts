@@ -3,8 +3,8 @@ import {getAgentDir} from '@oh-my-pi/pi-coding-agent';
 import {getPluginSettings} from '@oh-my-pi/pi-coding-agent/extensibility/plugins/loader';
 import type {Result} from '../domain/model.ts';
 
-/** The coordinator's own settings, resolved against its working directory; `pm` is null with PM integration off. */
-export type RuntimeSettings={dataDir:string;intervalSeconds:number;pm:string|null};
+/** The coordinator's own settings, resolved against its working directory; `meerkat` is null with Meerkat integration off. */
+export type RuntimeSettings={dataDir:string;intervalSeconds:number;meerkat:string|null};
 
 const DEFAULT_INTERVAL_SECONDS=120;
 /** The native timer's 32-bit millisecond limit, in whole seconds. */
@@ -37,10 +37,10 @@ export function parseRuntimeSettings(raw:Readonly<Record<string,unknown>>,env:Re
   const interval=pick(raw,env,'recomputeIntervalSeconds','OMP_DISPATCH_RECOMPUTE_SECONDS');
   const intervalSeconds=wholeSeconds(interval.value??DEFAULT_INTERVAL_SECONDS);
   if(intervalSeconds===null)return invalid(interval,`whole seconds from 1 to ${MAX_INTERVAL_SECONDS}`);
-  const pm=pick(raw,env,'pmConfigDir','OMP_DISPATCH_PM_CONFIG');
-  const pmDir=pm.value??'';
-  if(typeof pmDir!=='string')return invalid(pm,'a path string');
-  return {ok:true,value:{dataDir:resolve(cwd,dataDir),intervalSeconds,pm:pmDir.trim()?resolve(cwd,pmDir.trim()):null}};
+  const meerkat=pick(raw,env,'meerkatConfigDir','OMP_DISPATCH_MEERKAT_CONFIG');
+  const meerkatDir=meerkat.value??'';
+  if(typeof meerkatDir!=='string')return invalid(meerkat,'a path string');
+  return {ok:true,value:{dataDir:resolve(cwd,dataDir),intervalSeconds,meerkat:meerkatDir.trim()?resolve(cwd,meerkatDir.trim()):null}};
 }
 
 /** Reads the store `/settings` and `omp plugin config` write, with the coordinator's project overrides. */

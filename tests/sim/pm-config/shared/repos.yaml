@@ -1,9 +1,0 @@
-# PM configuration the PM-on simulations point the pmConfigDir plugin setting at; the simulated GitHub serves Project sim #1.
-pm:
-  repo: sim/agenda
-  project: {owner: sim, number: 1}
-code:
-  - repo: sim/arena
-    cwd: /tmp/dispatch-sim-arena
-design: [sim/design]
-omp: []

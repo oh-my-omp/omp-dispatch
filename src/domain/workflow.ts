@@ -4,7 +4,7 @@ import type {ChecksSnapshot,DeepReadonly,ParseError,PrSnapshot,Result,Role,Verdi
 export const ESCALATE='escalate';
 /** The built-in holding state an escalation enters; no workflow state may take its name. */
 export const ESCALATED='Escalated';
-/** The built-in holding state a work seat's question enters under PM integration; no workflow state may take its name. */
+/** The built-in holding state a work seat's question enters under Meerkat integration; no workflow state may take its name. */
 export const ASKING='Asking';
 /** The built-in final state of a ticket whose issue was replaced while it asked; no workflow state may take its name. */
 export const REPLACED='Replaced';

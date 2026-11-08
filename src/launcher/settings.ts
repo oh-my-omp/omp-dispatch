@@ -43,7 +43,7 @@ export function parseLauncherSettings(raw:Readonly<Record<string,unknown>>):Resu
 }
 
 /**
- * The PM configuration check listener's address. It is parsed apart from the launcher settings so an invalid
+ * The Meerkat configuration check listener's address. It is parsed apart from the launcher settings so an invalid
  * value disables only this listener; it must differ from the link port and from the webhook port.
  */
 export function parseConfigCheckSettings(raw:Readonly<Record<string,unknown>>):Result<ConfigCheckAddress,string> {

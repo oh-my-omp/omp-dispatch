@@ -52,7 +52,7 @@ describe('github port pagination', () => {
         lastClose: {id: 'CLOSED_EVENT_1', at: Date.parse(CLOSED_AT)},
         lastReopen: {id: 'REOPENED_EVENT_1', at: Date.parse(REOPENED_AT)},
         children,
-        pm: null,
+        meerkat: null,
       }],
       prs: [linkedExpectation(LINKED[0]), linkedExpectation(LINKED[1])],
       links: [

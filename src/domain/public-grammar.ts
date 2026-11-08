@@ -56,7 +56,7 @@ export function buildPublicGrammar(z: PublicZ) {
     object({op:z.literal('submit'),ticketId:idSchema,revision,branch:text,head:shaSchema,title:text,body:text}),
     object({op:z.literal('verdict'),ticketId:idSchema,revision,role:roleSchema,ok:z.boolean(),note:text}),
     object({op:z.literal('escalate'),ticketId:idSchema,revision,kind:z.literal('question'),reason:text,
-      /** How hard the decision item is; only a question carries it, and PM integration falls back to its configured default. */
+      /** How hard the decision item is; only a question carries it, and Meerkat integration falls back to its configured default. */
       tier:tierSchema.optional()}),
     object({op:z.literal('escalate'),ticketId:idSchema,revision,kind:z.enum(['blocked','split','noCode']),reason:text}),
     resolveSchema,

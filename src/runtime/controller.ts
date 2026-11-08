@@ -1,5 +1,5 @@
 import {randomUUID} from 'node:crypto';
-import {draftAgenda,type Agenda,type Caller,type DeepReadonly,type DomainError,type Effect,type EffectResult,type Facts,type IssueRef,type PmContext,type PortError,type PortInput,type ReadonlyAgenda,type Result,type Role,type Workflow} from '../domain/model.ts';
+import {draftAgenda,type Agenda,type Caller,type DeepReadonly,type DomainError,type Effect,type EffectResult,type Facts,type IssueRef,type MeerkatContext,type PortError,type PortInput,type ReadonlyAgenda,type Result,type Role,type Workflow} from '../domain/model.ts';
 import {REPLAYABLE,abandonSeat,applyOperation,availableRoles,awaitsLaunch,belongsTo,closureRoles,confirmEffect,createAgenda,currentSeat,effectPrecondition,failEffect,reconciled,satisfiedResult,statusOnDone,ticketDefinition,workerStarted} from '../domain/engine.ts';
 import {refKey,sameRef} from '../domain/identity.ts';
 import {seatBrief} from '../domain/briefs.ts';
@@ -19,10 +19,10 @@ export type ControllerOutput=AgendaView|{ticket:DeepReadonly<Agenda['tickets'][n
  * `issue` is the launch issue: only the active agendas that belong to it are listed at startup, resumed, or block
  * a new convene; the active agendas of other issues are left alone.
  * `workflow` reads the workflow a new agenda will freeze; an attached agenda never consults it.
- * `pm` turns on PM integration: work seats record their sessions on their issues, Project Status follows delivery,
+ * `meerkat` turns on Meerkat integration: work seats record their sessions on their issues, Project Status follows delivery,
  * and a work seat's question goes to the intent guardians behind `guardians`.
  */
-export type ControllerOptions={issue:IssueRef;files:AgendaFiles;github:GitHubPort;host:HostPort;process:ProcessPort;cwd:string;workflow:()=>Promise<Result<Workflow,WorkflowError>>;intervalSeconds:number;pm:{context:PmContext;guardians:GuardiansPort}|null;onChange:()=>void;onError:(error:RuntimeError)=>void};
+export type ControllerOptions={issue:IssueRef;files:AgendaFiles;github:GitHubPort;host:HostPort;process:ProcessPort;cwd:string;workflow:()=>Promise<Result<Workflow,WorkflowError>>;intervalSeconds:number;meerkat:{context:MeerkatContext;guardians:GuardiansPort}|null;onChange:()=>void;onError:(error:RuntimeError)=>void};
 function domain(kind:DomainError['kind'],message:string):{ok:false;error:RuntimeError}{return {ok:false,error:{kind:'domain',error:{kind,message}}};}
 
 /** The controller is the sole writer of its agenda. GitHub observations are never optimistic writes. */
@@ -66,7 +66,7 @@ export class DispatchController {
   private async save(state:Agenda,expected:number|null):Promise<Result<null,RuntimeError>> {
     if(this.pending)throw new Error('Unresolved durable write must be flushed before a new transition');
     // Every transition passes here, so a ticket's entry into Done queues its Status write in the same durable save.
-    if(this.options.pm&&this.state)statusOnDone(this.state,state,this.options.pm.context);
+    if(this.options.meerkat&&this.state)statusOnDone(this.state,state,this.options.meerkat.context);
     this.pending={state,expected};return this.flush();
   }
   private view():Result<ControllerOutput,RuntimeError> {
@@ -153,7 +153,7 @@ export class DispatchController {
         const live=retiring.some(ticket=>ticketRoles.some(role=>this.options.host.active(ticket.id,role)));
         if(live||operation.op==='finish'&&closure&&parentSeatRoles(this.state.workflow).some(role=>this.options.host.active(closure.id,role)))return domain('ownershipBlocked','Wait for retiring one-shot seat jobs to exit before finishing or removing their tickets');
       }
-      const changed=applyOperation(this.state,operation,caller,fresh.value,Date.now(),this.options.pm?.context.ask??null);if(!changed.ok)return {ok:false,error:{kind:'domain',error:changed.error}};
+      const changed=applyOperation(this.state,operation,caller,fresh.value,Date.now(),this.options.meerkat?.context.ask??null);if(!changed.ok)return {ok:false,error:{kind:'domain',error:changed.error}};
       if(operation.op==='finish'){
         const cleaned=await this.options.host.finish(this.state.id);
         if(!cleaned.ok)return {ok:false,error:{kind:'host',error:cleaned.error}};
@@ -217,7 +217,7 @@ export class DispatchController {
     }else if(closure&&closureRoles(state).includes(role)){
       revision=closure.revision;workspace={kind:'base',target:state.tickets[0]!.target};
     }else return null;
-    const ask=this.options.pm?.context.ask??null;
+    const ask=this.options.meerkat?.context.ask??null;
     // The answer to the ticket's question opens the first message of the work seat that resumes it.
     const resume=seat.kind==='work'&&ticket&&ticket.resumeMessage!==null&&ask?`${ask.resumePrompt}\n\n${ticket.resumeMessage}`:null;
     return {agendaId:state.id,ticketId,revision,role,seat:seat.kind,agent:seat.agent,cwd:this.options.cwd,
@@ -252,9 +252,9 @@ export class DispatchController {
       if(result.ok){
         launched.push(result.value);
         // A work seat's session now exists, so its id and file can be recorded on the ticket's issue.
-        const pm=this.options.pm;
-        if(!pm||input.seat!=='work')continue;
-        const started=workerStarted(this.state,{ticketId,revision:input.revision,role,sessionId:result.value.sessionId,sessionFile:result.value.sessionFile},pm.context,facts);
+        const meerkat=this.options.meerkat;
+        if(!meerkat||input.seat!=='work')continue;
+        const started=workerStarted(this.state,{ticketId,revision:input.revision,role,sessionId:result.value.sessionId,sessionFile:result.value.sessionFile},meerkat.context,facts);
         if(!started.ok){this.options.onError({kind:'domain',error:started.error});continue;}
         const saved=await this.save(started.value,this.state.version);if(!saved.ok)return saved;
         continue;
@@ -351,8 +351,8 @@ export class DispatchController {
       case 'comment':{const result=await github.comment(action.issue,action.body);return result.ok?{ok:true,value:{kind:'commented',issue:action.issue,comment:result.value}}:result;}
       case 'setProjectField':{const result=await github.setProjectField(action.issue,action.field,action.option);return result.ok?{ok:true,value:null}:result;}
       case 'requestAnswer':{
-        const guardians=this.options.pm?.guardians;
-        if(!guardians)return {ok:false,error:{kind:'precondition',message:'PM integration is off, so no intent guardians are configured'}};
+        const guardians=this.options.meerkat?.guardians;
+        if(!guardians)return {ok:false,error:{kind:'precondition',message:'Meerkat integration is off, so no intent guardians are configured'}};
         const result=await guardians.requestAnswer({issue:action.issue,comment:action.comment,question:action.question,tier:action.tier});
         return result.ok?{ok:true,value:{kind:'answerRequested',issue:action.issue,comment:action.comment,status:result.value}}:result;
       }

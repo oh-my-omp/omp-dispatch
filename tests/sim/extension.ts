@@ -105,7 +105,7 @@ function* attentionPlan(trigger: string): MainPlan {
       if (finished.ok) return;
       const read = yield {input: {op: 'read', ticketId: id}};
       const ticket = read.value?.ticket;
-      if (ticket) yield {input: {op: 'resolve', ticketId: id, revision: ticket.revision, ruling: `Retry the failed PM record ${effect}.`, to: ticket.state, effects: [{effectId: effect, disposition: 'retry'}]}};
+      if (ticket) yield {input: {op: 'resolve', ticketId: id, revision: ticket.revision, ruling: `Retry the failed Meerkat record ${effect}.`, to: ticket.state, effects: [{effectId: effect, disposition: 'retry'}]}};
     }
   }
 }

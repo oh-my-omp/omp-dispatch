@@ -14,7 +14,7 @@ import {createProcessPort} from './src/ports/process.ts';
 import {configuredWorkflow} from './src/ports/workflow-settings.ts';
 import {readRuntimeSettings} from './src/ports/runtime-settings.ts';
 import {tr} from './src/i18n.ts';
-import {loadPmConfig,type PmConfig} from './src/pm/config.ts';
+import {loadMeerkatConfig,type MeerkatConfig} from './src/meerkat/config.ts';
 import {runtimeErrorText} from './src/runtime/error-text.ts';
 import type {HostPort} from './src/ports/contracts.ts';
 import {coordinatorBriefing,parseCoordinatorFlag,type CoordinatorIdentity} from './src/runtime/coordinator.ts';
@@ -48,7 +48,7 @@ class ProcessRuntime {
   }
   /**
    * Main wakes only for a decision still open when its turn ends: a launchable ticket, an Escalated ticket or
-   * closure, a failed PM effect, or a finished agenda. While Main is busy it sees the agenda through its own calls, so a decision it
+   * closure, a failed Meerkat effect, or a finished agenda. While Main is busy it sees the agenda through its own calls, so a decision it
    * settles within the same turn (launching what convene unlocked, resolving an escalation) never wakes it again.
    */
   private changed(turnEnded=false):void {
@@ -63,7 +63,7 @@ class ProcessRuntime {
     // (Asking, Escalated, open decisions) pass the gate unspent and the coordinator keeps running.
     this.exit.commit(agenda.lifecycle==='completed',agenda);
     if(!fresh.length)return;
-    binding.pi.sendMessage({customType:'dispatch-attention',display:true,content:`Dispatch needs Main: ${fresh.join(', ')}. launch:<ticket> may be launched; escalated:<ticket>:<revision> awaits read and resolve; failed:<ticket>:<effect> is a failed PM effect (a record write, or the request asking the intent guardians to settle a worker question) that blocks finish until resolve settles it with retry, adopt or cancel, and a failed guardians request is sent again by resolve to Asking with retry on it; finish means every ticket and the closure are Done. Call dispatch status for the source-confirmed agenda; this notification is not a ticket snapshot.`},{triggerTurn:true,deliverAs:'nextTurn'});
+    binding.pi.sendMessage({customType:'dispatch-attention',display:true,content:`Dispatch needs Main: ${fresh.join(', ')}. launch:<ticket> may be launched; escalated:<ticket>:<revision> awaits read and resolve; failed:<ticket>:<effect> is a failed Meerkat effect (a record write, or the request asking the intent guardians to settle a worker question) that blocks finish until resolve settles it with retry, adopt or cancel, and a failed guardians request is sent again by resolve to Asking with retry on it; finish means every ticket and the closure are Done. Call dispatch status for the source-confirmed agenda; this notification is not a ticket snapshot.`},{triggerTurn:true,deliverAs:'nextTurn'});
   }
   mainTurnEnded(ctx:ExtensionContext):void {
     if(this.deferred&&this.binding?.ctx.sessionManager===ctx.sessionManager)this.changed(true);
@@ -81,14 +81,14 @@ class ProcessRuntime {
       ctx.ui.notify(message,'error');throw new Error(message);
     }
     const directory=settings.value.dataDir;
-    let pm:PmConfig|null=null;
-    if(settings.value.pm){
-      const loaded=await loadPmConfig(settings.value.pm);
+    let meerkat:MeerkatConfig|null=null;
+    if(settings.value.meerkat){
+      const loaded=await loadMeerkatConfig(settings.value.meerkat);
       if(!loaded.ok){
-        const message=`${tr('Dispatch PM configuration is invalid; the coordinator does not start','调度 PM 配置无效，协调者不启动')}:\n${loaded.error}`;
+        const message=`${tr('Dispatch Meerkat configuration is invalid; the coordinator does not start','调度 Meerkat 配置无效，协调者不启动')}:\n${loaded.error}`;
         ctx.ui.notify(message,'error');throw new Error(message);
       }
-      pm=loaded.value;
+      meerkat=loaded.value;
     }
     this.host=createHostPort({dataDir:directory,
       ticketRevision:ticketId=>this.controller?.ticketRevision(ticketId)??null,
@@ -104,9 +104,9 @@ class ProcessRuntime {
       onSeatError:(ticketId,message)=>this.report({kind:'host',error:{kind:'unavailable',message:`Ticket ${ticketId} seat: ${message}`}}),
     });
     this.controller=new DispatchController({issue:identity.issue,files:createAgendaFiles(directory),
-      github:createGitHubPort({pm:pm?{owner:pm.repos.pm.project.owner,number:pm.repos.pm.project.number,statusField:pm.project.fields.status.name}:null}),host:this.host,process:createProcessPort(),cwd:ctx.cwd,
-      pm:pm?{context:{host:hostname(),pid:process.pid,status:{inProgress:pm.project.fields.status.options.inProgress,done:pm.project.fields.status.options.done},
-        ask:{defaultTier:pm.delivery.defaultTier,tierHelp:pm.delivery.tierHelp,resumePrompt:pm.delivery.resumePrompt}},guardians:createGuardiansPort(pm.delivery.guardiansURL)}:null,
+      github:createGitHubPort({meerkat:meerkat?{owner:meerkat.repos.agenda.project.owner,number:meerkat.repos.agenda.project.number,statusField:meerkat.project.fields.status.name}:null}),host:this.host,process:createProcessPort(),cwd:ctx.cwd,
+      meerkat:meerkat?{context:{host:hostname(),pid:process.pid,status:{inProgress:meerkat.project.fields.status.options.inProgress,done:meerkat.project.fields.status.options.done},
+        ask:{defaultTier:meerkat.delivery.defaultTier,tierHelp:meerkat.delivery.tierHelp,resumePrompt:meerkat.delivery.resumePrompt}},guardians:createGuardiansPort(meerkat.delivery.guardiansURL)}:null,
       // Read at each convene: a configured file must exist; otherwise the data directory may override the built-in workflow.
       workflow:()=>configuredWorkflow(ctx.cwd,directory),
       intervalSeconds:settings.value.intervalSeconds,onChange:()=>this.changed(),onError:error=>this.report(error)});
