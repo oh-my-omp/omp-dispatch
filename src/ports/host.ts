@@ -14,7 +14,7 @@ import {resolveAgentModelSelection} from '@oh-my-pi/pi-coding-agent/config/model
 import {initializeExtensions} from '@oh-my-pi/pi-coding-agent/modes/runtime-init';
 import {buildPublicGrammar} from '../domain/public-grammar.ts';
 import {ASKING} from '../domain/workflow.ts';
-import {parseToolParameters} from '../domain/parse.ts';
+import {parseSeatToolParameters} from '../domain/parse.ts';
 import type {Caller,PortInput,Repo,Result,Role} from '../domain/model.ts';
 import type {HostPort,SeatExit,SeatLaunch} from './contracts.ts';
 import {checkout,git,lockBare,type Worktree} from './bare-cache.ts';
@@ -109,12 +109,12 @@ export function createHostPort(options:HostOptions):HostPort {
         let handedOff=false,asked=false;
         const caller:Caller={kind:'seat',agentId:id,sessionId:manager.getSessionId(),sessionFile,ticketId:input.ticketId,revision:input.revision,role:input.role};
         const nativeManager=manager;
-        const tool:ToolDefinition={name:'dispatch',label:tr('Dispatch','调度'),description:'Read or hand off only your bound ticket. A successful submit/verdict/escalate ends this seat.',parameters:buildPublicGrammar(z).toolParametersSchema,
+        const tool:ToolDefinition={name:'dispatch',label:tr('Dispatch','调度'),description:'Read or hand off only your bound ticket. A successful submit/verdict/escalate ends this seat.',parameters:buildPublicGrammar(z).seatToolParametersSchema,
             async execute(_id,params){
               if(handedOff)return {content:[{type:'text',text:'This seat has already handed off.'}],details:null,isError:true};
               const current=registry.get(id);
               if(!current?.session||current.session!==seat.session)return {content:[{type:'text',text:'Native seat identity changed.'}],details:null,isError:true};
-              const parsed=parseToolParameters(params);
+              const parsed=parseSeatToolParameters(params);
               if(!parsed.ok)return {content:[{type:'text',text:JSON.stringify(parsed.error)}],details:null,isError:true};
               const response=await options.execute(caller,parsed.value.input);
               if(response.ok&&['submit','verdict','escalate'].includes(parsed.value.input.op)){
