@@ -116,6 +116,16 @@ test('each action refuses a field that belongs to another action kind',()=>{
     actions:[{kind:'createIssue',repo:'oh-my-omp/omp-config',title:'New issue',body:'Body',issue:'oh-my-omp/omp-dispatch#236'}]}}).ok).toBe(false);
 });
 
+test('an empty replaceBody body maps to the internal action, and an empty createIssue body is refused',()=>{
+  expect(required(parseToolParameters({input:{op:'resolve',ticketId:'A',revision:3,ruling:'Clear body.',to:'Coding',
+    actions:[{kind:'replaceBody',issue:'oh-my-omp/omp-dispatch#236',expectedHash:hash,body:''}]}})))
+    .toEqual({op:'resolve',ticketId:'A',revision:3,ruling:'Clear body.',to:'Coding',actions:[{kind:'replaceBody',issue,expectedHash:hash,body:''}]});
+  const refused=parseToolParameters({input:{op:'resolve',ticketId:'A',revision:3,ruling:'Ruling.',to:'Coding',
+    actions:[{kind:'createIssue',repo:'oh-my-omp/omp-config',title:'New issue',body:''}]}});
+  expect(refused.ok).toBe(false);
+  if(!refused.ok)expect(refused.error.path).toBe('actions.0.body');
+});
+
 test('reference strings and required fields are refused by name',()=>{
   const cases:[Record<string,unknown>,string][]=[
     [{op:'convene',tickets:[{id:'A',issue:'not a reference',target:'oh-my-omp/omp-dispatch@main',dependsOn:[]}]},'tickets.0.issue'],

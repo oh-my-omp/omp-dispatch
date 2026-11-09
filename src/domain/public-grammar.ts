@@ -94,7 +94,7 @@ export function buildPublicGrammar(z: PublicZ) {
     target: text.optional().describe('publishPr and merge: the base repository and branch, as <owner>/<repo>@<branch>.'),
     expectedBodyHash: text.optional().describe('publishPr: the 64 character hex body hash expected when updating an existing PR; omit when creating one.'),
     title: text.optional().describe('publishPr and createIssue: the title.'),
-    body: text.optional().describe('publishPr and createIssue: the body; replaceBody: the new issue body; comment: the whole comment ending with its marker line.'),
+    body: z.string().optional().describe('publishPr and createIssue: the body; replaceBody: the new issue body; comment: the whole comment ending with its marker line.'),
     stampHash: text.optional().describe('merge: the 64 character hex gate stamp hash this merge is authorized by, as returned by dispatch read.'),
     open: z.boolean().optional().describe('setIssueState: true reopens the issue, false closes it.'),
     bodyHash: text.optional().describe('setIssueState: the 64 character hex issue body hash the state change is based on.'),
