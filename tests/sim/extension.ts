@@ -77,11 +77,12 @@ type MainPlan = Generator<Ask, void, Reply>;
 function* startPlan(trigger: string): MainPlan {
   if (scenario.resumeFirst) yield {input: {op: 'resume', agenda: scenario.resumeFirst}};
   const saved = /Saved agendas: active: ([0-9a-f-]{36})/.exec(trigger);
-  const target = {repo, base: 'main'};
+  const reference = (issue: number) => `${repo.owner}/${repo.name}#${issue}`;
+  const target = `${repo.owner}/${repo.name}@main`;
   const opened = saved
     ? yield {input: {op: 'resume', agenda: saved[1]}}
-    : yield {input: {op: 'convene', parent: scenario.parent === null ? null : {repo, number: scenario.parent},
-        tickets: scenario.tickets.map(ticket => ({id: ticket.id, issue: {repo, number: ticket.issue}, target, dependsOn: ticket.dependsOn, adoptPr: null}))}};
+    : yield {input: {op: 'convene', ...(scenario.parent === null ? {} : {parent: reference(scenario.parent)}),
+        tickets: scenario.tickets.map(ticket => ({id: ticket.id, issue: reference(ticket.issue), target, dependsOn: ticket.dependsOn}))}};
   for (const id of opened.value?.launchable ?? []) yield {input: {op: 'launch', ticketId: id}};
 }
 

@@ -62,6 +62,95 @@ export function buildPublicGrammar(z: PublicZ) {
     resolveSchema,
     object({op:z.literal('finish'),summary:text}),
   ]);
-  const toolParametersSchema = object({input:portInputSchema});
-  return {text,ordinal,revision,millisSchema,shaSchema,hashSchema,idSchema,agendaIdSchema,repoSchema,issueRefSchema,prRefSchema,shaRefSchema,targetSchema,roleSchema,tierSchema,entrySchema,conveneSchema,actionSchema,portInputSchema,toolParametersSchema};
+
+  /*
+   * The caller-facing parameter definitions. They are wire definitions only: the entry parse maps them back to
+   * `portInputSchema` and `actionSchema`, which stay the domain and persisted types. A tool's model sees one
+   * object whose enum chooses the operation, scalar fields, and descriptions; no unions, no nulls, and at most
+   * two object levels. References are strings because a flattened action item is already the second level.
+   */
+  const ticketIdField = text.optional().describe('The ticket id, exactly as returned by dispatch status or dispatch tickets.');
+  const revisionField = revision.optional().describe('The ticket revision this call acts on: the revision returned by dispatch read or dispatch status. A stale revision is refused.');
+  const tierField = tierSchema.optional().describe('How hard the decision item is: simple for one implementation detail, complex for a decision across modules or contracts.');
+  const wireEntry = object({
+    id: text.describe('The ticket id, unique within the agenda; resolve dependsOn and remove refer to it.'),
+    issue: text.describe('The issue this ticket delivers, as <owner>/<repo>#<number>, for example oh-my-omp/omp-dispatch#236.'),
+    target: text.describe('The repository and base branch this ticket delivers to, as <owner>/<repo>@<branch>, for example oh-my-omp/omp-dispatch@main.'),
+    dependsOn: z.array(text).describe('Ticket ids that must be delivered before this ticket may launch; [] for an independent ticket.'),
+    adoptPr: text.optional().describe('An existing pull request to adopt, as <owner>/<repo>#<number>. Omit when there is none.'),
+  }).describe('One ticket entry supplied to convene or resolve add.');
+  const wireEffects = z.array(object({
+    effectId: text.describe('The id of a failed or uncertain effect, as shown by dispatch read.'),
+    disposition: z.enum(['retry','adopt','cancel']).describe('retry re-requests the effect, adopt accepts the result the source already shows, cancel abandons it.'),
+  }).describe('One effect disposition.')).describe('Dispositions for failed or uncertain effects; omit to leave them alone.');
+  const wireActions = z.array(object({
+    kind: z.enum(['publishPr','merge','setIssueState','replaceBody','createIssue','attachChild','rerunChecks','comment','setProjectField','requestAnswer']).describe('The GitHub write kind; it selects which of the remaining action fields apply.'),
+    issue: text.optional().describe('The subject issue, as <owner>/<repo>#<number>. Used by publishPr, merge, setIssueState, replaceBody, comment, setProjectField and requestAnswer.'),
+    pr: text.optional().describe('A pull request, as <owner>/<repo>#<number>. merge and rerunChecks require it; publishPr names an open PR to update and omits it to create one.'),
+    repo: text.optional().describe('A repository, as <owner>/<repo>. Used by createIssue and rerunChecks.'),
+    headRepo: text.optional().describe('publishPr: the repository holding the head branch, as <owner>/<repo>; usually the subject repository.'),
+    branch: text.optional().describe('publishPr: the head branch name holding the commits to publish.'),
+    head: text.optional().describe('publishPr, merge and rerunChecks: the full 40-64 character lowercase hex commit sha the action expects.'),
+    target: text.optional().describe('publishPr and merge: the base repository and branch, as <owner>/<repo>@<branch>.'),
+    expectedBodyHash: text.optional().describe('publishPr: the 64 character hex body hash expected when updating an existing PR; omit when creating one.'),
+    title: text.optional().describe('publishPr and createIssue: the title.'),
+    body: z.string().optional().describe('publishPr and createIssue: the body; replaceBody: the new issue body; comment: the whole comment ending with its marker line.'),
+    stampHash: text.optional().describe('merge: the 64 character hex gate stamp hash this merge is authorized by, as returned by dispatch read.'),
+    open: z.boolean().optional().describe('setIssueState: true reopens the issue, false closes it.'),
+    bodyHash: text.optional().describe('setIssueState: the 64 character hex issue body hash the state change is based on.'),
+    afterEvent: text.optional().describe('setIssueState: the lifecycle event the change follows; omit when it follows none.'),
+    expectedHash: text.optional().describe('replaceBody: the 64 character hex issue body hash expected before the edit.'),
+    parent: text.optional().describe('attachChild: the parent issue, as <owner>/<repo>#<number>.'),
+    child: text.optional().describe('attachChild: the child issue to attach, as <owner>/<repo>#<number>.'),
+    workflowRunId: revision.optional().describe('rerunChecks: the numeric id of the failing workflow run to rerun.'),
+    previousAttempt: revision.optional().describe('rerunChecks: the numeric attempt being superseded, as counted by the workflow.'),
+    markerKind: z.enum(['impl','ask']).optional().describe('comment: the marker kind whose key identifies the comment at source.'),
+    markerKey: text.optional().describe('comment: the marker key identifying the comment at source.'),
+    field: z.literal('status').optional().describe('setProjectField: the Project field to set; only status is supported.'),
+    option: text.optional().describe('setProjectField: the configured Status option name to set.'),
+    comment: revision.optional().describe('requestAnswer: the id of the ask comment holding the decision item.'),
+    question: text.optional().describe('requestAnswer: the decision item text handed to the intent guardians.'),
+    tier: tierSchema.optional().describe('requestAnswer: how hard the decision item is; simple for one detail, complex across modules or contracts.'),
+  }).describe('One GitHub write resolve actions performs.')).describe('GitHub writes to enqueue after the ruling; the state machine performs and confirms them. Omit for none.');
+  const toolParametersSchema = object({
+    input: object({
+      op: z.enum(['convene','resume','tickets','status','read','launch','resolve','finish']).describe('The operation: convene starts an agenda, resume takes over a saved one, tickets and status list state, read returns one ticket, launch seats a ticket, resolve records a ruling and may edit topology or enqueue GitHub writes, finish completes the agenda.'),
+      agenda: agendaIdSchema.optional().describe('resume: the id of the saved agenda, as listed in the startup message.'),
+      ticketId: ticketIdField,
+      role: text.optional().describe('launch: an optional seat role to start; only a role the ticket state offers is accepted.'),
+      summary: text.optional().describe('finish: the final summary of what the agenda delivered.'),
+      parent: text.optional().describe('convene: the parent issue, as <owner>/<repo>#<number>; omit for an agenda with no parent.'),
+      tickets: z.array(wireEntry).optional().describe('convene: every ticket the agenda contains, at least one; every current parent sub-issue must have one.'),
+      revision: revisionField,
+      ruling: text.optional().describe('resolve: the ruling sentence recorded in the ticket history and carried by its seats.'),
+      to: text.optional().describe('resolve: the workflow state to continue in, by name; use a state from the ticket workflow, or the parent workflow for the closure.'),
+      dependsOn: z.array(text).optional().describe('resolve: replaces the ticket dependency ids; [] makes it independent.'),
+      target: text.optional().describe('resolve: replaces the ticket target, as <owner>/<repo>@<branch>.'),
+      adoptPr: text.optional().describe('resolve: adopts an existing pull request, as <owner>/<repo>#<number>, that closes this ticket issue at its target. Omit to leave the associated PR alone.'),
+      clearAdoptPr: z.boolean().optional().describe('resolve: true removes the associated pull request and merge terminal; omit or false keeps it. Do not combine with adoptPr.'),
+      noCode: text.optional().describe('resolve: the reason the issue needs no code change; only accepted when to leads to a closeIssue action or a final state.'),
+      add: z.array(wireEntry).optional().describe('resolve: ticket entries to add to the agenda.'),
+      remove: z.array(text).optional().describe('resolve: ticket ids to remove; a ticket with unsettled effects cannot be removed.'),
+      effects: wireEffects.optional(),
+      actions: wireActions.optional(),
+    }).describe('The Dispatch operation Main is performing.'),
+  });
+  const seatToolParametersSchema = object({
+    input: object({
+      op: z.enum(['read','submit','verdict','escalate']).describe('The operation: read returns the bound ticket, submit hands off your branch, verdict hands off your gate judgment, escalate hands a blocker or question to Main.'),
+      ticketId: ticketIdField,
+      revision: revisionField,
+      branch: text.optional().describe('submit: the pushed branch holding the delivered work.'),
+      head: shaSchema.optional().describe('submit: the full 40-64 character lowercase hex commit sha at the head of branch.'),
+      title: text.optional().describe('submit: the pull request title.'),
+      body: text.optional().describe('submit: the complete pull request body, which must contain exactly one closing keyword for the bound issue.'),
+      role: text.optional().describe('verdict: the judge role this verdict belongs to; it must be your bound role.'),
+      ok: z.boolean().optional().describe('verdict: true passes the gate, false rejects it with note as the findings.'),
+      note: text.optional().describe('verdict: the concrete evidence note for the pass or rejection.'),
+      kind: z.enum(['question','blocked','split','noCode']).optional().describe('escalate: question asks the intent guardians or Main; blocked, split and noCode report why this ticket cannot be delivered as scoped.'),
+      reason: text.optional().describe('escalate: the blocker, question, split or no-code reason, with the evidence and the decision needed.'),
+      tier: tierField,
+    }).describe('The Dispatch operation the seat is performing.'),
+  });
+  return {text,ordinal,revision,millisSchema,shaSchema,hashSchema,idSchema,agendaIdSchema,repoSchema,issueRefSchema,prRefSchema,shaRefSchema,targetSchema,roleSchema,tierSchema,entrySchema,conveneSchema,actionSchema,portInputSchema,toolParametersSchema,seatToolParametersSchema};
 }

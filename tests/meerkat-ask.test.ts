@@ -8,7 +8,7 @@ import type {AskRequest,GitHubPort,GuardiansPort,HostPort,SeatLaunch} from '../s
 import {applyOperation,createAgenda} from '../src/domain/engine.ts';
 import {checkedReconcile as reconcile} from './reconcile-check.ts';
 import {bodyHash} from '../src/domain/identity.ts';
-import {parseAgenda,parseToolParameters,encodeAgenda} from '../src/domain/parse.ts';
+import {parseAgenda,parseSeatToolParameters,encodeAgenda} from '../src/domain/parse.ts';
 import {parseWorkflow} from '../src/domain/workflow.ts';
 import {parseMarker} from '../src/meerkat/markers.ts';
 import {createAgendaFiles} from '../src/ports/state.ts';
@@ -44,10 +44,10 @@ function applied(result:Result<Agenda,{message:string}>):Agenda {if(!result.ok)t
 
 test('only a question carries a tier',()=>{
   const escalate={op:'escalate',ticketId:'one',revision:1,reason:'Which?'};
-  expect(parseToolParameters({input:{...escalate,kind:'question',tier:'complex'}}).ok).toBe(true);
-  expect(parseToolParameters({input:{...escalate,kind:'question'}}).ok).toBe(true);
-  expect(parseToolParameters({input:{...escalate,kind:'question',tier:'urgent'}}).ok).toBe(false);
-  for(const kind of ['blocked','split','noCode'])expect(parseToolParameters({input:{...escalate,kind,tier:'simple'}}).ok).toBe(false);
+  expect(parseSeatToolParameters({input:{...escalate,kind:'question',tier:'complex'}}).ok).toBe(true);
+  expect(parseSeatToolParameters({input:{...escalate,kind:'question'}}).ok).toBe(true);
+  expect(parseSeatToolParameters({input:{...escalate,kind:'question',tier:'urgent'}}).ok).toBe(false);
+  for(const kind of ['blocked','split','noCode'])expect(parseSeatToolParameters({input:{...escalate,kind,tier:'simple'}}).ok).toBe(false);
 });
 
 test('under Meerkat an Owner question waits in Asking with an ask comment; Meerkat off and other kinds still reach Main',()=>{

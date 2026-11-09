@@ -2,7 +2,7 @@ import { z, type ZodLikeSchema } from '@oh-my-pi/omptype/zod';
 import { markerFactSchema } from '../meerkat/markers.ts';
 import { buildPublicGrammar } from './public-grammar.ts';
 
-export const {text,ordinal,revision,millisSchema,shaSchema,hashSchema,idSchema,agendaIdSchema,repoSchema,issueRefSchema,prRefSchema,shaRefSchema,targetSchema,roleSchema,tierSchema,entrySchema,conveneSchema,actionSchema,portInputSchema,toolParametersSchema} = buildPublicGrammar(z);
+export const {text,ordinal,revision,millisSchema,shaSchema,hashSchema,idSchema,agendaIdSchema,repoSchema,issueRefSchema,prRefSchema,shaRefSchema,targetSchema,roleSchema,tierSchema,entrySchema,conveneSchema,actionSchema,portInputSchema,toolParametersSchema,seatToolParametersSchema} = buildPublicGrammar(z);
 const object = <const S extends Readonly<Record<string,ZodLikeSchema<unknown>>>>(shape:S) => z.object(shape).strict();
 export type Result<T,E> = {ok:true;value:T}|{ok:false;error:E};
 export type AgendaId = string;
@@ -20,7 +20,8 @@ export type Target = z.infer<typeof targetSchema>;
 export type Entry = z.infer<typeof entrySchema>;
 export type ConveneInput = z.infer<typeof conveneSchema>;
 export type PortInput = z.infer<typeof portInputSchema>;
-export type ToolParameters = z.infer<typeof toolParametersSchema>;
+/** The parsed tool call: the wire parameters mapped back onto the port input. */
+export type ToolParameters = {input:PortInput};
 export type Role = z.infer<typeof roleSchema>;
 export type Tier = z.infer<typeof tierSchema>;
 import type {Workflow} from './workflow.ts';
