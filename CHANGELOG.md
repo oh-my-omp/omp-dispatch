@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.1.59] - 2026-11-12
+
 ### Changed
 
 - Published versions now come from the `release` branch, which the shared `omomp-release` workflow updates daily at 02:00 GMT+9 instead of bumping the patch version on every push to `main`
