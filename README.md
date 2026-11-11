@@ -24,7 +24,7 @@ GitHub strips inline `<svg>` from issue bodies, so the link is written as this r
 [![Coordinate with Dispatch](https://raw.githubusercontent.com/oh-my-omp/omp-dispatch/main/docs/badge/coordinate-with-dispatch.svg)](http://127.0.0.1:47591/<owner>/<repo>/issues/<number>?spec=%7B%22cwd%22%3A%22%2FUsers%2Fme%2Fsrc%2Frepo%22%2C%22frontend%22%3A%7B%22kind%22%3A%22tern%22%7D%7D)
 ```
 
-Install the extension as an omp plugin (`omp plugin install omp-dispatch`), then install the launcher once — from any omp session with `/dispatch-launcher install`, or from the package CLI with `omp-dispatch-launcher install`. `install` writes `~/Library/LaunchAgents/com.ohmyomp.dispatch-launcher.plist` and leaves `127.0.0.1:47591` answering; `uninstall` removes it and `status` reports it together with the GitHub App and its webhook listener.
+Install the extension as an omp plugin (`omp plugin install https://github.com/oh-my-omp/omp-dispatch#release`), then install the launcher once — from any omp session with `/dispatch-launcher install`, or from the package CLI with `omp-dispatch-launcher install`. `install` writes `~/Library/LaunchAgents/com.ohmyomp.dispatch-launcher.plist` and leaves `127.0.0.1:47591` answering; `uninstall` removes it and `status` reports it together with the GitHub App and its webhook listener.
 
 The launcher holds no state of its own. It reads the link, calls the named frontend, and returns one page naming exactly one outcome: `launched` (the frontend now runs `omp --dispatch <owner>/<repo>#<number>` in `cwd`), `existing` (the frontend already runs a coordinator for that exact reference and started nothing), `rejected` (malformed path or number, a missing, malformed or unknown `spec`, a `cwd` that is not an existing absolute directory, or a request that is not a user's click navigation), or `frontendFailed` (the frontend's own output). Only `Sec-Fetch-Mode: navigate` with `Sec-Fetch-User: ?1` is served, because any page can GET `127.0.0.1` and GitHub drops Referer on the https→http hop; the click is the operator's authorization. The port and the `spec` grammar are part of the published link contract.
 
@@ -226,3 +226,7 @@ An ask is settled on its issue, by the guardians or the council, and every recom
 - `ask-reply-ignored`: a `reply` naming another ask leaves the ticket `Asking` through two recomputes with one `ignored settlement` note; the reply to this ask then resumes and delivers it as in `ask-reply`.
 
 Each delivery scenario also checks that Main launched every ticket exactly once, was never woken for a decision it had already taken, that every expected judge's accepted verdict sat on the exact commit its subject names, and that the simulated repository ends in the expected state. A scenario without Meerkat integration also checks that no issue carries a `meerkat:` comment and the Project has no item.
+
+## Releasing
+
+`main` is where development lands; `release` carries published versions. Merging a PR does not change the version: the PR writes its entry under `## [Unreleased]` of `CHANGELOG.md`, with the commit made by lgit after `git add`. Once a day at 02:00 GMT+9 the shared `omomp-release` workflow publishes the accumulated entries and moves the `release` branch to the new version. Install from `#release`, the branch that carries published versions.
