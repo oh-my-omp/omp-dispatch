@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added Windows support for exclusive bare cache locking using LockFileEx
+
 ## [0.1.59] - 2026-11-12
 
 ### Changed
