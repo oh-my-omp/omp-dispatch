@@ -51,6 +51,17 @@ function escapeHtml(value:string):string {
   return value.replace(/[&<>"']/g,character=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[character]??character));
 }
 
+/**
+ * The command that hands `url` to the default browser: `open` on macOS; on Windows, cmd's `start`, which passes the URL to the
+ * shell's protocol handler and reports a failed hand-off through its exit code. cmd is named by its System32 path, because a
+ * program named `open` or `cmd` earlier on PATH would otherwise run instead.
+ */
+function browserOpen(url:string):{command:string;args:string[]} {
+  if(process.platform!=='win32')return {command:'open',args:[url]};
+  // The loopback URL holds no cmd metacharacter, so it passes unquoted; `start` would read a quoted first argument as a window title.
+  return {command:join(process.env.SystemRoot??'C:\\Windows','System32','cmd.exe'),args:['/d','/c','start',url]};
+}
+
 function page(title:string,body:string):string {
   return `<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(title)}</title></head><body><h1>${escapeHtml(title)}</h1>${body}</body></html>`;
 }
@@ -111,7 +122,8 @@ export async function registerApp(options:RegisterOptions):Promise<Result<AppCre
   await listening.promise;
   const start=`http://127.0.0.1:${(server.address() as AddressInfo).port}/`;
   const timer=setTimeout(()=>done.resolve({ok:false,error:tr('The registration was not completed in the browser in time','未在限定时间内于浏览器中完成注册')}),options.timeoutMs??600_000);
-  const opened=await (options.runner??run)('open',[start],{});
+  const browser=browserOpen(start);
+  const opened=await (options.runner??run)(browser.command,browser.args,{});
   if(opened.code!==0)done.resolve({ok:false,error:tr(`Cannot open ${start}: ${opened.stderr}`,`无法打开 ${start}：${opened.stderr}`)});
   const result=await done.promise;
   clearTimeout(timer);
