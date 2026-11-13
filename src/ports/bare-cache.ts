@@ -43,12 +43,11 @@ async function lockPosix(path:string):Promise<Release> {
 }
 
 const GENERIC_READ_WRITE=0xC0000000,FILE_SHARE_ALL=7,OPEN_ALWAYS=4,FILE_ATTRIBUTE_NORMAL=0x80,INVALID_HANDLE=-1n;
-const LOCKFILE_FAIL_IMMEDIATELY=1,LOCKFILE_EXCLUSIVE_LOCK=2,ERROR_LOCK_VIOLATION=33,OVERLAPPED_BYTES=32;
+const LOCKFILE_FAIL_IMMEDIATELY=1,LOCKFILE_EXCLUSIVE_LOCK=2,OVERLAPPED_BYTES=32;
 type Kernel32={
   createFile:(path:Uint8Array)=>bigint;
   lockFile:(handle:bigint,overlapped:Uint8Array)=>number;
   closeHandle:(handle:bigint)=>number;
-  lastError:()=>number;
 };
 let kernel32:Kernel32|null=null;
 function windowsKernel():Kernel32 {
@@ -57,13 +56,11 @@ function windowsKernel():Kernel32 {
     CreateFileW:{args:[FFIType.ptr,FFIType.u32,FFIType.u32,FFIType.ptr,FFIType.u32,FFIType.u32,FFIType.ptr],returns:FFIType.i64},
     LockFileEx:{args:[FFIType.i64,FFIType.u32,FFIType.u32,FFIType.u32,FFIType.u32,FFIType.ptr],returns:FFIType.i32},
     CloseHandle:{args:[FFIType.i64],returns:FFIType.i32},
-    GetLastError:{args:[],returns:FFIType.u32},
   });
   kernel32={
     createFile:(path)=>symbols.CreateFileW(path,GENERIC_READ_WRITE,FILE_SHARE_ALL,null,OPEN_ALWAYS,FILE_ATTRIBUTE_NORMAL,null),
     lockFile:(handle,overlapped)=>symbols.LockFileEx(handle,LOCKFILE_EXCLUSIVE_LOCK|LOCKFILE_FAIL_IMMEDIATELY,0,1,0,overlapped),
     closeHandle:(handle)=>symbols.CloseHandle(handle),
-    lastError:()=>symbols.GetLastError(),
   };
   return kernel32;
 }
@@ -72,16 +69,12 @@ function windowsKernel():Kernel32 {
 async function lockWindows(path:string):Promise<Release> {
   const system=windowsKernel();
   const handle=system.createFile(Buffer.from(`${path}\0`,'utf16le'));
-  if(handle===INVALID_HANDLE)throw new Error(`Cannot lock ${path}: CreateFileW failed with error ${system.lastError()}`);
+  if(handle===INVALID_HANDLE)throw new Error(`Cannot lock ${path}: CreateFileW could not open it`);
   const overlapped=new Uint8Array(OVERLAPPED_BYTES);
-  try {
-    // Waiting inside LockFileEx would stall this whole process, every other seat included, until the holder finishes.
-    while(system.lockFile(handle,overlapped)===0){
-      const error=system.lastError();
-      if(error!==ERROR_LOCK_VIOLATION)throw new Error(`Cannot lock ${path}: LockFileEx failed with error ${error}`);
-      await sleep(RETRY_MS);
-    }
-  }catch(error){system.closeHandle(handle);throw error;}
+  // Waiting inside LockFileEx would stall this whole process, every other seat included, until the holder finishes.
+  // On this valid handle the only failure an immediate exclusive lock reports is another handle holding the byte.
+  // GetLastError cannot tell more: across bun:ffi calls it read 0 on Windows while another process held the lock.
+  while(system.lockFile(handle,overlapped)===0)await sleep(RETRY_MS);
   return async()=>{system.closeHandle(handle);};
 }
 
