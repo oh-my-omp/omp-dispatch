@@ -25,15 +25,11 @@ function flock():Flock {
   return kernel;
 }
 
-/**
- * Runs `work` while holding the exclusive flock(2) on `<bare>.lock`. Every coordinator process sharing the data
- * directory takes this lock, so all git operations on one bare cache run in order across processes; different caches
- * never wait on each other. The kernel releases the lock when its descriptor closes or its process dies. The lock file
- * sits beside the cache because a cache without HEAD is removed and cloned anew as a whole.
- */
-export async function lockBare<T>(bare:string,work:()=>Promise<T>):Promise<T> {
-  const system=flock(),path=`${bare}.lock`;
-  await mkdir(dirname(path),{recursive:true,mode:0o700});
+/** A held lock; releasing it closes the handle that holds it. */
+type Release=()=>Promise<void>;
+
+async function lockPosix(path:string):Promise<Release> {
+  const system=flock();
   const handle=await open(path,'a',0o600);
   try {
     // A blocking flock(2) would stall this whole process, every other seat included, until the holder finishes.
@@ -42,8 +38,58 @@ export async function lockBare<T>(bare:string,work:()=>Promise<T>):Promise<T> {
       if(errno!==system.wouldBlock&&errno!==EINTR)throw new Error(`Cannot lock ${path}: flock failed with errno ${errno}`);
       await sleep(RETRY_MS);
     }
-    return await work();
-  }finally {await handle.close();}
+  }catch(error){await handle.close();throw error;}
+  return ()=>handle.close();
+}
+
+const GENERIC_READ_WRITE=0xC0000000,FILE_SHARE_ALL=7,OPEN_ALWAYS=4,FILE_ATTRIBUTE_NORMAL=0x80,INVALID_HANDLE=-1n;
+const LOCKFILE_FAIL_IMMEDIATELY=1,LOCKFILE_EXCLUSIVE_LOCK=2,OVERLAPPED_BYTES=32;
+type Kernel32={
+  createFile:(path:Uint8Array)=>bigint;
+  lockFile:(handle:bigint,overlapped:Uint8Array)=>number;
+  closeHandle:(handle:bigint)=>number;
+};
+let kernel32:Kernel32|null=null;
+function windowsKernel():Kernel32 {
+  if(kernel32)return kernel32;
+  const {symbols}=dlopen('kernel32.dll',{
+    CreateFileW:{args:[FFIType.ptr,FFIType.u32,FFIType.u32,FFIType.ptr,FFIType.u32,FFIType.u32,FFIType.ptr],returns:FFIType.i64},
+    LockFileEx:{args:[FFIType.i64,FFIType.u32,FFIType.u32,FFIType.u32,FFIType.u32,FFIType.ptr],returns:FFIType.i32},
+    CloseHandle:{args:[FFIType.i64],returns:FFIType.i32},
+  });
+  kernel32={
+    createFile:(path)=>symbols.CreateFileW(path,GENERIC_READ_WRITE,FILE_SHARE_ALL,null,OPEN_ALWAYS,FILE_ATTRIBUTE_NORMAL,null),
+    lockFile:(handle,overlapped)=>symbols.LockFileEx(handle,LOCKFILE_EXCLUSIVE_LOCK|LOCKFILE_FAIL_IMMEDIATELY,0,1,0,overlapped),
+    closeHandle:(handle)=>symbols.CloseHandle(handle),
+  };
+  return kernel32;
+}
+
+/** Windows has no flock(2): LockFileEx locks the file's first byte, and the system drops it with the handle or the process. */
+async function lockWindows(path:string):Promise<Release> {
+  const system=windowsKernel();
+  const handle=system.createFile(Buffer.from(`${path}\0`,'utf16le'));
+  if(handle===INVALID_HANDLE)throw new Error(`Cannot lock ${path}: CreateFileW could not open it`);
+  const overlapped=new Uint8Array(OVERLAPPED_BYTES);
+  // Waiting inside LockFileEx would stall this whole process, every other seat included, until the holder finishes.
+  // On this valid handle the only failure an immediate exclusive lock reports is another handle holding the byte.
+  // GetLastError cannot tell more: across bun:ffi calls it read 0 on Windows while another process held the lock.
+  while(system.lockFile(handle,overlapped)===0)await sleep(RETRY_MS);
+  return async()=>{system.closeHandle(handle);};
+}
+
+/**
+ * Runs `work` while holding the exclusive lock on `<bare>.lock`: flock(2) on macOS and Linux, LockFileEx on Windows.
+ * Every coordinator process sharing the data directory takes this lock, so all git operations on one bare cache run in
+ * order across processes; different caches never wait on each other. The operating system releases the lock when its
+ * handle closes or its process dies. The lock file sits beside the cache because a cache without HEAD is removed and
+ * cloned anew as a whole.
+ */
+export async function lockBare<T>(bare:string,work:()=>Promise<T>):Promise<T> {
+  const path=`${bare}.lock`;
+  await mkdir(dirname(path),{recursive:true,mode:0o700});
+  const release=process.platform==='win32'?await lockWindows(path):await lockPosix(path);
+  try {return await work();}finally {await release();}
 }
 
 /**
