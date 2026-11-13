@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added Windows process start-time detection without relying on `ps`
 - Added Windows support for exclusive bare cache locking using LockFileEx, retrying while another process holds the lock
 
 ## [0.1.59] - 2026-11-12
