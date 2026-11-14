@@ -51,15 +51,20 @@ function escapeHtml(value:string):string {
   return value.replace(/[&<>"']/g,character=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[character]??character));
 }
 
+/** The environment variable that carries the URL into the Windows opener's fixed script. */
+const OPEN_URL_ENV='OMP_DISPATCH_OPEN_URL';
+
 /**
- * The command that hands `url` to the default browser: `open` on macOS; on Windows, cmd's `start`, which passes the URL to the
- * shell's protocol handler and reports a failed hand-off through its exit code. cmd is named by its System32 path, because a
- * program named `open` or `cmd` earlier on PATH would otherwise run instead.
+ * The command that hands `url` to the default browser: `open` on macOS; on Windows, Windows PowerShell's `Start-Process`, which
+ * passes the URL to the shell's protocol handler and exits non-zero when that hand-off fails. PowerShell is named by its System32
+ * path, so a program of that name earlier on PATH cannot run instead; the URL reaches the fixed script through the environment, so
+ * no shell parses it. omp's own `openPath` does the same hand-off but reports nothing back, and a failed open has to end the
+ * registration at once rather than at its timeout.
  */
-function browserOpen(url:string):{command:string;args:string[]} {
-  if(process.platform!=='win32')return {command:'open',args:[url]};
-  // The loopback URL holds no cmd metacharacter, so it passes unquoted; `start` would read a quoted first argument as a window title.
-  return {command:join(process.env.SystemRoot??'C:\\Windows','System32','cmd.exe'),args:['/d','/c','start',url]};
+function browserOpen(url:string):{command:string;args:string[];env:Record<string,string>} {
+  if(process.platform!=='win32')return {command:'open',args:[url],env:{}};
+  const powershell=join(process.env.SystemRoot??'C:\\Windows','System32','WindowsPowerShell','v1.0','powershell.exe');
+  return {command:powershell,args:['-NoProfile','-NonInteractive','-Command',`$ErrorActionPreference='Stop'; Start-Process $env:${OPEN_URL_ENV}`],env:{[OPEN_URL_ENV]:url}};
 }
 
 function page(title:string,body:string):string {
@@ -123,7 +128,7 @@ export async function registerApp(options:RegisterOptions):Promise<Result<AppCre
   const start=`http://127.0.0.1:${(server.address() as AddressInfo).port}/`;
   const timer=setTimeout(()=>done.resolve({ok:false,error:tr('The registration was not completed in the browser in time','未在限定时间内于浏览器中完成注册')}),options.timeoutMs??600_000);
   const browser=browserOpen(start);
-  const opened=await (options.runner??run)(browser.command,browser.args,{});
+  const opened=await (options.runner??run)(browser.command,browser.args,{env:browser.env});
   if(opened.code!==0)done.resolve({ok:false,error:tr(`Cannot open ${start}: ${opened.stderr}`,`无法打开 ${start}：${opened.stderr}`)});
   const result=await done.promise;
   clearTimeout(timer);

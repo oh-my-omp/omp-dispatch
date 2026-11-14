@@ -6,12 +6,13 @@ const runFile=promisify(execFile);
 const commandTimeoutMs=30_000;
 
 export type RunResult={code:number;stdout:string;stderr:string};
-export type Runner=(command:string,args:readonly string[],options:{cwd?:string})=>Promise<RunResult>;
+/** `env` adds variables to this process's environment for the command. */
+export type Runner=(command:string,args:readonly string[],options:{cwd?:string;env?:Readonly<Record<string,string>>})=>Promise<RunResult>;
 
 /** One place runs a local command for the launcher; a fake substitutes it in tests. */
 export const run:Runner=async(command,args,options)=>{
   try {
-    const {stdout,stderr}=await runFile(command,[...args],{encoding:'utf8',maxBuffer:1024*1024,timeout:commandTimeoutMs,...(options.cwd===undefined?{}:{cwd:options.cwd})});
+    const {stdout,stderr}=await runFile(command,[...args],{encoding:'utf8',maxBuffer:1024*1024,timeout:commandTimeoutMs,...(options.cwd===undefined?{}:{cwd:options.cwd}),...(options.env===undefined?{}:{env:{...process.env,...options.env}})});
     return {code:0,stdout,stderr};
   } catch(error) {
     // Node's execFile rejects with an ExecFileException whose payload the bun

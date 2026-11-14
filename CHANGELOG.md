@@ -9,7 +9,7 @@
 
 ### Fixed
 
-- Fixed GitHub App registration on Windows by opening the default browser via `cmd.exe start` instead of the unavailable `open` command
+- Fixed GitHub App registration on Windows by opening the default browser through Windows PowerShell's `Start-Process` instead of the unavailable `open` command; a failed hand-off still ends the registration at once with "Cannot open"
 
 ## [0.1.59] - 2026-11-12
 
