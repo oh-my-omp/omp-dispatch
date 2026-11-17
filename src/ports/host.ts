@@ -7,7 +7,8 @@ import {AgentRegistry,MAIN_AGENT_ID} from '@oh-my-pi/pi-coding-agent/registry/ag
 import {SessionManager} from '@oh-my-pi/pi-coding-agent/session/session-manager';
 import {discoverAgents,getAgent} from '@oh-my-pi/pi-coding-agent/task/discovery';
 import {cfgTaskAgentModelOverrides,cfgTaskDisabledAgents} from '@oh-my-pi/pi-coding-agent/task/settings';
-import {createMCPProxyTools,followMCPTools,type MCPToolFollower} from '@oh-my-pi/pi-coding-agent/task/executor';
+import {followMCPTools,type MCPToolFollower} from '@oh-my-pi/pi-coding-agent/task/executor';
+import {isLocalAgentSession} from '@oh-my-pi/pi-coding-agent/session/agent-session-handle';
 import {MCPManager} from '@oh-my-pi/pi-coding-agent/mcp/manager';
 import {USER_TODO_EDIT_CUSTOM_TYPE} from '@oh-my-pi/pi-coding-agent/tools/todo';
 import {resolveAgentModelSelection} from '@oh-my-pi/pi-coding-agent/config/model-resolver';
@@ -37,7 +38,8 @@ export function createHostPort(options:HostOptions):HostPort {
   let disposed=false;
   function main():AgentSession {
     const root=registry.get(MAIN_AGENT_ID);
-    if(!root?.session||root.kind!=='main'||root.status==='aborted')throw new Error('The native Main session is unavailable');
+    // The registry's surface is a cross-agent handle; only a session homed on this thread is the native object.
+    if(!root?.session||root.kind!=='main'||root.status==='aborted'||!isLocalAgentSession(root.session))throw new Error('The native Main session is unavailable');
     return root.session;
   }
   /** The definition a seat agent name resolves to in this workspace, as the native task tool would resolve it. */
@@ -146,10 +148,12 @@ export function createHostPort(options:HostOptions):HostPort {
           ...(modelPattern!==undefined?{activeModelPattern:modelPattern,fallbackModelPattern:modelPattern}:{}),
         });
         const cacheKey=manager.getHeader()?.providerPromptCacheKey??manager.getHeader()?.id;
-        // Main's MCP manager is shared like a native subagent's; its tools follow reloads through proxies.
+        // Main's MCP manager is shared like a native subagent's, but the seat views it through its own
+        // session scope, so tools a seat's MCP call makes a server add stay out of Main's table and of
+        // other seats. The follower subscribes before proxies are minted and replays changes on bind.
         const mcpManager=MCPManager.instance();
-        mcpFollower=mcpManager?followMCPTools(mcpManager,new Set(['dispatch'])):undefined;
-        const mcpTools=mcpManager?createMCPProxyTools(mcpManager).filter(proxy=>proxy.name!=='dispatch'):[];
+        mcpFollower=mcpManager?followMCPTools(mcpManager,{scope:manager.getSessionId()}):undefined;
+        const mcpTools=mcpFollower?.proxyTools()??[];
         const created=await createAgentSession({cwd:workspace,sessionManager:manager,authStorage:parent.modelRegistry.authStorage,modelRegistry:parent.modelRegistry,
           credentialSourceSessionId:parent.sessionManager.getSessionId(),settings,
           ...(!fork&&modelSelection.patterns?{modelPattern:modelSelection.patterns}:{}),
@@ -161,6 +165,8 @@ export function createHostPort(options:HostOptions):HostPort {
           // dispatch tool the extension itself registers inside the seat.
           customTools:[tool],enableMCP:true,
           ...(mcpManager?{mcpManager,...(mcpTools.length?{mcpTools}:{})}:{}),
+          // The seat's own view is also what helper sessions it derives start from.
+          ...(mcpFollower?{mcpToolScope:mcpFollower.scope}:{}),
           // An empty list would bind no extensions and prune Main's extension-provided model sources.
           ...(parent.preparedExtensions?.length?{preloadedPreparedExtensions:parent.preparedExtensions}:{}),
           ...(parent.extensionPaths?.length?{preloadedExtensionPaths:[...parent.extensionPaths]}:{}),
@@ -215,11 +221,10 @@ export function createHostPort(options:HostOptions):HostPort {
           try {
             if(signal.aborted)throw new Error('Seat was cancelled before dispatch');
             await session.prompt(prompt);
-            await session.waitForIdle();
-            while(session.hasPendingAsyncWork()){
-              if(signal.aborted)throw new Error('Seat was cancelled while descendant work settled');
-              await session.settleAsyncWork();
-            }
+            // The run stays open while descendant work can still wake it (jobs, queued deliveries, live
+            // children); waiting for its end settles all of it, and abort closes it at once.
+            await session.waitForRunEnd();
+            if(signal.aborted)throw new Error('Seat was cancelled while descendant work settled');
             if(!handedOff){
               // A model request that finally fails is recorded on the last assistant message; prompt() returns normally.
               const last=session.messages.filter(message=>message.role==='assistant').at(-1);
