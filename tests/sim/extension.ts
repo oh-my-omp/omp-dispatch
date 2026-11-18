@@ -176,15 +176,21 @@ function ownerStep(messages: Message[], spec: TicketSpec, brief: string): {step:
   const note = `round ${round} step ${step} revision ${revision}`;
   if (owner.kind === 'quit') return {step: {text: 'I cannot finish this ticket.'}, note};
   if (owner.kind === 'escalate') return {step: step === 0 ? {call: {name: 'dispatch', args: {input: {op: 'escalate', ticketId: spec.id, revision, kind: owner.escalation, reason: owner.reason, ...(owner.tier ? {tier: owner.tier} : {})}}}} : {text: 'Escalated.'}, note};
-  const bash = played(messages, latest + 1, 'bash');
-  if (step === 0) return {step: {call: {name: 'bash', args: {command: commitScript(spec, owner.write, owner.remove ?? [], `round ${round}`)}}}, note};
-  if (step === 1) {
-    const head = [...(bash[0]?.result ?? '').matchAll(/\b([0-9a-f]{40})\b/g)].at(-1)?.[1];
-    if (!head) return {step: {text: `Commit failed: ${bash[0]?.result ?? 'no output'}`}, note};
+  const before = owner.before ?? [];
+  const pre = before[step];
+  if (pre?.kind === 'call') return {step: {call: {name: pre.name, args: pre.args}}, note};
+  if (pre?.kind === 'wait') return {step: {call: {name: 'bash', args: {command: `while [ ! -f ${quote(pre.marker)} ]; do sleep 0.2; done`, timeout: 0}}}, note};
+  // Steps after the pre-commit ones, counted from the commit.
+  const at = step - before.length;
+  if (at === 0) return {step: {call: {name: 'bash', args: {command: commitScript(spec, owner.write, owner.remove ?? [], `round ${round}`)}}}, note};
+  if (at === 1) {
+    const committed = played(messages, latest + 1, null)[before.length]?.result;
+    const head = [...(committed ?? '').matchAll(/\b([0-9a-f]{40})\b/g)].at(-1)?.[1];
+    if (!head) return {step: {text: `Commit failed: ${committed ?? 'no output'}`}, note};
     return {step: {call: {name: 'dispatch', args: {input: {op: 'submit', ticketId: spec.id, revision, branch: `sim-${spec.id}`, head, title: `Sim ${spec.id}`, body: `Closes #${spec.issue}`}}}}, note};
   }
-  if (step === 2 && owner.after?.kind === 'block') return {step: {call: {name: 'bash', args: {command: `while [ ! -f ${quote(owner.after.marker)} ]; do sleep 0.2; done`, timeout: 0}}}, note};
-  if (step === 2 && owner.after?.kind === 'push') return {step: {call: {name: 'bash', args: {command: `while [ ! -f ${quote(owner.after.waitFor)} ]; do sleep 0.2; done\n${commitScript(spec, owner.after.write, [], `round ${round} follow-up`)}`, timeout: 0}}}, note};
+  if (at === 2 && owner.after?.kind === 'block') return {step: {call: {name: 'bash', args: {command: `while [ ! -f ${quote(owner.after.marker)} ]; do sleep 0.2; done`, timeout: 0}}}, note};
+  if (at === 2 && owner.after?.kind === 'push') return {step: {call: {name: 'bash', args: {command: `while [ ! -f ${quote(owner.after.waitFor)} ]; do sleep 0.2; done\n${commitScript(spec, owner.after.write, [], `round ${round} follow-up`)}`, timeout: 0}}}, note};
   return {step: {text: 'Handed off.'}, note};
 }
 
@@ -231,7 +237,9 @@ function respond(model: Model<Api>, context: Context, options?: SimpleStreamOpti
     const schema = intentSchema.safeParse(context.tools?.find(tool => tool.name === name)?.parameters);
     return schema.success && schema.data.required?.includes('i') ? {i: 'Simulated step', ...args} : args;
   };
-  appendFileSync(scenario.log, `${JSON.stringify({at: Date.now(), session: options?.sessionId ?? null, ...who, note: decided.note, step: 'call' in decided.step ? decided.step.call : 'fail' in decided.step ? {error: decided.step.fail} : decided.step})}\n`);
+  // `tools` is what omp sent: the names of every tool the requesting session presented to the model.
+  appendFileSync(scenario.log, `${JSON.stringify({at: Date.now(), session: options?.sessionId ?? null, ...who, note: decided.note, tools: (context.tools ?? []).map(tool => tool.name),
+    step: 'call' in decided.step ? decided.step.call : 'fail' in decided.step ? {error: decided.step.fail} : decided.step})}\n`);
   const partial: AssistantMessage = {role: 'assistant', content: [], api: model.api, provider: model.provider, model: model.id,
     usage: {input: 100, output: 50, cacheRead: 0, cacheWrite: 0, totalTokens: 150, cost: {input: 0.001, output: 0.002, cacheRead: 0, cacheWrite: 0, total: 0.003}},
     stopReason: 'stop', timestamp: Date.now()};
