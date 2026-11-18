@@ -1,34 +1,55 @@
 #!/usr/bin/env bun
-import {launcherCommand} from './commands.ts';
-import {serveConfigCheck} from './config-check.ts';
-import {readAppCredentials} from './github-app.ts';
-import {serveLauncher} from './server.ts';
-import {readConfigCheckSettings,readLauncherSettings} from './settings.ts';
-import {serveWebhook} from './webhook.ts';
-import {tr} from '../i18n.ts';
+import { tr } from "../../omomp-shared/i18n.ts";
+import { launcherCommand } from "./commands.ts";
+import { serveConfigCheck } from "./config-check.ts";
+import { readAppCredentials } from "./github-app.ts";
+import { serveLauncher } from "./server.ts";
+import { readConfigCheckSettings, readLauncherSettings } from "./settings.ts";
+import { serveWebhook } from "./webhook.ts";
 
-const args=process.argv.slice(2);
-if(args[0]==='serve'){
-  const log=(entry:Readonly<Record<string,unknown>>):void=>{process.stdout.write(`${JSON.stringify(entry)}\n`);};
-  const launcher=await serveLauncher({log});
-  console.log(tr(`omp-dispatch launcher serving http://127.0.0.1:${launcher.port}/<owner>/<repo>/issues/<number>?spec=<JSON>`,`调度启动器正在服务 http://127.0.0.1:${launcher.port}/<owner>/<repo>/issues/<number>?spec=<JSON>`));
-  // The config-check address is read once at start; an invalid setting or a bind failure skips only this listener.
-  const configCheck=await readConfigCheckSettings();
-  if(!configCheck.ok)console.error(tr(`Config check listener not started: ${configCheck.error}`,`未启动配置校验监听器：${configCheck.error}`));
-  else {
-    try {await serveConfigCheck({...configCheck.value,log});}
-    catch(error){
-      const detail=error instanceof Error?error.message:String(error);
-      console.error(tr(`Config check listener not started: ${detail}`,`未启动配置校验监听器：${detail}`));
-    }
-  }
-  // The webhook address is read once, for the listener's lifetime; trigger settings and the App are read per delivery.
-  const settings=await readLauncherSettings();
-  if(!settings.ok)console.error(tr(`GitHub App webhook listener not started: ${settings.error}`,`未启动 GitHub App webhook 监听器：${settings.error}`));
-  else await serveWebhook({...settings.value.webhook,log,registration:readAppCredentials,
-    settings:async()=>{const current=await readLauncherSettings();return current.ok?{ok:true,value:current.value.trigger}:current;}});
-}else{
-  const result=await launcherCommand(args);
-  if(result.ok)console.log(result.value);
-  else{console.error(result.error);process.exitCode=1;}
+const args = process.argv.slice(2);
+if (args[0] === "serve") {
+	const log = (entry: Readonly<Record<string, unknown>>): void => {
+		process.stdout.write(`${JSON.stringify(entry)}\n`);
+	};
+	const launcher = await serveLauncher({ log });
+	console.log(
+		tr(
+			`omp-dispatch launcher serving http://127.0.0.1:${launcher.port}/<owner>/<repo>/issues/<number>?spec=<JSON>`,
+			`调度启动器正在服务 http://127.0.0.1:${launcher.port}/<owner>/<repo>/issues/<number>?spec=<JSON>`,
+		),
+	);
+	// The config-check address is read once at start; an invalid setting or a bind failure skips only this listener.
+	const configCheck = await readConfigCheckSettings();
+	if (!configCheck.ok)
+		console.error(tr(`Config check listener not started: ${configCheck.error}`, `未启动配置校验监听器：${configCheck.error}`));
+	else {
+		try {
+			await serveConfigCheck({ ...configCheck.value, log });
+		} catch (error) {
+			const detail = error instanceof Error ? error.message : String(error);
+			console.error(tr(`Config check listener not started: ${detail}`, `未启动配置校验监听器：${detail}`));
+		}
+	}
+	// The webhook address is read once, for the listener's lifetime; trigger settings and the App are read per delivery.
+	const settings = await readLauncherSettings();
+	if (!settings.ok)
+		console.error(tr(`GitHub App webhook listener not started: ${settings.error}`, `未启动 GitHub App webhook 监听器：${settings.error}`));
+	else
+		await serveWebhook({
+			...settings.value.webhook,
+			log,
+			registration: readAppCredentials,
+			settings: async () => {
+				const current = await readLauncherSettings();
+				return current.ok ? { ok: true, value: current.value.trigger } : current;
+			},
+		});
+} else {
+	const result = await launcherCommand(args);
+	if (result.ok) console.log(result.value);
+	else {
+		console.error(result.error);
+		process.exitCode = 1;
+	}
 }
