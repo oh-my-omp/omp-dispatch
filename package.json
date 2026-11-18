@@ -4,20 +4,8 @@
   "description": "Dispatch delivery for Oh My Pi: tickets move along a configurable workflow state machine, with durable local protocol state, isolated seats, source-confirmed effects, and native scheduling.",
   "type": "module",
   "license": "MIT",
-  "keywords": [
-    "pi-package",
-    "pi-extension",
-    "omp"
-  ],
-  "files": [
-    "index.ts",
-    "active-tools.ts",
-    "src/",
-    "agents/",
-    "README.md",
-    "CHANGELOG.md",
-    "LICENSE"
-  ],
+  "keywords": ["pi-package", "pi-extension", "omp"],
+  "files": ["index.ts", "active-tools.ts", "src/", "agents/", "README.md", "CHANGELOG.md", "LICENSE"],
   "omomp": {
     "changelog": "CHANGELOG.md"
   },
@@ -25,9 +13,7 @@
     "omp-dispatch-launcher": "./src/launcher/cli.ts"
   },
   "omp": {
-    "extensions": [
-      "./index.ts"
-    ],
+    "extensions": ["./index.ts"],
     "settings": {
       "workflowFile": {
         "type": "string",
@@ -53,10 +39,7 @@
       },
       "githubTrigger": {
         "type": "enum",
-        "values": [
-          "link",
-          "label"
-        ],
+        "values": ["link", "label"],
         "default": "link",
         "description": "GitHub App trigger: link starts a coordinator once an issue carries a valid launcher link; label also requires a label from githubTriggerLabels"
       },
