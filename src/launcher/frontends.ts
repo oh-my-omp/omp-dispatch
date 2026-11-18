@@ -1,6 +1,6 @@
-import {z} from '@oh-my-pi/omptype/zod';
-import type {Runner} from './exec.ts';
-import {launchTern,ternSpec} from './tern.ts';
+import type { z } from "@oh-my-pi/omptype/zod";
+import type { Runner } from "./exec.ts";
+import { launchTern, ternSpec } from "./tern.ts";
 
 /**
  * Where a coordinator process runs. The link names its frontend as a JSON
@@ -9,23 +9,24 @@ import {launchTern,ternSpec} from './tern.ts';
  * changing its grammar. With a second frontend this becomes
  * `z.union([ternSpec, otherSpec])`.
  */
-export const frontendSpec=ternSpec;
-export type FrontendSpec=z.infer<typeof frontendSpec>;
+export const frontendSpec = ternSpec;
+export type FrontendSpec = z.infer<typeof frontendSpec>;
 
 /** What any frontend starts: `omp --dispatch <reference>` in `cwd`. */
-export type CoordinatorTarget={reference:string;cwd:string};
+export type CoordinatorTarget = { reference: string; cwd: string };
 
 /** `existing`: the frontend already runs a coordinator for this reference and started nothing. */
-export type LaunchOutcome={kind:'launched'}|{kind:'existing';detail:string}|{kind:'frontendFailed';output:string};
+export type LaunchOutcome = { kind: "launched" } | { kind: "existing"; detail: string } | { kind: "frontendFailed"; output: string };
 
-function startFrontend(spec:FrontendSpec,target:CoordinatorTarget,exec:Runner):Promise<LaunchOutcome> {
-  switch(spec.kind){
-    case 'tern':return launchTern(target,exec);
-  }
+function startFrontend(spec: FrontendSpec, target: CoordinatorTarget, exec: Runner): Promise<LaunchOutcome> {
+	switch (spec.kind) {
+		case "tern":
+			return launchTern(target, exec);
+	}
 }
 
 /** The last launch queued for each reference; it never rejects, and leaves once nothing follows it. */
-const queued=new Map<string,Promise<void>>();
+const queued = new Map<string, Promise<void>>();
 
 /**
  * Launches for one reference run one at a time, whichever listener asked: a
@@ -36,10 +37,15 @@ const queued=new Map<string,Promise<void>>();
  * process. The queue orders launches only; the frontend stays the record of
  * what runs.
  */
-export function launchFrontend(spec:FrontendSpec,target:CoordinatorTarget,exec:Runner):Promise<LaunchOutcome> {
-  const launch=(queued.get(target.reference)??Promise.resolve()).then(()=>startFrontend(spec,target,exec));
-  const settled=launch.then(()=>undefined,()=>undefined);
-  queued.set(target.reference,settled);
-  void settled.then(()=>{if(queued.get(target.reference)===settled)queued.delete(target.reference);});
-  return launch;
+export function launchFrontend(spec: FrontendSpec, target: CoordinatorTarget, exec: Runner): Promise<LaunchOutcome> {
+	const launch = (queued.get(target.reference) ?? Promise.resolve()).then(() => startFrontend(spec, target, exec));
+	const settled = launch.then(
+		() => undefined,
+		() => undefined,
+	);
+	queued.set(target.reference, settled);
+	void settled.then(() => {
+		if (queued.get(target.reference) === settled) queued.delete(target.reference);
+	});
+	return launch;
 }
