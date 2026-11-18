@@ -98,7 +98,7 @@
     "sim": "bun tests/sim/run.ts"
   },
   "devDependencies": {
-    "@oh-my-pi/pi-coding-agent": "^18.22.0",
+    "@oh-my-pi/pi-coding-agent": "latest",
     "@types/bun": "^1.3.14",
     "typescript": "^5.9.3"
   },
@@ -106,7 +106,7 @@
     "bun": ">=1.3.14"
   },
   "dependencies": {
-    "@oh-my-pi/omptype": "^18.22.0"
+    "@oh-my-pi/omptype": "latest"
   },
   "peerDependencies": {
     "@oh-my-pi/pi-coding-agent": "*"
