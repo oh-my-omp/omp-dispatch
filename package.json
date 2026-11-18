@@ -1,97 +1,115 @@
 {
-  "name": "omp-dispatch",
-  "version": "0.2.0",
-  "description": "Dispatch delivery for Oh My Pi: tickets move along a configurable workflow state machine, with durable local protocol state, isolated seats, source-confirmed effects, and native scheduling.",
-  "type": "module",
-  "license": "MIT",
-  "keywords": ["pi-package", "pi-extension", "omp"],
-  "files": ["index.ts", "active-tools.ts", "src/", "agents/", "README.md", "CHANGELOG.md", "LICENSE"],
-  "omomp": {
-    "changelog": "CHANGELOG.md"
-  },
-  "bin": {
-    "omp-dispatch-launcher": "./src/launcher/cli.ts"
-  },
-  "omp": {
-    "extensions": ["./index.ts"],
-    "settings": {
-      "workflowFile": {
-        "type": "string",
-        "description": "Workflow file path, relative to the coordinator working directory",
-        "env": "OMP_DISPATCH_WORKFLOW"
-      },
-      "dataDir": {
-        "type": "string",
-        "description": "Directory for agenda state, repository caches, seat worktrees and sessions, relative to the coordinator working directory; unset means <agentDir>/omp-dispatch; read when the coordinator starts",
-        "env": "OMP_DISPATCH_DIR"
-      },
-      "recomputeIntervalSeconds": {
-        "type": "number",
-        "default": 120,
-        "description": "Seconds between agenda recomputes, a whole number from 1 to 2147483; read when the coordinator starts",
-        "env": "OMP_DISPATCH_RECOMPUTE_SECONDS"
-      },
-      "meerkatConfigDir": {
-        "type": "string",
-        "default": "",
-        "description": "Meerkat configuration repository root, relative to the coordinator working directory; empty leaves Meerkat integration off; read when the coordinator starts",
-        "env": "OMP_DISPATCH_MEERKAT_CONFIG"
-      },
-      "githubTrigger": {
-        "type": "enum",
-        "values": ["link", "label"],
-        "default": "link",
-        "description": "GitHub App trigger: link starts a coordinator once an issue carries a valid launcher link; label also requires a label from githubTriggerLabels"
-      },
-      "githubTriggerLabels": {
-        "type": "string",
-        "default": "",
-        "description": "Comma-separated labels for the label trigger; empty means any label"
-      },
-      "githubTriggerAssociations": {
-        "type": "string",
-        "default": "OWNER,MEMBER,COLLABORATOR",
-        "description": "Comma-separated issue author associations allowed to start a coordinator through the GitHub App"
-      },
-      "webhookHost": {
-        "type": "string",
-        "default": "127.0.0.1",
-        "description": "Host the GitHub App webhook listener binds; read when the launcher starts"
-      },
-      "webhookPort": {
-        "type": "number",
-        "default": 47592,
-        "description": "Port the GitHub App webhook listener binds; read when the launcher starts"
-      },
-      "configCheckHost": {
-        "type": "string",
-        "default": "127.0.0.1",
-        "description": "Host the Meerkat configuration check listener binds (POST /meerkat-config/check); read when the launcher starts"
-      },
-      "configCheckPort": {
-        "type": "number",
-        "default": 47593,
-        "description": "Port the Meerkat configuration check listener binds; must differ from the link port 47591 and webhookPort; read when the launcher starts"
-      }
-    }
-  },
-  "scripts": {
-    "check": "tsc --noEmit",
-    "test": "bun test",
-    "sim": "bun tests/sim/run.ts"
-  },
-  "devDependencies": {
-    "@oh-my-pi/pi-coding-agent": "^18.12.6",
-    "@types/bun": "^1.3.14",
-    "typescript": "^5.9.3"
-  },
-  "engines": {
-    "bun": ">=1.3.14"
-  },
-  "dependencies": {
-    "@oh-my-pi/omptype": "^18.12.6"
-  },
-  "peerDependencies": {
-    "@oh-my-pi/pi-coding-agent": "*"
-  }
+	"name": "omp-dispatch",
+	"version": "0.2.0",
+	"description": "Dispatch delivery for Oh My Pi: tickets move along a configurable workflow state machine, with durable local protocol state, isolated seats, source-confirmed effects, and native scheduling.",
+	"type": "module",
+	"license": "MIT",
+	"keywords": [
+		"pi-package",
+		"pi-extension",
+		"omp"
+	],
+	"files": [
+		"index.ts",
+		"omomp-shared/",
+		"src/",
+		"agents/",
+		"README.md",
+		"CHANGELOG.md",
+		"LICENSE"
+	],
+	"omomp": {
+		"changelog": "CHANGELOG.md"
+	},
+	"bin": {
+		"omp-dispatch-launcher": "./src/launcher/cli.ts"
+	},
+	"omp": {
+		"extensions": [
+			"./index.ts"
+		],
+		"settings": {
+			"workflowFile": {
+				"type": "string",
+				"description": "Workflow file path, relative to the coordinator working directory",
+				"env": "OMP_DISPATCH_WORKFLOW"
+			},
+			"dataDir": {
+				"type": "string",
+				"description": "Directory for agenda state, repository caches, seat worktrees and sessions, relative to the coordinator working directory; unset means <agentDir>/omp-dispatch; read when the coordinator starts",
+				"env": "OMP_DISPATCH_DIR"
+			},
+			"recomputeIntervalSeconds": {
+				"type": "number",
+				"default": 120,
+				"description": "Seconds between agenda recomputes, a whole number from 1 to 2147483; read when the coordinator starts",
+				"env": "OMP_DISPATCH_RECOMPUTE_SECONDS"
+			},
+			"meerkatConfigDir": {
+				"type": "string",
+				"default": "",
+				"description": "Meerkat configuration repository root, relative to the coordinator working directory; empty leaves Meerkat integration off; read when the coordinator starts",
+				"env": "OMP_DISPATCH_MEERKAT_CONFIG"
+			},
+			"githubTrigger": {
+				"type": "enum",
+				"values": [
+					"link",
+					"label"
+				],
+				"default": "link",
+				"description": "GitHub App trigger: link starts a coordinator once an issue carries a valid launcher link; label also requires a label from githubTriggerLabels"
+			},
+			"githubTriggerLabels": {
+				"type": "string",
+				"default": "",
+				"description": "Comma-separated labels for the label trigger; empty means any label"
+			},
+			"githubTriggerAssociations": {
+				"type": "string",
+				"default": "OWNER,MEMBER,COLLABORATOR",
+				"description": "Comma-separated issue author associations allowed to start a coordinator through the GitHub App"
+			},
+			"webhookHost": {
+				"type": "string",
+				"default": "127.0.0.1",
+				"description": "Host the GitHub App webhook listener binds; read when the launcher starts"
+			},
+			"webhookPort": {
+				"type": "number",
+				"default": 47592,
+				"description": "Port the GitHub App webhook listener binds; read when the launcher starts"
+			},
+			"configCheckHost": {
+				"type": "string",
+				"default": "127.0.0.1",
+				"description": "Host the Meerkat configuration check listener binds (POST /meerkat-config/check); read when the launcher starts"
+			},
+			"configCheckPort": {
+				"type": "number",
+				"default": 47593,
+				"description": "Port the Meerkat configuration check listener binds; must differ from the link port 47591 and webhookPort; read when the launcher starts"
+			}
+		}
+	},
+	"scripts": {
+		"check": "biome check . && tsc --noEmit",
+		"test": "bun test",
+		"sim": "bun tests/sim/run.ts"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "latest",
+		"@oh-my-pi/pi-coding-agent": "latest",
+		"@types/bun": "latest",
+		"typescript": "latest"
+	},
+	"engines": {
+		"bun": ">=1.3.14"
+	},
+	"dependencies": {
+		"@oh-my-pi/omptype": "latest"
+	},
+	"peerDependencies": {
+		"@oh-my-pi/pi-coding-agent": "*"
+	}
 }
