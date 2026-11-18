@@ -178,6 +178,10 @@ export function createHostPort(options:HostOptions):HostPort {
         });
         seat.session=created.session;
         mcpFollower?.bind(created.session);
+        // omp applies a rebind as a queued tool-registry mutation that a request does not wait for, so a tool the
+        // seat's own MCP call just added could miss its next request. Each request first waits for the mutations
+        // already queued, then carries the seat's settled tool table.
+        if(mcpFollower)created.session.addDisposer(created.session.agent.addBeforeModelCallHook(signal=>created.session.runToolRegistryMutation(async()=>{},signal)));
         const extensionSends:Promise<unknown>[]=[];
         await initializeExtensions(created.session,{reportSendError:(_action,error)=>options.onSeatError(input.ticketId,error.message),reportRuntimeError:error=>options.onSeatError(input.ticketId,error.error),
           trackExtensionSend:send=>{extensionSends.push(send.catch(()=>{}));}});

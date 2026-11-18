@@ -794,17 +794,17 @@ const cases: Case[] = [
   {
     // Two seats share Main's MCP server. A's Owner calls fx `load`, which makes the server add `added` during the
     // call, then calls `added`; B's Owner waits for that load before it commits. The added tool belongs to A's view
-    // alone: A's request that calls it presents it and the call runs, while Main's and every other seat's later
-    // requests do not. omp rebinds a seat's tools to its changed view asynchronously after the call returns, and
-    // the scripted model answers within milliseconds, so A pauses a second before it calls the added tool.
+    // alone: A's next request presents it and the call runs, while Main's and every other seat's later requests do
+    // not. The scripted model answers within milliseconds, so A's next request also shows that it waited for the
+    // rebind of the seat's tools instead of racing it.
     name: 'mcp-scope',
     mcp: true,
     files: {'a.txt': '0\n', 'b.txt': '0\n'},
     issues: [{title: 'A'}, {title: 'B'}],
     requiredChecks: [], ci: {default: 'SUCCESS', failMarker: null}, rootIssue: 1,
     scenario: markers => ({parent: null, closure: {}, tickets: [
-      ticket('A', 1, [{kind: 'commit', before: [{kind: 'call', name: 'mcp__fx_load', args: {}}, {kind: 'call', name: 'bash', args: {command: 'sleep 1'}},
-        {kind: 'call', name: 'mcp__fx_added', args: {}}], write: {'a.txt': '1\n'}}], {'a.txt': '1\n'}),
+      ticket('A', 1, [{kind: 'commit', before: [{kind: 'call', name: 'mcp__fx_load', args: {}}, {kind: 'call', name: 'mcp__fx_added', args: {}}],
+        write: {'a.txt': '1\n'}}], {'a.txt': '1\n'}),
       ticket('B', 2, [{kind: 'commit', before: [{kind: 'wait', marker: join(markers, 'fx-loaded')}], write: {'b.txt': '1\n'}}], {'b.txt': '1\n'}),
     ]}),
     async check(run) {
@@ -814,12 +814,17 @@ const cases: Case[] = [
       const load = log.find(entry => isOwner(entry, 'A') && entry.step.name === 'mcp__fx_load');
       if (!load) return [...failures, 'A never called mcp__fx_load'];
       const later = log.filter(entry => entry.at > load.at);
+      // The readings the scenario judges are printed as it reads them: every request after the load, then every seat.
+      const who = (entry: LogEntry) => entry.kind === 'main' ? 'Main' : `${entry.ticket} ${entry.role}`;
+      console.log(`  ${run.name}: +0ms ${who(load)} request answered with mcp__fx_load`);
+      for (const entry of later)
+        console.log(`  ${run.name}: +${entry.at - load.at}ms ${who(entry)} request answered with ${entry.step.name ?? 'text'} presents mcp__fx_added ${entry.tools.includes('mcp__fx_added')}`);
       const aNext = later.find(entry => isOwner(entry, 'A'));
-      const aCall = later.find(entry => isOwner(entry, 'A') && entry.step.name === 'mcp__fx_added');
-      if (!aCall?.tools.includes('mcp__fx_added')) failures.push(`A's request calling mcp__fx_added does not present it: ${JSON.stringify(aCall?.tools)}`);
+      if (aNext?.step.name !== 'mcp__fx_added' || !aNext.tools.includes('mcp__fx_added'))
+        failures.push(`A's next request after load does not present and call mcp__fx_added: ${JSON.stringify({step: aNext?.step.name, tools: aNext?.tools})}`);
       const others = later.filter(entry => !isOwner(entry, 'A'));
       const leaked = others.filter(entry => entry.tools.includes('mcp__fx_added'));
-      if (leaked.length) failures.push(`mcp__fx_added reached ${leaked.map(entry => entry.kind === 'main' ? 'Main' : `${entry.ticket} ${entry.role}`).join(', ')}`);
+      if (leaked.length) failures.push(`mcp__fx_added reached ${leaked.map(who).join(', ')}`);
       if (!others.some(entry => entry.kind === 'main')) failures.push('Main sent no request after the load');
       if (!others.some(entry => isOwner(entry, 'B'))) failures.push('B sent no request after the load');
       const state = await agenda(run);
@@ -828,6 +833,7 @@ const cases: Case[] = [
       const aOwner = owners(sessions, 'A')[0];
       const added = aOwner?.lines.flatMap(line => { const parsed = messageLineSchema.safeParse(line); return parsed.success ? [parsed.data.message] : []; })
         .find(message => message.role === 'toolResult' && JSON.stringify(message.content).includes('fx added ran'));
+      console.log(`  ${run.name}: A owner mcp__fx_added result ${JSON.stringify(added?.content)} isError ${added?.isError === true}`);
       if (!added || added.isError === true) failures.push(`A's mcp__fx_added call returned no server result: ${JSON.stringify(added)}`);
       // Every seat starts from Main's MCP view and holds exactly one dispatch tool, the bound one.
       for (const session of sessions) {
@@ -836,15 +842,9 @@ const cases: Case[] = [
         const contract = session.lines.find(line => line.type === 'custom' && line.customType === 'dispatch-session-contract');
         const tools = z.object({data: z.object({tools: z.array(z.string())})}).safeParse(contract);
         const count = tools.success ? tools.data.data.tools.filter(name => name === 'dispatch').length : 0;
+        console.log(`  ${run.name}: seat ${session.ticket} ${session.role} first request presents mcp__fx_load ${first?.tools.includes('mcp__fx_load')}; contract tools list dispatch ${count} times`);
         if (count !== 1) failures.push(`${session.ticket} ${session.role} contract lists dispatch ${count} times`);
       }
-      const mainAfter = others.filter(entry => entry.kind === 'main');
-      const bAfter = others.filter(entry => isOwner(entry, 'B'));
-      console.log(`  ${run.name}: A's first request after load (+${aNext ? aNext.at - load.at : '?'}ms) presents mcp__fx_added ${aNext?.tools.includes('mcp__fx_added')};`
-        + ` A's request calling it (+${aCall ? aCall.at - load.at : '?'}ms) presents it ${aCall?.tools.includes('mcp__fx_added')}; added call result ${JSON.stringify(added?.content)};`
-        + ` Main requests after load ${mainAfter.length}, with mcp__fx_added ${mainAfter.filter(entry => entry.tools.includes('mcp__fx_added')).length};`
-        + ` B Owner requests after load ${bAfter.length}, with mcp__fx_added ${bAfter.filter(entry => entry.tools.includes('mcp__fx_added')).length};`
-        + ` seats ${sessions.length}, first requests with mcp__fx_load ${sessions.filter(session => log.find(entry => entry.kind === 'seat' && entry.session === session.id)?.tools.includes('mcp__fx_load')).length}`);
       return failures;
     },
   },
