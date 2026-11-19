@@ -1,11 +1,3 @@
-// State-flow simulation of omp-dispatch. Each scenario runs the real `omp`
-// binary in RPC mode with the real extension (index.ts), the real controller,
-// host, git worktrees, native sessions and forks. What is simulated: the model
-// (tests/sim/extension.ts plays Main and every seat), GitHub
-// (tests/sim/github-sim.ts behind a `gh` shim on PATH, backed by real bare
-// repositories), and, in mcp-scope, an MCP server (tests/sim/mcp-fixture.ts).
-// Run: `bun run sim [scenario...]`.
-
 import { closeSync, cpSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { basename, join, resolve } from "node:path";
@@ -29,20 +21,16 @@ import { git, remotePath, type SimState, seedGitHub, withState } from "./github-
 import type { Expect, Scenario, TicketSpec } from "./scenario.ts";
 
 const ROOT = resolve(import.meta.dir, "../..");
-/** The Meerkat configuration Meerkat-on scenarios point the `meerkatConfigDir` plugin setting at; its Project is the simulated `sim` #1. */
 const MEERKAT_CONFIG = join(ROOT, "tests/sim/meerkat-config");
 const REPO = { owner: "sim", name: "arena" };
 const KEY = `${REPO.owner}/${REPO.name}`;
-// Long enough for the abandon scenario's injected provider failure: omp retries it eleven times, about 30 seconds apart.
 const DEADLINE_MS = 420_000;
 
-/** Parse a file-shaped workflow fixture; a fixture the parser refuses is a broken simulation. */
 function workflowOf(source: unknown): Workflow {
 	const parsed = parseWorkflow(source);
 	if (!parsed.ok) throw new Error(`Invalid sim workflow at ${parsed.error.path}: ${parsed.error.reason}`);
 	return parsed.value;
 }
-/** Every seat of `workflow` played by one scripted agent. */
 function playedBy(workflow: Workflow, agent: string): Workflow {
 	const seat = <S extends TicketState | ParentState>(state: S): S =>
 		state.kind === "work"
@@ -61,9 +49,7 @@ function playedBy(workflow: Workflow, agent: string): Workflow {
 		},
 	};
 }
-/** The built-in workflow with every seat played by the scripted `sim-seat` agent. */
 const SIM_WORKFLOW = playedBy(workflowOf(YAML.parse(readFileSync(join(ROOT, "src/default-workflow.yml"), "utf8"))), "sim-seat");
-/** The subject each judge role of `workflow` judges. */
 function judgeSubjects(workflow: Workflow): Map<string, "pullRequest" | "mergeCommit" | "parent"> {
 	const subjects = new Map<string, "pullRequest" | "mergeCommit" | "parent">();
 	for (const state of Object.values(workflow.ticket.states))
@@ -83,7 +69,6 @@ export type Run = {
 	work: string;
 	data: string;
 	mainSessions: string;
-	/** `meerkat` is the Meerkat configuration directory the run's `meerkatConfigDir` plugin setting names, or null with Meerkat integration off. */
 	scenarioFile: string;
 	scenario: Scenario;
 	workflow: Workflow;
@@ -91,26 +76,15 @@ export type Run = {
 	meerkat: string | null;
 	proc: Subprocess<"pipe", number, number> | null;
 	starts: number;
-	/** The work directory's `.omp/mcp.json` serves the `fx` fixture, and omp presents MCP tools top-level. */
 	mcp: boolean;
 };
 export type Case = {
 	name: string;
-	/** The workflow the run's data directory supplies to convene; SIM_WORKFLOW when omitted. */
 	workflow?: Workflow;
-	/** Agenda state files the data directory holds before the first start, copied unchanged; each is named `<agenda id>.json`. */
 	saved?: string[];
-	/**
-	 * Meerkat integration on, with MEERKAT_CONFIG. `holdComment` makes the simulated GitHub hold the comment request that finds
-	 * `skip` comments, `at` before or after recording it, touching `markers/comment-arrived` until `markers/release-comment`
-	 * or `markers/drop-comment` exists. `guardiansURL` replaces the configuration's intent guardians address in a copy made
-	 * for the run.
-	 */
 	meerkat?: { holdComment: Pick<NonNullable<SimState["commentHold"]>, "skip" | "at"> | null; guardiansURL?: string };
-	/** The project `.omp/mcp.json` serves tests/sim/mcp-fixture.ts as `fx`; its first `load` call creates `markers/fx-loaded`. */
 	mcp?: boolean;
 	files: Record<string, string>;
-	/** Issue titles in creation order; issue N is the Nth entry. The first may list children. */
 	issues: { title: string; children?: number[] }[];
 	requiredChecks: string[];
 	ci: { default: SimState["ciDefault"]; failMarker: string | null };
@@ -119,8 +93,6 @@ export type Case = {
 	drive?: (run: Run) => Promise<void>;
 	check: (run: Run) => Promise<string[]>;
 };
-
-/* ------------------------------------------------------------ process */
 
 function setup(spec: Case): Run {
 	const dir = mkdtempSync(`/tmp/dispatch-sim-${spec.name.replaceAll("/", "-")}-`);
@@ -151,7 +123,6 @@ function setup(spec: Case): Run {
 			: null,
 	});
 	const workflow = spec.workflow ?? SIM_WORKFLOW;
-	// Every agent the workflow names is a scripted seat; the data directory's workflow.yml is the override convene reads (JSON is YAML).
 	for (const agent of workflowAgents(workflow))
 		writeFileSync(
 			join(work, ".omp", "agents", `${agent}.md`),
@@ -180,8 +151,6 @@ function setup(spec: Case): Run {
 		const delivery = join(meerkat, "dispatch", "delivery.yaml");
 		writeFileSync(delivery, readFileSync(delivery, "utf8").replace(/^guardiansURL: .*$/m, `guardiansURL: ${spec.meerkat.guardiansURL}`));
 	}
-	// The coordinator's own settings come only from the work directory's project plugin overrides, the store
-	// `/settings` and `omp plugin config` write; `start` keeps their environment variables out of omp.
 	writeFileSync(
 		join(work, ".omp", "plugin-overrides.json"),
 		JSON.stringify(
@@ -232,10 +201,7 @@ function start(run: Run): void {
 		stderr = openSync(join(run.dir, `omp-${run.starts}.stderr.log`), "a");
 	// The injected provider failure must surface at once: omp's automatic retry would otherwise wait out its budget.
 	const config = join(run.dir, "omp-config.yml");
-	// With xd:// mounting on, MCP tools reach the model as devices, not by name; MCP runs present them top-level
-	// so each request's tool list shows the session's MCP view.
 	writeFileSync(config, `retry:\n  enabled: false\n${run.mcp ? "tools:\n  xdev: false\n" : ""}`);
-	// The operator's environment would take precedence over the run's plugin settings, so none of it reaches omp.
 	const {
 		OMP_DISPATCH_DIR: _dir,
 		OMP_DISPATCH_RECOMPUTE_SECONDS: _interval,
@@ -274,7 +240,6 @@ function start(run: Run): void {
 	closeSync(stderr);
 }
 
-/** Closes stdin, which is RPC mode's clean shutdown: session_shutdown runs and the process exits. */
 async function stop(run: Run): Promise<void> {
 	const proc = run.proc;
 	if (!proc) return;
@@ -291,9 +256,6 @@ async function kill(run: Run): Promise<void> {
 	run.proc = null;
 }
 
-/* ------------------------------------------------------------ observations */
-
-/** The run's own agenda: the one that belongs to its launch issue, whatever else the data directory holds. */
 async function agenda(run: Run): Promise<Agenda | null> {
 	const files = createAgendaFiles(run.data);
 	const list = await files.list();
@@ -331,7 +293,6 @@ const logSchema = z.object({
 	role: z.string().optional(),
 	ticket: z.string().optional(),
 	note: z.string(),
-	/** Names of the tools the request presented to the model. */
 	tools: z.array(z.string()),
 	step: z.object({ name: z.string().optional(), args: z.record(z.string(), z.unknown()).optional(), text: z.string().optional() }),
 });
@@ -358,7 +319,6 @@ function modelLog(run: Run): LogEntry[] {
 		.map((line) => logSchema.parse(JSON.parse(line)));
 }
 
-/** The dispatch input of a logged tool call, or null for text and other tools. */
 function dispatchInput(entry: LogEntry): z.infer<typeof inputSchema>["input"] | null {
 	if (entry.step.name !== "dispatch") return null;
 	const parsed = inputSchema.safeParse(entry.step.args);
@@ -412,7 +372,6 @@ const messageLineSchema = z
 	.object({ message: z.object({ role: z.string(), content: z.unknown(), toolCallId: z.string().optional() }).passthrough() })
 	.passthrough();
 
-/** Verdicts a gate seat actually submitted and the dispatch tool accepted, read from the seat transcripts. */
 function acceptedVerdicts(sessions: SeatSession[]): { ticket: string; role: string; note: string }[] {
 	const out: { ticket: string; role: string; note: string }[] = [];
 	for (const session of sessions) {
@@ -446,7 +405,6 @@ const dispatchReplySchema = z
 	.passthrough();
 type MainCall = { input: z.infer<typeof callSchema>["arguments"]["input"]; reply: z.infer<typeof dispatchReplySchema> | null };
 
-/** Main's dispatch calls across its sessions in order, each with the reply the dispatch tool returned. */
 function mainCalls(run: Run): MainCall[] {
 	const replyOf = (content: unknown): MainCall["reply"] => {
 		const text = resultTextSchema.safeParse(content);
@@ -489,9 +447,6 @@ function mainCalls(run: Run): MainCall[] {
 const simState = (run: Run): SimState => withState(run.github, (state) => structuredClone(state));
 const gitIn = (run: Run, args: string[]) => git(remotePath(run.github, KEY), args, true);
 
-/* ------------------------------------------------------------ shared checks */
-
-/** `expected` names the judge roles whose accepted verdict each ticket must show; by default every ticket judge. */
 async function commonChecks(run: Run, expectOnMain: Expect, expected?: Record<string, string[]>): Promise<string[]> {
 	const failures: string[] = [];
 	const state = await agenda(run);
@@ -502,7 +457,6 @@ async function commonChecks(run: Run, expectOnMain: Expect, expected?: Record<st
 	if (unhandled.length)
 		failures.push(`simulated GitHub got ${unhandled.length} unmodelled requests, first: ${unhandled[0]!.slice(0, 400)}`);
 	const log = modelLog(run);
-	// Main launches every ticket exactly once and never names a later stage.
 	const launches = log
 		.filter((entry) => entry.kind === "main")
 		.map(dispatchInput)
@@ -512,7 +466,6 @@ async function commonChecks(run: Run, expectOnMain: Expect, expected?: Record<st
 		if (count !== 1) failures.push(`Main launched ${ticket.id} ${count} times`);
 	}
 	if (launches.some((input) => input?.role !== undefined)) failures.push("Main named a role in launch");
-	// Main is woken only for decisions it has not already taken.
 	const launched = new Set<string>(),
 		resolved = new Set<string>();
 	const groups = new Map<string, LogEntry[]>();
@@ -530,7 +483,6 @@ async function commonChecks(run: Run, expectOnMain: Expect, expected?: Record<st
 			if (input?.op === "resolve" && input.ticketId) resolved.add(`${input.ticketId}:${input.revision}`);
 		}
 	}
-	// Judges judged the exact commit their subject names: pullRequest a PR commit, mergeCommit the merge commit, parent main.
 	const sim = simState(run);
 	const verdicts = acceptedVerdicts(seatSessions(run, state?.id ?? ""));
 	const subjects = judgeSubjects(run.workflow);
@@ -569,7 +521,6 @@ async function commonChecks(run: Run, expectOnMain: Expect, expected?: Record<st
 		}
 	}
 	for (const issue of sim.issues) if (issue.state !== "CLOSED") failures.push(`issue #${issue.number} is still open`);
-	// Without Meerkat integration, Dispatch leaves no Meerkat record on GitHub.
 	if (!run.meerkat) {
 		const marked = sim.issues.flatMap((issue) =>
 			issue.comments.filter((comment) => comment.body.includes("<!-- meerkat:")).map(() => issue.number),
@@ -589,10 +540,6 @@ function owners(sessions: SeatSession[], ticket: string, role = "owner"): SeatSe
 	return sessions.filter((session) => session.role === role && session.ticket === ticket);
 }
 
-/**
- * Meerkat records of a completed Meerkat-on run: every work seat session has exactly one `impl` marker on its ticket's issue,
- * naming that session, its file, this host and the agenda, and every ticket's Project Status went In Progress, then Done.
- */
 async function meerkatChecks(run: Run): Promise<string[]> {
 	const failures: string[] = [];
 	const state = await agenda(run),
@@ -633,8 +580,6 @@ async function meerkatChecks(run: Run): Promise<string[]> {
 	return failures;
 }
 
-/* ------------------------------------------------------------ scenarios */
-
 const commit = (write: Record<string, string>) => ({ kind: "commit" as const, write });
 const ticket = (id: string, issue: number, owner: TicketSpec["owner"], gate: Expect, extra: Partial<TicketSpec> = {}): TicketSpec => ({
 	id,
@@ -656,11 +601,8 @@ const TREE_DONE = {
 	"e.txt": "1\n",
 };
 
-/** The leftover agenda of the 2026-11-07 incident: active, Escalated, `parent: null`, one ticket on mouriya-s-lab/meerkat-e2e-code#100. */
 const FOREIGN_AGENDA = join(ROOT, "tests/sim/fixtures/9c825bdb-049d-4098-8836-0559bfd96760.json");
 
-// restart-meerkat: the gates reject round one, and the simulated GitHub holds the rework Owner's impl comment, the second
-// comment request; the driver kills the coordinator once the hold is reached, so the order of the write and the kill is fixed.
 const RESTART_MEERKAT = {
 	files: { "m.txt": "0\n" },
 	issues: [{ title: "M" }],
@@ -672,25 +614,18 @@ const RESTART_MEERKAT_TICKET = ticket("M", 1, [commit({ "m.txt": "1\n" }), commi
 	"m.txt": "1\n",
 	"m.verify": "1\n",
 });
-/** The held comment's effect: the rework Owner's impl comment, the second comment effect. */
 const heldComment = (state: Agenda | null) => state?.effects.filter((effect) => effect.action.kind === "comment")[1];
 const commentCount = (run: Run) => simState(run).issues.reduce((count, issue) => count + issue.comments.length, 0);
-/** The body the held comment's effect writes. */
 const heldBody = (state: Agenda | null) => {
 	const held = heldComment(state);
 	return held?.action.kind === "comment" ? held.action.body : null;
 };
 
-/** The attention keys of every Main notification, in order. */
 const mainNotifications = (run: Run) =>
 	modelLog(run)
 		.filter((entry) => entry.kind === "main")
 		.map((entry) => entry.note.slice(entry.note.indexOf(":") + 1).split(", "));
 
-/**
- * Every restart-meerkat branch: the delivery and Meerkat records hold, the held comment's effect is source-confirmed after
- * `attempts` sends, M never escalated, and GitHub recorded one comment request per Owner session.
- */
 async function restartMeerkatChecks(run: Run, attempts: number): Promise<string[]> {
 	const failures = [...(await commonChecks(run, { "m.txt": "1\n", "m.verify": "1\n" })), ...(await meerkatChecks(run))];
 	const state = await agenda(run);
@@ -710,10 +645,6 @@ async function restartMeerkatChecks(run: Run, attempts: number): Promise<string[
 	return failures;
 }
 
-/**
- * The kill lands while the held comment request has not reached GitHub. After resume the effect fails; the driver
- * then ends the held request with `outcome` and waits for its result, and lets Main retry once M is delivered.
- */
 async function killBeforeWrite(run: Run, outcome: "release" | "drop"): Promise<void> {
 	const markers = join(run.dir, "markers");
 	await waitUntil(run, "the held impl comment request", () => existsSync(join(markers, "comment-arrived")));
@@ -741,7 +672,6 @@ async function killBeforeWrite(run: Run, outcome: "release" | "drop"): Promise<v
 	await waitUntil(run, "completion after the retry", completed);
 }
 
-/** A branch Main settled by retry: the failed: notification, a refused finish, then the accepted retry, and one comment with the held body. */
 async function retriedChecks(run: Run, attempts: number): Promise<string[]> {
 	const failures = await restartMeerkatChecks(run, attempts);
 	const state = await agenda(run);
@@ -790,7 +720,6 @@ const cases: Case[] = [
 				ticket("A2", 3, [commit({ "a2.txt": "1\n" })], { "a2.txt": "1\n" }),
 				ticket("B1", 4, [commit({ "shared.txt": "L1=1\nL2=0\n" })], { "shared.txt": "L1=1\nL2=0\n" }),
 				ticket("B2", 5, [commit({ "shared.txt": "L1=1\nL2=1\n" })], { "shared.txt": "L1=1\nL2=1\n" }, { dependsOn: ["B1"] }),
-				// The first round omits c.verify, so both gates reject it and a forked Owner adds it.
 				ticket("C", 6, [commit({ "c.txt": "1\n" }), commit({ "c.verify": "1\n" })], { "c.txt": "1\n", "c.verify": "1\n" }),
 				ticket(
 					"D",
@@ -827,7 +756,6 @@ const cases: Case[] = [
 					failures.push(
 						`${id} rework Owner prompt cache key is ${String(header(second)?.providerPromptCacheKey)}, not ${String(firstKey)}`,
 					);
-				// The fork starts with an empty todo list instead of its predecessor's; the first Owner never writes one.
 				const reset = (session: SeatSession) =>
 					session.lines.some(
 						(line) => line.type === "custom" && line.customType === "user_todo_edit" && JSON.stringify(line.data) === '{"phases":[]}',
@@ -836,7 +764,6 @@ const cases: Case[] = [
 			}
 			for (const gate of sessions.filter((session) => session.role !== "owner"))
 				if (gate.parent) failures.push(`${gate.ticket} ${gate.role} session inherited history`);
-			// Every seat is a full native session: it may delegate and holds its bound dispatch tool.
 			for (const session of sessions) {
 				const init = session.lines.find((line) => line.type === "session_init");
 				const tools = Array.isArray(init?.tools) ? init.tools : [];
@@ -861,14 +788,12 @@ const cases: Case[] = [
 			closure: {},
 			tickets: [
 				ticket("P", 1, [commit({ "p.txt": "1\n" })], { "p.txt": "1\n" }),
-				// The first round ships a file CI rejects; the forked Owner removes it.
 				ticket("F", 2, [commit({ "f.txt": "1\n", BROKEN: "x\n" }), { kind: "commit", write: { "f.txt": "1\n" }, remove: ["BROKEN"] }], {
 					"f.txt": "1\n",
 				}),
 			],
 		}),
 		async drive(run) {
-			// CI stays pending for three seconds after a PR head first appears, then passes, unless the commit is broken.
 			const seen = new Map<string, number>(),
 				flips: { sha: string; at: number }[] = [];
 			await waitUntil(run, "completion with CI", async (state) => {
@@ -921,7 +846,6 @@ const cases: Case[] = [
 			parent: null,
 			closure: {},
 			tickets: [
-				// After submitting h.txt=1 the Owner pushes h.txt=2 to the same PR while both gates are seated on the first head.
 				ticket(
 					"H",
 					1,
@@ -961,7 +885,6 @@ const cases: Case[] = [
 			if (notes.some((note) => note.kind === "escalation" || note.text.includes("changed after approval")))
 				failures.push(`H escalated on a legitimate PR update: ${JSON.stringify(notes)}`);
 			const sessions = seatSessions(run, state!.id);
-			// The superseded gates are aborted at their next tool boundary, so no verdict on the first head may be accepted.
 			if (acceptedVerdicts(sessions).some((verdict) => verdict.ticket === "H" && verdict.note.includes('h.txt="1\\n"')))
 				failures.push("a gate on the superseded head had its verdict accepted");
 			const reviews = sessions.filter((session) => session.ticket === "H" && session.role === "review");
@@ -980,7 +903,6 @@ const cases: Case[] = [
 			parent: null,
 			closure: {},
 			tickets: [
-				// The first review judge's model request fails; Main resolves it back to Coding, and the next judge passes.
 				ticket(
 					"Q",
 					1,
@@ -1007,7 +929,6 @@ const cases: Case[] = [
 			if (!modelLog(run).some((entry) => entry.kind === "main" && entry.note.includes("escalated:Q:")))
 				failures.push("Main was not woken for the abandoned seat");
 			const seats = owners(seatSessions(run, state!.id), "Q");
-			// The abandoned seat and the round-1 seat are fresh; the rework after the failed review is a fork of round 1.
 			const [abandoned, round1, rework] = seats;
 			if (seats.length !== 3 || abandoned?.parent || round1?.parent || rework?.parent !== round1?.id)
 				failures.push(
@@ -1027,7 +948,6 @@ const cases: Case[] = [
 			parent: null,
 			closure: {},
 			tickets: [
-				// The Owner stays busy after its handoff; the gates reject, and the process dies while the Owner is mid-tool.
 				ticket(
 					"K",
 					1,
@@ -1049,7 +969,6 @@ const cases: Case[] = [
 				);
 			});
 			await kill(run);
-			// The resumed agenda keeps the workflow it was convened with; a different file only shapes the next convene.
 			const reviewing = SIM_WORKFLOW.ticket.states.Reviewing!;
 			const audited: Workflow = {
 				...SIM_WORKFLOW,
@@ -1134,8 +1053,6 @@ const cases: Case[] = [
 		},
 	},
 	{
-		// The comment is recorded before the kill and only its response is lost: after resume the next GitHub read
-		// confirms it, Main is never asked about it, and M takes no ruling.
 		name: "restart-meerkat/arrived",
 		meerkat: { holdComment: { skip: 1, at: "afterWrite" } },
 		...RESTART_MEERKAT,
@@ -1161,9 +1078,6 @@ const cases: Case[] = [
 		},
 	},
 	{
-		// The kill lands before the comment is recorded. Resume finds no comment, so the effect fails, Main is woken with
-		// failed:M:<effect> and finish is refused. The killed process's request reaches GitHub late, and Main's
-		// resolve with retry adopts that source copy as confirmed without sending it again.
 		name: "restart-meerkat/lost",
 		meerkat: { holdComment: { skip: 1, at: "beforeWrite" } },
 		...RESTART_MEERKAT,
@@ -1172,8 +1086,6 @@ const cases: Case[] = [
 		check: (run) => retriedChecks(run, 1),
 	},
 	{
-		// As lost, but the killed process's request never reaches GitHub: Main's resolve with retry sends the comment
-		// again, and the next GitHub read confirms it.
 		name: "restart-meerkat/dropped",
 		meerkat: { holdComment: { skip: 1, at: "beforeWrite" } },
 		...RESTART_MEERKAT,
@@ -1183,8 +1095,6 @@ const cases: Case[] = [
 	},
 	{
 		name: "flow",
-		// A workflow unlike the built-in one: renamed and added states, a security judge skipped on rework by an entry guard,
-		// a security rejection routed to Main instead of rework, a post-merge judge only on a conditional branch, and its own parent machine.
 		workflow: workflowOf({
 			ticket: {
 				initial: "Build",
@@ -1261,9 +1171,7 @@ const cases: Case[] = [
 			parent: 1,
 			closure: { "f1.txt": "1\n", "f2.txt": "1\n", "f2.verify": "1\n", "f3.txt": "1\n" },
 			tickets: [
-				// Passes first time: Security, Quality, then straight to Close.
 				ticket("F1", 2, [commit({ "f1.txt": "1\n" })], { "f1.txt": "1\n" }),
-				// Security accepts round one; Quality demands f2.verify, so the builder reworks and Security is skipped the second time.
 				ticket(
 					"F2",
 					3,
@@ -1271,7 +1179,6 @@ const cases: Case[] = [
 					{ "f2.txt": "1\n", "f2.verify": "1\n" },
 					{ judgeExpect: { security: { "f2.txt": "1\n" } } },
 				),
-				// Security rejects round one, which this workflow routes to Main rather than back to Build.
 				ticket(
 					"F3",
 					4,
@@ -1293,13 +1200,11 @@ const cases: Case[] = [
 			const seats = (id: string, role: string) => sessions.filter((session) => session.ticket === id && session.role === role).length;
 			for (const id of ["F1", "F2", "F3"])
 				if (ticketOf(state, id)?.state !== "Delivered") failures.push(`${id} ended in ${ticketOf(state, id)?.state}, not Delivered`);
-			// Entry guard: Security is entered once per ticket; the rework passes straight to Quality.
 			for (const id of ["F2", "F3"])
 				if (visits(id).Security !== 1 || seats(id, "security") !== 1)
 					failures.push(`${id} entered Security ${visits(id).Security} times with ${seats(id, "security")} seats, not once`);
 			if (visits("F2").Quality !== 2 || seats("F2", "quality") !== 2)
 				failures.push(`F2 entered Quality ${visits("F2").Quality} times, not twice`);
-			// Rerouted failure: F3's security rejection went to Main, and only Main's ruling returned it to Build.
 			const f3 = ticketOf(state, "F3");
 			const finding =
 				f3?.notes.findIndex((item) => item.kind === "finding" && item.author.kind === "seat" && item.author.role === "security") ?? -1;
@@ -1311,11 +1216,9 @@ const cases: Case[] = [
 				failures.push(`F3 security rejection did not go straight to Main: ${JSON.stringify(f3?.notes)}`);
 			if (!modelLog(run).some((entry) => entry.kind === "main" && entry.note.includes("escalated:F3:")))
 				failures.push("Main was not woken for F3");
-			// Conditional branch after merge: only reworked tickets pass through Deploy.
 			if (visits("F1").Deploy !== undefined || seats("F1", "deploy") !== 0)
 				failures.push("F1 passed Deploy although it was never reworked");
 			for (const id of ["F2", "F3"]) if (visits(id).Deploy !== 1) failures.push(`${id} did not pass Deploy after its rework`);
-			// Each seat ran its own agent and carried only its own duty.
 			const duties: Record<string, { agent: string; duty: string }> = {
 				builder: { agent: "sim-builder", duty: "BUILD-DUTY" },
 				security: { agent: "sim-security", duty: "SECURITY-DUTY" },
@@ -1348,9 +1251,6 @@ const cases: Case[] = [
 		},
 	},
 	{
-		// An earlier coordinator of another issue left its agenda active and Escalated: the agenda of the 2026-11-07
-		// incident, kept verbatim. The coordinator of #1 is not offered it, is refused when Main resumes it anyway, and
-		// convenes and delivers its own issue while the leftover's file stays byte for byte the same.
 		name: "foreign",
 		saved: [FOREIGN_AGENDA],
 		files: { "g.txt": "0\n" },
@@ -1389,11 +1289,6 @@ const cases: Case[] = [
 		},
 	},
 	{
-		// Two seats share Main's MCP server. A's Owner calls fx `load`, which makes the server add `added` during the
-		// call, then calls `added`; B's Owner waits for that load before it commits. The added tool belongs to A's view
-		// alone: A's next request presents it and the call runs, while Main's and every other seat's later requests do
-		// not. The scripted model answers within milliseconds, so A's next request also shows that it waited for the
-		// rebind of the seat's tools instead of racing it.
 		name: "mcp-scope",
 		mcp: true,
 		files: { "a.txt": "0\n", "b.txt": "0\n" },
@@ -1432,7 +1327,6 @@ const cases: Case[] = [
 			const load = log.find((entry) => isOwner(entry, "A") && entry.step.name === "mcp__fx_load");
 			if (!load) return [...failures, "A never called mcp__fx_load"];
 			const later = log.filter((entry) => entry.at > load.at);
-			// The readings the scenario judges are printed as it reads them: every request after the load, then every seat.
 			const who = (entry: LogEntry) => (entry.kind === "main" ? "Main" : `${entry.ticket} ${entry.role}`);
 			console.log(`  ${run.name}: +0ms ${who(load)} request answered with mcp__fx_load`);
 			for (const entry of later)
@@ -1451,7 +1345,6 @@ const cases: Case[] = [
 			if (!others.some((entry) => isOwner(entry, "B"))) failures.push("B sent no request after the load");
 			const state = await agenda(run);
 			const sessions = seatSessions(run, state!.id);
-			// The call to the added tool ran on the server instead of failing as an unknown tool.
 			const aOwner = owners(sessions, "A")[0];
 			const added = aOwner?.lines
 				.flatMap((line) => {
@@ -1461,7 +1354,6 @@ const cases: Case[] = [
 				.find((message) => message.role === "toolResult" && JSON.stringify(message.content).includes("fx added ran"));
 			console.log(`  ${run.name}: A owner mcp__fx_added result ${JSON.stringify(added?.content)} isError ${added?.isError === true}`);
 			if (!added || added.isError === true) failures.push(`A's mcp__fx_added call returned no server result: ${JSON.stringify(added)}`);
-			// Every seat starts from Main's MCP view and holds exactly one dispatch tool, the bound one.
 			for (const session of sessions) {
 				const first = log.find((entry) => entry.kind === "seat" && entry.session === session.id);
 				if (!first?.tools.includes("mcp__fx_load"))
@@ -1478,7 +1370,6 @@ const cases: Case[] = [
 		},
 	},
 ];
-// Meerkat-on variant of tree: the same delivery, plus the Meerkat records it must leave.
 const tree = cases.find((item) => item.name === "tree")!;
 cases.push({
 	...tree,
@@ -1488,9 +1379,6 @@ cases.push({
 });
 cases.push(...askCases({ agenda, waitUntil, start, kill, modelLog, seatSessions, simState, commonChecks }));
 
-/* ------------------------------------------------------------ main */
-
-// A name selects that scenario and its branches, `name/<branch>`.
 const selected = process.argv.slice(2);
 let failed = false;
 for (const spec of cases.filter(

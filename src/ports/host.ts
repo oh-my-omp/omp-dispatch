@@ -37,12 +37,10 @@ export type HostOptions = {
 	onSeatError: (ticketId: string, message: string) => void;
 };
 
-/** Owns only the sessions and worktrees it creates; the native registry owns their identities. */
 export function createHostPort(options: HostOptions): HostPort {
 	const registry = AgentRegistry.global();
 	const seats = new Map<string, LiveSeat>();
-	// Every (ticket, role, revision) this host has seated, live or ended. A seat that ends without a handoff
-	// is escalated asynchronously; until then its revision must not be seated again.
+	// A seat that ends without a handoff is escalated asynchronously; until then its revision must not be seated again.
 	const seatedRevisions = new Set<string>();
 	const reposDir = join(options.dataDir, "repos"),
 		worktreesDir = join(options.dataDir, "worktrees"),
@@ -55,7 +53,6 @@ export function createHostPort(options: HostOptions): HostPort {
 			throw new Error("The native Main session is unavailable");
 		return session;
 	}
-	/** The definition a seat agent name resolves to in this workspace, as the native task tool would resolve it. */
 	async function seatAgent(parent: AgentSession, cwd: string, name: string) {
 		const discovery = await discoverAgents(cwd, undefined, parent.effectiveExtensionRoots);
 		const agent = getAgent([...discovery.agents, ...parent.getSessionAgents()], name);
@@ -116,7 +113,6 @@ export function createHostPort(options: HostOptions): HostPort {
 			if ([...seats.values()].some((seat) => seat.input.ticketId === input.ticketId && seat.input.role === input.role))
 				return { ok: false, error: { kind: "precondition", message: "Ticket role already has a live session" } };
 			const id = `Rt${randomUUID().replaceAll("-", "")}`;
-			// This is a lifecycle reservation, not an observation of a native session.
 			const seat: LiveSeat = { input, session: null, done: Promise.resolve() };
 			seats.set(id, seat);
 			seatedRevisions.add(JSON.stringify([input.ticketId, input.role, input.revision]));
@@ -137,8 +133,6 @@ export function createHostPort(options: HostOptions): HostPort {
 					const prior = await SessionManager.peekSessionInit(input.workspace.sessionFile);
 					if (!prior) throw new Error("Owner fork source has no native session contract");
 					workspace = prior.cwd;
-					// The controller forks only after the predecessor seat exited and flushed. A tail cut by
-					// that exit is repaired into a valid transcript, and the fork does not re-bill inherited spend.
 					manager = await SessionManager.forkFrom(input.workspace.sessionFile, workspace, sessionDir, undefined, {
 						copyArtifacts: false,
 						suppressBreadcrumb: true,
@@ -197,19 +191,14 @@ export function createHostPort(options: HostOptions): HostPort {
 									notes: response.value.ticket.notes.length,
 									rulings: response.value.ticket.rulings.length,
 								});
-								// The engine parks a work seat's question in Asking only under Meerkat integration; that seat stops here.
 								asked = response.value.ticket.state === ASKING;
 							}
 						}
 						return { content: [{ type: "text", text: JSON.stringify(response) }], details: response, isError: !response.ok };
 					},
 				};
-				// A seat is a full native session: Main's prepared extensions and extension roots, the workspace's settings,
-				// custom tools and MCP, and delegation per its agent definition. Only the bound dispatch tool is added.
 				const settings = (await parent.settings.cloneForCwd(workspace)).overlay({
-					// Seats run headless: the ticket launch is the authorization boundary and no UI can answer approvals.
 					"tools.approvalMode": "yolo",
-					// A seat's work is one long turn; post-turn compaction would only run after it ends.
 					"compaction.midTurnEnabled": true,
 				});
 				const spawns = agent.spawns === undefined || agent.spawns === "*" ? "*" : agent.spawns.join(",");
@@ -223,9 +212,6 @@ export function createHostPort(options: HostOptions): HostPort {
 					...(modelPattern !== undefined ? { activeModelPattern: modelPattern, fallbackModelPattern: modelPattern } : {}),
 				});
 				const cacheKey = manager.getHeader()?.providerPromptCacheKey ?? manager.getHeader()?.id;
-				// Main's MCP manager is shared like a native subagent's, but the seat views it through its own
-				// session scope, so tools a seat's MCP call makes a server add stay out of Main's table and of
-				// other seats. The follower subscribes before proxies are minted and replays changes on bind.
 				const mcpManager = MCPManager.instance();
 				mcpFollower = mcpManager ? followMCPTools(mcpManager, { scope: manager.getSessionId() }, new Set(["dispatch"])) : undefined;
 				const mcpTools = mcpFollower?.proxyTools() ?? [];
@@ -245,18 +231,14 @@ export function createHostPort(options: HostOptions): HostPort {
 								mountedToolNames: savedContract.data.mountedTools,
 							}
 						: { appendSystemPrompt: agent.systemPrompt, ...(agentTools ? { toolNames: agentTools } : {}) }),
-					// The SDK registers custom tools after extension tools, so this bound tool replaces the inactive
-					// dispatch tool the extension itself registers inside the seat.
 					customTools: [tool],
 					enableMCP: true,
 					...(mcpManager ? { mcpManager, ...(mcpTools.length ? { mcpTools } : {}) } : {}),
-					// The seat's own view is also what helper sessions it derives start from.
 					...(mcpFollower ? { mcpToolScope: mcpFollower.scope } : {}),
 					// An empty list would bind no extensions and prune Main's extension-provided model sources.
 					...(parent.preparedExtensions?.length ? { preloadedPreparedExtensions: parent.preparedExtensions } : {}),
 					...(parent.extensionPaths?.length ? { preloadedExtensionPaths: [...parent.extensionPaths] } : {}),
 					extensionRoots: () => parent.effectiveExtensionRoots,
-					// A seat reports to Main only through its ticket, never as an IRC peer.
 					hasUI: false,
 					bindProcessState: false,
 					cacheWarming: false,
@@ -273,9 +255,6 @@ export function createHostPort(options: HostOptions): HostPort {
 				});
 				seat.session = created.session;
 				mcpFollower?.bind(created.session);
-				// omp applies a rebind as a queued tool-registry mutation that a request does not wait for, so a tool the
-				// seat's own MCP call just added could miss its next request. Each request first waits for the mutations
-				// already queued, then carries the seat's settled tool table.
 				if (mcpFollower)
 					created.session.addDisposer(
 						created.session.agent.addBeforeModelCallHook((signal) => created.session.runToolRegistryMutation(async () => {}, signal)),
@@ -289,7 +268,6 @@ export function createHostPort(options: HostOptions): HostPort {
 					},
 				});
 				while (extensionSends.length) await Promise.all(extensionSends.splice(0));
-				// Extensions settle the active set on session_start (omp-unified-exec replaces bash with exec_command).
 				const tools = created.session.getEnabledToolNames();
 				if (!tools.includes("dispatch")) throw new Error("Seat session did not enable its dispatch tool");
 				if (fork) {
@@ -297,7 +275,6 @@ export function createHostPort(options: HostOptions): HostPort {
 					created.session.setTodoPhases([]);
 					manager.appendCustomEntry(USER_TODO_EDIT_CUSTOM_TYPE, { phases: [] });
 				} else {
-					// The base prompt (before any per-turn extension rewrite) and tool presentation a rework fork restores for an identical prefix.
 					manager.appendCustomEntry("dispatch-session-contract", {
 						systemPrompt: created.session.systemPrompt,
 						tools,
@@ -316,15 +293,10 @@ export function createHostPort(options: HostOptions): HostPort {
 					fork && handoff?.success
 						? `Continue ticket ${input.ticketId} at revision ${input.revision}. Only the incremental handoff follows. Call dispatch read if the current contract or PR is needed.\n${JSON.stringify({ notes: input.ticket.notes.slice(handoff.data.notes), rulings: input.ticket.rulings.slice(handoff.data.rulings) })}`
 						: input.prompt;
-				// A seat resumed after its question was answered reads the answer first.
 				const prompt = input.resume === null ? opening : `${input.resume}\n\n${opening}`;
-				// A work seat's checkout outlives the seat for rework forks until finish; a judge checkout ends with its seat.
 				const session = created.session,
 					disposable = input.seat === "work" ? null : tree;
-				// Like native terminal-yield handling, abort the obsolete tool loop at a
-				// tool-completion boundary. Accepted handoffs have already saved their
-				// checkpoint and must finish normally, even if their transition bumped revision;
-				// a question handed to the intent guardians ends its seat right there.
+				// Accepted handoffs have already saved their checkpoint and must finish normally, even if their transition bumped revision.
 				const unsubscribe = session.subscribe((event) => {
 					if (event.type !== "tool_execution_end") return;
 					if (asked) {
@@ -349,12 +321,9 @@ export function createHostPort(options: HostOptions): HostPort {
 						try {
 							if (signal.aborted) throw new Error("Seat was cancelled before dispatch");
 							await session.prompt(prompt);
-							// The run stays open while descendant work can still wake it (jobs, queued deliveries, live
-							// children); waiting for its end settles all of it, and abort closes it at once.
 							await session.waitForRunEnd();
 							if (signal.aborted) throw new Error("Seat was cancelled while descendant work settled");
 							if (!handedOff) {
-								// A model request that finally fails is recorded on the last assistant message; prompt() returns normally.
 								const last = session.messages.filter((message) => message.role === "assistant").at(-1);
 								if (last?.role === "assistant" && last.stopReason === "error")
 									error = `the model request failed: ${last.errorMessage || "unknown error"}`;
@@ -385,8 +354,6 @@ export function createHostPort(options: HostOptions): HostPort {
 					},
 					{ ownerId: MAIN_AGENT_ID, agentId: id },
 				);
-				// A seat's outcome reaches Main through the ticket (an escalation, or the next launchable ticket), never as a
-				// job completion: Main does not wait on seats. The job stays listed and inspectable.
 				parent.asyncJobManager.acknowledgeDeliveries([jobId]);
 				return { ok: true, value: { agentId: id, sessionId: caller.sessionId, sessionFile, jobId } };
 			} catch (error) {
@@ -419,7 +386,6 @@ export function createHostPort(options: HostOptions): HostPort {
 					))
 				)
 					return { ok: true, value: null };
-				// Every Owner checkout of this agenda lives under its root; pruning drops their admin entries from each cache.
 				await rm(root, { recursive: true, force: true });
 				for (const name of await readdir(reposDir))
 					if (name.endsWith(".git")) {

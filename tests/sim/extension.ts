@@ -260,7 +260,6 @@ function ownerStep(messages: Message[], spec: TicketSpec, brief: string): { step
 			step: { call: { name: "bash", args: { command: `while [ ! -f ${quote(pre.marker)} ]; do sleep 0.2; done`, timeout: 0 } } },
 			note,
 		};
-	// Steps after the pre-commit ones, counted from the commit.
 	const at = step - before.length;
 	if (at === 0)
 		return {
@@ -362,7 +361,6 @@ function respond(model: Model<Api>, context: Context, options?: SimpleStreamOpti
 		const schema = intentSchema.safeParse(context.tools?.find((tool) => tool.name === name)?.parameters);
 		return schema.success && schema.data.required?.includes("i") ? { i: "Simulated step", ...args } : args;
 	};
-	// `tools` is what omp sent: the names of every tool the requesting session presented to the model.
 	appendFileSync(
 		scenario.log,
 		`${JSON.stringify({

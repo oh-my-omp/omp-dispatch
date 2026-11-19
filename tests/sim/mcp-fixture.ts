@@ -1,10 +1,3 @@
-// A stdio MCP server for the mcp-scope scenario, named `fx` in the run's `.omp/mcp.json`. It serves `load`;
-// a `load` call makes it serve `added` as well. The server announces the change with
-// `notifications/tools/list_changed` while the call is still in flight and answers the call only after omp
-// has listed the tools again, so omp records `added` as a tool the calling session's MCP call added and
-// grants it to that session's scope alone. `FX_LOADED` names a file the first `load` call creates, which a
-// scripted seat waits for. Run by omp: `bun tests/sim/mcp-fixture.ts`.
-
 import { writeFileSync } from "node:fs";
 import { z } from "@oh-my-pi/omptype/zod";
 
@@ -19,7 +12,6 @@ type Id = number | string;
 const LOAD = { name: "load", description: "Load the added tool.", inputSchema: { type: "object", properties: {} } };
 const ADDED = { name: "added", description: "A tool the load call added.", inputSchema: { type: "object", properties: {} } };
 let added = false;
-/** The `load` call answered once omp has listed the tools that call added. */
 let pendingLoad: Id | null = null;
 
 const send = (message: Record<string, unknown>) => process.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", ...message })}\n`);
@@ -60,7 +52,6 @@ function handle(line: string): void {
 				added = true;
 				pendingLoad = id;
 				send({ method: "notifications/tools/list_changed" });
-				// omp lists the tools again on the notice; answer anyway if it never does, so the call cannot hang.
 				setTimeout(answerLoad, 5000);
 			} else if (params?.name === "added" && added)
 				send({ id, result: { content: [{ type: "text", text: "fx added ran" }], isError: false } });
