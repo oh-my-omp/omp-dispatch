@@ -59,11 +59,6 @@ export type RuntimeError =
 	| { kind: "storage"; error: StateError }
 	| { kind: "source" | "host" | "process"; error: PortError }
 	| { kind: "workflow"; error: WorkflowError };
-/**
- * Main's view: which tickets it may launch, which wait on a worker's question to the intent guardians (with the
- * council agenda once the question went to the council), and which seats the relay currently runs. `agenda` is the
- * live agenda itself, shared read-only: a transition replaces it and never writes it.
- */
 export type AgendaView = {
 	agenda: ReadonlyAgenda;
 	launchable: string[];
@@ -74,13 +69,6 @@ export type ControllerOutput =
 	| AgendaView
 	| { ticket: DeepReadonly<Agenda["tickets"][number] | NonNullable<Agenda["closure"]>> }
 	| { launched: SeatHandle[] };
-/**
- * `issue` is the launch issue: only the active agendas that belong to it are listed at startup, resumed, or block
- * a new convene; the active agendas of other issues are left alone.
- * `workflow` reads the workflow a new agenda will freeze; an attached agenda never consults it.
- * `meerkat` turns on Meerkat integration: work seats record their sessions on their issues, Project Status follows delivery,
- * and a work seat's question goes to the intent guardians behind `guardians`.
- */
 export type ControllerOptions = {
 	issue: IssueRef;
 	files: AgendaFiles;
@@ -98,7 +86,6 @@ function domain(kind: DomainError["kind"], message: string): { ok: false; error:
 	return { ok: false, error: { kind: "domain", error: { kind, message } } };
 }
 
-/** The controller is the sole writer of its agenda. GitHub observations are never optimistic writes. */
 export class DispatchController {
 	readonly runId = randomUUID();
 	private readonly source;
@@ -116,7 +103,6 @@ export class DispatchController {
 		if (this.main && this.main.sessionId !== caller.sessionId) throw new Error("The coordinator session cannot change within a run");
 		this.main = caller;
 	}
-	/** The agenda owns ticket revisions; the host uses this only to end superseded seat lifetimes. */
 	ticketRevision(ticketId: string): number | null {
 		if (this.state?.lifecycle !== "active") return null;
 		return (
@@ -161,7 +147,6 @@ export class DispatchController {
 	}
 	private async save(state: Agenda, expected: number | null): Promise<Result<null, RuntimeError>> {
 		if (this.pending) throw new Error("Unresolved durable write must be flushed before a new transition");
-		// Every transition passes here, so a ticket's entry into Done queues its Status write in the same durable save.
 		if (this.options.meerkat && this.state) statusOnDone(this.state, state, this.options.meerkat.context);
 		this.pending = { state, expected };
 		return this.flush();
@@ -191,7 +176,6 @@ export class DispatchController {
 			},
 		};
 	}
-	/** The saved active agendas of the launch issue; a storage failure is the caller's to report. */
 	private async owned(): Promise<Result<Agenda[], RuntimeError>> {
 		const list = await this.options.files.list();
 		if (!list.ok) return { ok: false, error: { kind: "storage", error: list.error } };
@@ -204,7 +188,6 @@ export class DispatchController {
 		}
 		return { ok: true, value: owned };
 	}
-	/** The ids of the launch issue's saved active agendas, for the startup message. */
 	async startup(caller: Caller): Promise<Result<string[], RuntimeError>> {
 		if (caller.kind !== "main" || !this.visible(caller))
 			return domain("unauthorized", "Only the native coordinator may inspect saved agendas");
@@ -241,7 +224,6 @@ export class DispatchController {
 						);
 					const workflow = await this.options.workflow();
 					if (!workflow.ok) return { ok: false, error: { kind: "workflow", error: workflow.error } };
-					// The workflow is frozen for the agenda's whole life, so a seat agent that cannot run is refused before it is.
 					const agents = await this.options.host.agents(this.options.cwd, workflowAgents(workflow.value));
 					if (!agents.ok) return { ok: false, error: { kind: "host", error: agents.error } };
 					const facts = await this.source.read(null, operation, "convene");
@@ -259,7 +241,6 @@ export class DispatchController {
 						);
 					const saved = await this.options.files.load(operation.agenda);
 					if (!saved.ok) return { ok: false, error: { kind: "storage", error: saved.error } };
-					// The OS names a live holder: the same pid with the same start time. A reused pid has another start time.
 					const holder = saved.value.run;
 					if (holder.kind === "attached") {
 						const now = await this.options.process.start(holder.pid);
@@ -273,7 +254,6 @@ export class DispatchController {
 					const next = saved.value;
 					next.version++;
 					next.run = run;
-					// A durable executing intent after a restart is never called again, unless its callee accepts a repeat.
 					for (const effect of next.effects)
 						if (effect.state.kind === "executing") {
 							if (REPLAYABLE[effect.action.kind]) effect.state = { kind: "ready" };
@@ -332,14 +312,12 @@ export class DispatchController {
 			const committed = await this.save(changed.value, this.state.version);
 			if (!committed.ok) return committed;
 			if (operation.op === "launch") {
-				// Launching a ticket seats its current stage at once; later stages follow from the relay.
 				const relayed = await this.relay(fresh.value);
 				if (!relayed.ok) return relayed;
 				this.kick();
 				return { ok: true, value: { launched: relayed.value } };
 			}
 			this.kick();
-			// A seat's result exposes its own ticket, never the other tickets or effects.
 			if (caller.kind === "seat") {
 				const ticket = this.state.tickets.find((ticket) => ticket.id === caller.ticketId) ?? this.state.closure;
 				return ticket ? { ok: true, value: { ticket } } : domain("notFound", "Ticket was removed");
@@ -349,7 +327,6 @@ export class DispatchController {
 	}
 	private async settle(facts: Facts): Promise<Result<null, RuntimeError>> {
 		if (!this.state) return { ok: true, value: null };
-		// The reconcile pass reports its own change; an unchanged agenda is neither copied nor written.
 		const next = reconciled(this.state, facts, Date.now());
 		if (!next) return { ok: true, value: null };
 		next.version++;
@@ -366,10 +343,6 @@ export class DispatchController {
 	private unexpected(error: unknown): void {
 		this.options.onError({ kind: "host", error: { kind: "unavailable", message: error instanceof Error ? error.message : String(error) } });
 	}
-	/**
-	 * A seat's exit wakes the relay. An exit without a handoff at a still-current revision escalates the ticket,
-	 * so a seat that keeps failing reaches Main instead of being relaunched forever.
-	 */
 	seatExited(seat: SeatExit, handedOff: boolean, error: string | null): void {
 		if (this.closed) return;
 		if (!handedOff)
@@ -398,7 +371,6 @@ export class DispatchController {
 			}).catch((error) => this.unexpected(error));
 		this.kick();
 	}
-	/** The launch input of a due seat, or null when the agenda no longer offers that role. */
 	private seatLaunch(ticketId: string, role: Role): SeatLaunch | null {
 		const state = this.state;
 		if (!state) return null;
@@ -412,7 +384,6 @@ export class DispatchController {
 			revision = ticket.revision;
 			const gate = ticket.gates[ticket.state],
 				session = ticket.sessions[role];
-			// A work seat continues its role's session; a judge checks out exactly the PR head or merge commit its stamp names.
 			if (seat.kind === "work") workspace = session ? { kind: "fork", sessionFile: session } : { kind: "base", target: ticket.target };
 			else if (gate?.stamp.kind === "pullRequest")
 				workspace = { kind: "commit", repo: gate.stamp.target.repo, sha: gate.stamp.head, pull: gate.stamp.pr.number };
@@ -424,7 +395,6 @@ export class DispatchController {
 			workspace = { kind: "base", target: state.tickets[0]!.target };
 		} else return null;
 		const ask = this.options.meerkat?.context.ask ?? null;
-		// The answer to the ticket's question opens the first message of the work seat that resumes it.
 		const resume =
 			seat.kind === "work" && ticket && ticket.resumeMessage !== null && ask ? `${ask.resumePrompt}\n\n${ticket.resumeMessage}` : null;
 		return {
@@ -441,14 +411,6 @@ export class DispatchController {
 			workspace,
 		};
 	}
-	/**
-	 * Seats follow from ticket state alone: every started ticket and the parent closure receive their due seats
-	 * without Main. A seat is one-shot per revision: once a role has been seated at a revision it is never seated
-	 * there again, so a seat that ended without a handoff waits for its escalation instead of being replaced.
-	 * A seat also waits for any live seat of its own role (a superseded revision ends at its next tool boundary);
-	 * a work seat waits for every seat of its ticket, so a rework fork copies a complete, flushed transcript and owns
-	 * the checkout alone.
-	 */
 	private async relay(facts: Facts): Promise<Result<SeatHandle[], RuntimeError>> {
 		const launched: SeatHandle[] = [],
 			host = this.options.host;
@@ -469,13 +431,11 @@ export class DispatchController {
 			for (const role of closureRoles(this.state))
 				if (!host.seated(closure.id, role, closure.revision) && !host.active(closure.id, role)) due.push({ ticketId: closure.id, role });
 		for (const { ticketId, role } of due) {
-			// An earlier failed launch may have escalated this ticket.
 			const input = this.seatLaunch(ticketId, role);
 			if (!input) continue;
 			const result = await host.launch(input);
 			if (result.ok) {
 				launched.push(result.value);
-				// A work seat's session now exists, so its id and file can be recorded on the ticket's issue.
 				const meerkat = this.options.meerkat;
 				if (!meerkat || input.seat !== "work") continue;
 				const started = workerStarted(
@@ -493,7 +453,6 @@ export class DispatchController {
 				continue;
 			}
 			this.options.onError({ kind: "host", error: result.error });
-			// A precondition refusal (a seat already live, a host shutting down) is a race, not a broken seat.
 			if (result.error.kind === "precondition") continue;
 			const next = draftAgenda(this.state);
 			if (!abandonSeat(next, ticketId, role, input.revision, `launch failed: ${result.error.message}`, Date.now())) continue;
@@ -503,7 +462,6 @@ export class DispatchController {
 		}
 		return { ok: true, value: launched };
 	}
-	/** Exposed for deterministic integration driving; the production timer uses the same entry. */
 	async run(): Promise<void> {
 		await this.serial(async () => {
 			const flushed = await this.flush();
@@ -544,7 +502,6 @@ export class DispatchController {
 				this.options.onError(result.error);
 				return;
 			}
-			// A confirmed effect advances the ticket (Reviewing after publish, Verifying after merge); seat its next stage.
 			const advanced = await this.relay(observed.value);
 			if (!advanced.ok) {
 				this.options.onError(advanced.error);
@@ -600,7 +557,6 @@ export class DispatchController {
 		} catch (error) {
 			called = { ok: false, error: { kind: "uncertainOutcome", message: error instanceof Error ? error.message : String(error) } };
 		}
-		// The callee's own response is the confirmation of a replayable effect; its failure is final, never uncertain.
 		if (REPLAYABLE[item.action.kind]) {
 			const next = draftAgenda(this.state),
 				current = next.effects.find((effect) => effect.id === item.id)!;
@@ -705,11 +661,9 @@ export class DispatchController {
 			}
 		}
 	}
-	/** The live agenda, shared read-only like every view of it. */
 	snapshot(): ReadonlyAgenda | null {
 		return this.state;
 	}
-	/** The run ends with this process: its seats end first, then the agenda is written back to detached. */
 	async shutdown(): Promise<void> {
 		this.closed = true;
 		clearInterval(this.timer ?? undefined);

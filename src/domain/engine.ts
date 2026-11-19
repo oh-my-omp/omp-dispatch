@@ -51,7 +51,6 @@ import {
 
 const SYSTEM: NoteAuthor = { kind: "system" },
 	MAIN: NoteAuthor = { kind: "main" };
-/** A machine that keeps entering states without waiting for a seat, an effect or a source change is misconfigured. */
 const HOPS = 64;
 type NoteKind = Ticket["notes"][number]["kind"];
 type Holds = (condition: DeepReadonly<Condition>) => boolean;
@@ -81,8 +80,6 @@ export function enqueue(state: Agenda, ticketId: string, action: Action, origin:
 	return effect;
 }
 
-/* ------------------------------------------------------------ definitions */
-
 export function ticketDefinition(workflow: DeepReadonly<Workflow>, ticket: ReadonlyTicket): DeepReadonly<TicketState> | null {
 	return ticket.state === ESCALATED || ticket.state === ASKING || ticket.state === REPLACED
 		? null
@@ -91,7 +88,6 @@ export function ticketDefinition(workflow: DeepReadonly<Workflow>, ticket: Reado
 export function parentDefinition(workflow: DeepReadonly<Workflow>, closure: DeepReadonly<ClosureGate>): DeepReadonly<ParentState> | null {
 	return closure.state === ESCALATED ? null : (workflow.parent.states[closure.state] ?? null);
 }
-/** A ticket is delivered while it rests in a final state of the workflow, or in `Replaced` once its issue was replaced. */
 export function delivered(state: ReadonlyAgenda, ticket: ReadonlyTicket): boolean {
 	return ticket.state === REPLACED || ticketDefinition(state.workflow, ticket)?.kind === "final";
 }
@@ -126,7 +122,6 @@ function ticketHolds(ticket: ReadonlyTicket, facts: Facts): Holds {
 function parentHolds(closure: DeepReadonly<ClosureGate>): Holds {
 	const holds: Holds = (condition) => {
 		switch (condition.kind) {
-			// The workflow parser refuses PR conditions in the parent machine.
 			case "checks":
 			case "mergeable":
 				return false;
@@ -142,18 +137,14 @@ function parentHolds(closure: DeepReadonly<ClosureGate>): Holds {
 	};
 	return holds;
 }
-/** The first branch whose condition holds; else the decision's fallback, or null to keep waiting. */
 function decide(decision: DeepReadonly<{ branches: Branch[]; otherwise: string | null }>, holds: Holds): string | null {
 	return decision.branches.find((branch) => holds(branch.when))?.to ?? decision.otherwise;
 }
-
-/* ------------------------------------------------------------ fingerprints */
 
 function contractIssue(ticket: ReadonlyTicket, facts: Facts) {
 	const issue = facts.issues.find((issue) => sameRef(issue.ref, ticket.issue));
 	return issue && issue.bodyHash === ticket.contract.bodyHash ? issue : null;
 }
-/** What a pullRequest judge judges: the exact open PR head that closes this issue at its target. */
 export function pullRequestStamp(ticket: ReadonlyTicket, facts: Facts): PullRequestStamp | null {
 	const issue = contractIssue(ticket, facts),
 		pr = sourcePr(ticket, facts);
@@ -179,7 +170,6 @@ export function pullRequestStamp(ticket: ReadonlyTicket, facts: Facts): PullRequ
 		rulingsHash: digest(ticket.rulings),
 	};
 }
-/** What a mergeCommit judge judges: the ticket's merge commit, still contained in its target. */
 export function mergeCommitStamp(ticket: ReadonlyTicket, facts: Facts): MergeCommitStamp | null {
 	const issue = contractIssue(ticket, facts),
 		terminal = ticket.terminal,
@@ -198,7 +188,6 @@ export function mergeCommitStamp(ticket: ReadonlyTicket, facts: Facts): MergeCom
 		rulingsHash: digest(ticket.rulings),
 	};
 }
-/** What parent judges judge: every delivered child, its terminal and its target. */
 function parentStamp(state: ReadonlyAgenda, facts: Facts): ParentStamp | null {
 	if (!state.parent || state.tickets.some((ticket) => !delivered(state, ticket) || !ticket.terminal)) return null;
 	const parent = facts.issues.find((issue) => sameRef(issue.ref, state.parent!));
@@ -228,9 +217,6 @@ function mergeReady(ticket: ReadonlyTicket, pr: PrSnapshot, facts: Facts): boole
 	return pr.state.kind === "open" && pr.mergeable === "yes" && pr.checks.kind === "passing" && base?.state.kind === "present";
 }
 
-/* ------------------------------------------------------------ safety capabilities */
-
-/** A judge state's approval: its gate exists, judged exactly `stamp`, and every configured judge passed. */
 function approved(
 	roster: DeepReadonly<TicketState | ParentState> | undefined,
 	gate: DeepReadonly<{ stamp: unknown; verdicts: Ticket["gates"][string]["verdicts"] }> | undefined,
@@ -243,7 +229,6 @@ function approved(
 		stagePassed(roster.judges, gate.verdicts)
 	);
 }
-/** Merging needs every required approval, and every approval the ticket still holds, on the current PR fingerprint. */
 function mergeProblem(state: ReadonlyAgenda, ticket: ReadonlyTicket, facts: Facts, requires: readonly string[]): string | null {
 	const stamp = pullRequestStamp(ticket, facts);
 	if (!stamp) return "the pull request is not an open PR that closes exactly this issue at its target";
@@ -255,7 +240,6 @@ function mergeProblem(state: ReadonlyAgenda, ticket: ReadonlyTicket, facts: Fact
 			return `${name} approved a different pull request fingerprint`;
 	return null;
 }
-/** Closing the issue needs a Main noCode ruling on the current contract, or a contained merge with its approvals. */
 function closeProblem(state: ReadonlyAgenda, ticket: ReadonlyTicket, facts: Facts, requires: readonly string[]): string | null {
 	const terminal = ticket.terminal,
 		issue = facts.issues.find((issue) => sameRef(issue.ref, ticket.issue));
@@ -286,7 +270,6 @@ function closeParentProblem(
 		if (!approved(state.workflow.parent.states[name], gate, stamp)) return `${name} approved different children`;
 	return null;
 }
-/** A final state holds only while the issue is closed and its terminal is still true at source. */
 function finalProblem(ticket: ReadonlyTicket, facts: Facts): string | null {
 	const issue = facts.issues.find((issue) => sameRef(issue.ref, ticket.issue)),
 		terminal = ticket.terminal;
@@ -295,7 +278,6 @@ function finalProblem(ticket: ReadonlyTicket, facts: Facts): string | null {
 	switch (terminal.kind) {
 		case "noCode":
 			return terminal.bodyHash === issue.bodyHash ? null : "the noCode ruling no longer matches the issue contract";
-		// A replaced issue rests in the built-in Replaced, never in a workflow final state.
 		case "replaced":
 			return `the issue was replaced by ${terminal.by}, not delivered through this workflow`;
 		case "merged": {
@@ -319,9 +301,6 @@ function liveFromEntry(state: ReadonlyAgenda, ticketId: string, origin: { state:
 	);
 }
 
-/* ------------------------------------------------------------ ticket machine */
-
-/** Enter `target`, following entry guards and states that complete at once, until the ticket waits. */
 function enterTicket(state: Agenda, ticket: Ticket, target: string, facts: Facts, at: number): void {
 	const holds = ticketHolds(ticket, facts);
 	let next = target;
@@ -345,7 +324,6 @@ function enterTicket(state: Agenda, ticket: Ticket, target: string, facts: Facts
 	}
 	escalateTicket(ticket, `The workflow moved through ${HOPS} states without waiting; check its routes for a loop.`, at, "escalation");
 }
-/** Start the state just entered; return the next state when it completes at once. */
 function arriveTicket(
 	state: Agenda,
 	ticket: Ticket,
@@ -465,7 +443,6 @@ function arriveTicket(
 		}
 	}
 }
-/** The open PR and its fingerprint once a merge is due: mergeable with passing checks, every dependency delivered. */
 function mergeDue(
 	state: ReadonlyAgenda,
 	ticket: ReadonlyTicket,
@@ -491,15 +468,6 @@ function enqueueMerge(
 	);
 }
 
-/* ------------------------------------------------------------ reconcile pass */
-
-/**
- * The agenda one reconcile pass reads and the agenda it writes. The pass reads through `state`, which is read-only,
- * so the compiler admits a write only through `write()`. On a shared agenda the first `write()` makes the pass's one
- * deep copy, so a pass that changes nothing copies nothing. Every write site changes the agenda (a revision, a note,
- * an effect or its state, a closure or its stamp, a question's comment), so `changed` is the pass's change signal.
- * A reference read before a write may be the shared original afterwards; each step re-reads through `state`.
- */
 class Pass {
 	private draft: Agenda | null;
 	private wrote = false;
@@ -520,16 +488,11 @@ class Pass {
 		if (!this.draft) this.draft = draftAgenda(this.base);
 		return this.draft;
 	}
-	/** The writable ticket at `index`; a pass adds and removes no ticket, so indexes hold across its writes. */
 	ticket(index: number): { state: Agenda; ticket: Ticket } {
 		const state = this.write();
 		return { state, ticket: state.tickets[index]! };
 	}
 }
-/**
- * While the ticket holds an open PR in a state that observes it, source events route the ticket by the state's
- * `observe` map. A PR that stops being this delivery, unknown checks and drafts always reach Main.
- */
 function observePullRequest(pass: Pass, index: number, observe: Observe, facts: Facts, at: number): boolean {
 	const ticket = pass.state.tickets[index]!;
 	if (!ticket.pr?.ref || ticket.terminal) return false;
@@ -562,7 +525,6 @@ function observePullRequest(pass: Pass, index: number, observe: Observe, facts: 
 		);
 		return true;
 	}
-	// GitHub fixes a PR's head repository and branch at creation, so only these fields can legitimately move.
 	const drifted = pr.head !== ticket.pr.head || pr.body !== ticket.pr.body || pr.title !== ticket.pr.title;
 	if (!drifted && pr.checks.kind !== "failing" && pr.mergeable !== "no" && pr.mergeable !== "behind") return false;
 	const { state, ticket: writable } = pass.ticket(index);
@@ -629,7 +591,6 @@ function reconcileTicket(pass: Pass, index: number, facts: Facts, at: number): v
 				gate = ticket.gates[ticket.state];
 			if (!stamp)
 				escalateTicket(pass.ticket(index).ticket, "Merged commit or post-merge contract is not present in the target.", at, "sourceChange");
-			// The judged merge commit stays fixed; a changed contract or ruling restarts this state on the new fingerprint.
 			else if (gate && canonical(gate.stamp) !== canonical(stamp)) {
 				const writable = pass.ticket(index);
 				enterTicket(writable.state, writable.ticket, writable.ticket.state, facts, at);
@@ -638,7 +599,6 @@ function reconcileTicket(pass: Pass, index: number, facts: Facts, at: number): v
 		}
 		case "action": {
 			if (definition.action.kind !== "merge") return;
-			// An observation that routes nothing writes nothing, so `ticket` is still current below.
 			if (observePullRequest(pass, index, definition.action.observe, facts, at)) return;
 			const problem = mergeProblem(state, ticket, facts, definition.action.requires);
 			if (problem) {
@@ -670,8 +630,6 @@ function reconcileTicket(pass: Pass, index: number, facts: Facts, at: number): v
 	}
 }
 
-/* ------------------------------------------------------------ parent machine */
-
 function enterParent(state: Agenda, closure: ClosureGate, target: string, facts: Facts, _at: number): void {
 	const holds = parentHolds(closure);
 	let next = target;
@@ -694,7 +652,6 @@ function enterParent(state: Agenda, closure: ClosureGate, target: string, facts:
 	}
 	escalateClosure(closure, `The parent workflow moved through ${HOPS} states without waiting; check its routes for a loop.`);
 }
-/** A parent final state holds only while the parent issue is closed and the children are the ones judged. */
 function parentFinalProblem(state: ReadonlyAgenda, closure: DeepReadonly<ClosureGate>, facts: Facts): string | null {
 	const parent = state.parent ? facts.issues.find((issue) => sameRef(issue.ref, state.parent!)) : undefined;
 	if (parent?.state !== "closed") return "the parent issue is not closed";
@@ -740,7 +697,6 @@ function arriveParent(
 function reconcileParent(pass: Pass, facts: Facts, at: number): void {
 	const state = pass.state;
 	if (!state.parent) return;
-	// A written stamp is taken from the writable agenda, so the draft shares no object with the agenda it copies.
 	const stamp = parentStamp(state, facts);
 	if (!state.closure) {
 		if (!stamp) return;
@@ -764,7 +720,6 @@ function reconcileParent(pass: Pass, facts: Facts, at: number): void {
 			escalateClosure(pass.write().closure!, "Parent, child membership, terminal, or target verification changed.");
 		return;
 	}
-	// Changed children restart the parent machine on the new fingerprint, also after an escalation.
 	if (canonical(closure.stamp) !== canonical(stamp)) {
 		const writable = pass.write(),
 			gate = writable.closure!;
@@ -787,8 +742,6 @@ function reconcileParent(pass: Pass, facts: Facts, at: number): void {
 	}
 }
 
-/* ------------------------------------------------------------ queries */
-
 export function availableRoles(state: ReadonlyAgenda, ticket: ReadonlyTicket): Role[] {
 	const definition = ticketDefinition(state.workflow, ticket);
 	if (!definition || !dependenciesDone(state, ticket)) return [];
@@ -805,7 +758,6 @@ export function availableRoles(state: ReadonlyAgenda, ticket: ReadonlyTicket): R
 			return [];
 	}
 }
-/** The parent closure's judges still owing a verdict on its current state. */
 export function closureRoles(state: ReadonlyAgenda): Role[] {
 	const closure = state.closure,
 		definition = closure ? parentDefinition(state.workflow, closure) : null;
@@ -813,12 +765,10 @@ export function closureRoles(state: ReadonlyAgenda): Role[] {
 	const gate = closure.gates[closure.state];
 	return gate ? pendingRoles(definition.judges, gate.verdicts) : [];
 }
-/** A ticket Main has not launched yet, whose dependencies are all delivered. */
 export function awaitsLaunch(state: ReadonlyAgenda, ticket: ReadonlyTicket): boolean {
 	const definition = ticketDefinition(state.workflow, ticket);
 	return !ticket.started && definition !== null && definition.kind !== "final" && dependenciesDone(state, ticket);
 }
-/** The seat a role holds in its ticket's or closure's current state. */
 export type SeatSpec =
 	| { kind: "work"; state: string; role: Role; agent: string; brief: string }
 	| { kind: "judge"; state: string; subject: "pullRequest" | "mergeCommit" | "parent"; role: Role; agent: string; brief: string };
@@ -837,14 +787,11 @@ export function currentSeat(state: ReadonlyAgenda, ticketId: string, role: Role)
 	return closure && judge ? { kind: "judge", state: closure.state, subject: "parent", ...judge } : null;
 }
 
-/* ------------------------------------------------------------ convene and reconcile */
-
 function ticketFrom(state: Agenda, entry: Entry, facts: Facts, at: number): Result<Ticket, DomainError> {
 	const source = facts.issues.find((issue) => sameRef(issue.ref, entry.issue));
 	if (!source) return reject("sourceUnavailable", `Issue ${entry.id} was not returned by GitHub`);
 	if (!targetHead(facts, entry.target)) return reject("sourceUnavailable", `Target for ${entry.id} does not exist`);
 	const initial = state.workflow.ticket.initial;
-	// A ticket starts in the initial work state; an adopted one starts where its PR stands and never visited it.
 	const ticket: Ticket = {
 		id: entry.id,
 		revision: 1,
@@ -909,33 +856,26 @@ export function createAgenda(input: ConveneInput, workflow: Workflow, facts: Fac
 	reconcile(state, facts, at);
 	return { ok: true, value: state };
 }
-/** An agenda belongs to an issue when that issue is its parent or the issue of any of its tickets. */
 export function belongsTo(state: ReadonlyAgenda, issue: IssueRef): boolean {
 	return (state.parent !== null && sameRef(state.parent, issue)) || state.tickets.some((ticket) => sameRef(ticket.issue, issue));
 }
-/** Reconcile only fresh, complete GitHub observations, in place on an agenda the caller owns. No local intent establishes source state. */
 export function reconcile(state: Agenda, facts: Facts, at: number): void {
 	reconcilePass(new Pass(state, state), facts, at);
 }
-/** The reconciled draft of a shared agenda, or null when the observation changes nothing; an unchanged agenda is never copied. */
 export function reconciled(state: ReadonlyAgenda, facts: Facts, at: number): Agenda | null {
 	const pass = new Pass(state, null);
 	reconcilePass(pass, facts, at);
 	return pass.changed ? pass.write() : null;
 }
 function reconcilePass(pass: Pass, facts: Facts, at: number): void {
-	// A settled question moves its ticket first, so the state it lands in is reconciled in the same pass.
 	for (let index = 0; index < pass.state.tickets.length; index++) settleAsk(pass, index, facts, at);
 	for (let index = 0; index < pass.state.tickets.length; index++) reconcileTicket(pass, index, facts, at);
 	reconcileParent(pass, facts, at);
-	// An effect that is still only an intent belongs to the state entry that requested it.
 	for (let index = 0; index < pass.state.effects.length; index++) {
 		const effect = pass.state.effects[index]!;
 		if (effect.state.kind === "ready" && effect.origin && !currentOrigin(pass.state, effect))
 			pass.write().effects[index]!.state = { kind: "cancelled", reason: "The state that requested this effect has been left" };
 	}
-	// A non-escalating effect left uncertain is settled by this complete read: confirmed when the source shows it,
-	// failed otherwise. It belongs to no state entry, so its confirmation moves no machine.
 	for (let index = 0; index < pass.state.effects.length; index++) {
 		const effect = pass.state.effects[index]!,
 			settling = effect.state;
@@ -947,8 +887,6 @@ function reconcilePass(pass: Pass, facts: Facts, at: number): void {
 			? { kind: "confirmed", result }
 			: { kind: "failed", startedAt: settling.startedAt, error: { ...settling.error } };
 	}
-	// A confirmed `ask` comment hands its decision item to the intent guardians, once per question: the comment id
-	// GitHub shows is recorded on the ticket, and the guardians are asked to answer that comment.
 	for (let index = 0; index < pass.state.tickets.length; index++) {
 		const state = pass.state,
 			ticket = state.tickets[index]!,
@@ -980,12 +918,6 @@ function reconcilePass(pass: Pass, facts: Facts, at: number): void {
 	}
 }
 
-/**
- * Whether a failed or uncertain effect of each kind escalates its ticket. Meerkat effects (`comment`, `setProjectField`,
- * `requestAnswer`) are written beside a live seat or for a ticket that waits on the intent guardians, so they never
- * escalate the ticket or supersede its seats: an uncertain one is settled by the next complete read, and a failed
- * one is shown to Main and blocks `finish` until Main resolves it.
- */
 export const ESCALATES_ON_FAILURE: Readonly<Record<Action["kind"], boolean>> = {
 	publishPr: true,
 	merge: true,
@@ -998,12 +930,6 @@ export const ESCALATES_ON_FAILURE: Readonly<Record<Action["kind"], boolean>> = {
 	setProjectField: false,
 	requestAnswer: false,
 };
-/**
- * Whether an effect's callee is the authority on its outcome and accepts the same request again. Such an effect is
- * confirmed by the callee's own success response rather than by a GitHub read, its failure is never uncertain, and
- * an intent a restart left executing is called again. The intent guardians accept a repeated `requestAnswer` for
- * the same comment; a GitHub write is confirmed only by reading it back and is never sent twice.
- */
 export const REPLAYABLE: Readonly<Record<Action["kind"], boolean>> = {
 	publishPr: false,
 	merge: false,
@@ -1017,13 +943,6 @@ export const REPLAYABLE: Readonly<Record<Action["kind"], boolean>> = {
 	requestAnswer: true,
 };
 
-/**
- * Whether `retry` without a source result sends the same effect again. Meerkat records belong to no state entry, so no
- * action state can request them afresh, and they are idempotent by marker key or field value: the executor adopts
- * one the source already shows instead of writing it twice. `requestAnswer` is requested only once per ask comment,
- * and the guardians accept a repeat for that comment; GitHub never shows it, so its retry always sends it again,
- * provided Main's resolution keeps the ticket in `Asking`. Every other kind is requested afresh by its action state.
- */
 const RETRY_RESENDS: Readonly<Record<Action["kind"], boolean>> = {
 	publishPr: false,
 	merge: false,
@@ -1036,8 +955,6 @@ const RETRY_RESENDS: Readonly<Record<Action["kind"], boolean>> = {
 	setProjectField: true,
 	requestAnswer: true,
 };
-
-/* ------------------------------------------------------------ effects */
 
 export function effectPrecondition(state: ReadonlyAgenda, effect: DeepReadonly<Effect>, facts: Facts): string | null {
 	const action = effect.action,
@@ -1110,11 +1027,9 @@ export function effectPrecondition(state: ReadonlyAgenda, effect: DeepReadonly<E
 				attempt = facts.checkAttempts.find((item) => sameRepo(item.repo, action.repo) && item.workflowRunId === action.workflowRunId);
 			return pr?.head === action.head && attempt?.attempt === action.previousAttempt ? null : "Workflow attempt or PR head changed";
 		}
-		// Meerkat records have no source precondition: the comment and the field value are confirmed by reading them back.
 		case "comment":
 		case "setProjectField":
 			return null;
-		// The ticket must still wait on this question, which the effect's origin entry already establishes.
 		case "requestAnswer":
 			return null;
 	}
@@ -1198,15 +1113,10 @@ export function satisfiedResult(state: ReadonlyAgenda, effect: DeepReadonly<Effe
 			return facts.issues.find((issue) => sameRef(issue.ref, action.issue))?.meerkat?.item?.status === action.option
 				? { kind: "projectFieldSet", issue: action.issue, field: action.field, option: action.option }
 				: null;
-		// GitHub holds no trace of a guardians request; only the guardians' own response confirms it.
 		case "requestAnswer":
 			return null;
 	}
 }
-/**
- * A source-confirmed effect records what it changed. It advances its machine only when it belongs to the current
- * state entry and is the last unconfirmed effect of that entry; a late confirmation never moves a newer state.
- */
 export function confirmEffect(state: Agenda, effect: Effect, result: EffectResult, facts: Facts, at: number): void {
 	effect.state = { kind: "confirmed", result };
 	const ticket = state.tickets.find((ticket) => ticket.id === effect.ticketId);
@@ -1239,10 +1149,6 @@ export function failEffect(state: Agenda, effect: Effect, error: PortError, unce
 	if (ticket) escalateTicket(ticket, `Effect ${effect.id} ${effect.state.kind}: ${error.message}`, at, "escalation");
 	else if (state.closure) escalateClosure(state.closure, `Effect ${effect.id}: ${error.message}`);
 }
-/**
- * A seat that left its still-current revision without a handoff, or could not be seated at all, needs Main's
- * ruling rather than an automatic relaunch loop. Superseded seats return false: their successor is already due.
- */
 export function abandonSeat(state: Agenda, ticketId: string, role: Role, revision: number, reason: string, at: number): boolean {
 	const ticket = state.tickets.find((ticket) => ticket.id === ticketId);
 	if (ticket) {
@@ -1256,13 +1162,6 @@ export function abandonSeat(state: Agenda, ticketId: string, role: Role, revisio
 	return true;
 }
 
-/* ------------------------------------------------------------ Meerkat progress */
-
-/**
- * A work seat's question under Meerkat integration: the ticket waits in `Asking`, with no seat and no call on Main, and
- * the decision item is written verbatim to its issue as a comment ending with an `ask` marker keyed by the asking session.
- * The work state it was asked from is kept, so an answer returns the ticket there.
- */
 function askTicket(state: Agenda, ticket: Ticket, ask: { question: string; tier: Tier; session: string; file: string }): void {
 	const from = ticket.state;
 	ticket.revision++;
@@ -1277,10 +1176,6 @@ function askTicket(state: Agenda, ticket: Ticket, ask: { question: string; tier:
 		{ state: ASKING, revision: ticket.revision },
 	);
 }
-/**
- * The work state a question was asked from. A question recorded before Dispatch kept that state names it through
- * its asking session: the work state of the role whose latest session is that file, when the role has only one.
- */
 function askedFrom(state: ReadonlyAgenda, ticket: ReadonlyTicket, ask: DeepReadonly<NonNullable<Ticket["ask"]>>): string | null {
 	if (ask.from !== null) return ask.from;
 	const role = Object.entries(ticket.sessions).find(([, file]) => file === ask.file)?.[0];
@@ -1289,12 +1184,6 @@ function askedFrom(state: ReadonlyAgenda, ticket: ReadonlyTicket, ask: DeepReado
 	);
 	return states.length === 1 ? states[0]![0] : null;
 }
-/**
- * Settles the question an `Asking` ticket waits on from the markers its issue shows. A `reply` returns the ticket to
- * the work state it asked from, with the answer kept for the work seat that forks the asking session; a `replaced`
- * ends it in `Replaced`, with no seat, PR or close; an `escalated` records the council agenda and keeps it waiting.
- * A settlement marker naming another ask changes nothing and is noted once.
- */
 function settleAsk(pass: Pass, index: number, facts: Facts, at: number): void {
 	const ticket = pass.state.tickets[index]!,
 		ask = ticket.ask;
@@ -1356,11 +1245,6 @@ function settleAsk(pass: Pass, index: number, facts: Facts, at: number): void {
 	}
 }
 
-/**
- * A work seat's native session has started on its ticket: its implementation issue gets an `impl` marker keyed by
- * that session, and its Project Status moves to in progress unless the source already shows it. The effects belong
- * to no state entry, so a seat that hands off before they run does not cancel them.
- */
 export function workerStarted(
 	state: ReadonlyAgenda,
 	started: WorkerStarted,
@@ -1391,12 +1275,10 @@ export function workerStarted(
 	);
 	if (facts.issues.find((issue) => sameRef(issue.ref, ticket.issue))?.meerkat?.item?.status !== meerkat.status.inProgress)
 		enqueue(next, ticket.id, { kind: "setProjectField", issue: ticket.issue, field: "status", option: meerkat.status.inProgress }, null);
-	// The answer to its question, if any, has now reached this seat.
 	ticket.resumeMessage = null;
 	next.version++;
 	return { ok: true, value: next };
 }
-/** Every ticket that `next` newly entered into the final state `Done` gets its Project Status set to done. */
 export function statusOnDone(previous: ReadonlyAgenda, next: Agenda, meerkat: MeerkatContext): void {
 	if (previous.id !== next.id) return;
 	for (const ticket of next.tickets) {
@@ -1407,11 +1289,8 @@ export function statusOnDone(previous: ReadonlyAgenda, next: Agenda, meerkat: Me
 	}
 }
 
-/* ------------------------------------------------------------ operations */
-
 /** Main's resolve may queue only effects outside the delivery flow; the workflow's action states own the rest. */
 const RESOLVE_ACTIONS: readonly Action["kind"][] = ["replaceBody", "createIssue", "attachChild", "rerunChecks"];
-/** Settle the failed or uncertain effects a resolution names; none of the owner's effects may stay unsettled. */
 function settleEffects(
 	next: Agenda,
 	operation: Extract<PortInput, { op: "resolve" }>,
@@ -1431,8 +1310,6 @@ function settleEffects(
 				if (!result) return reject("sourceChanged", "Source does not confirm the effect");
 				confirmEffect(next, effect, result, facts, at);
 				break;
-			// A source-confirmed effect is adopted. Otherwise a Meerkat record or a guardians request is queued again under its id
-			// and intent, and any other effect is cancelled: resolving to its action state requests it afresh.
 			case "retry":
 				if (result) confirmEffect(next, effect, result, facts, at);
 				else
@@ -1493,8 +1370,6 @@ function resolveTicket(
 	facts: Facts,
 	at: number,
 ): Result<null, DomainError> {
-	// Main may keep an Asking ticket waiting on the guardians, typically to retry its failed request; no other ticket can
-	// enter Asking, because only a worker's question carries one.
 	const staysAsking = operation.to === ASKING;
 	if (staysAsking && ticket.state !== ASKING)
 		return reject("invalidTransition", `Only a ticket already in ${ASKING} can be resolved to ${ASKING}`);
@@ -1538,7 +1413,6 @@ function resolveTicket(
 	note(ticket, MAIN, "ruling", operation.ruling, at);
 	ticket.gates = {};
 	if (operation.dependsOn) ticket.dependsOn = operation.dependsOn;
-	// A new target needs a checkout of it; a work session forked from the old target would keep the old checkout.
 	if (operation.target) {
 		if (!sameTarget(operation.target, ticket.target)) ticket.sessions = {};
 		ticket.target = operation.target;
@@ -1558,11 +1432,9 @@ function resolveTicket(
 			ticket.pr = { ref: pr.ref, headRepo: pr.headRepo, branch: pr.headBranch, head: pr.head, title: pr.title, body: pr.body };
 	}
 	if (operation.noCode) ticket.terminal = { kind: "noCode", bodyHash: source.bodyHash, reason: operation.noCode, at };
-	// A noCode ruling or a replacement holds only where it put the ticket; resolving elsewhere drops it.
 	else if (ticket.terminal?.kind === "noCode" || ticket.terminal?.kind === "replaced") ticket.terminal = null;
 	const settled = settleEffects(next, operation, facts, at);
 	if (!settled.ok) return settled;
-	// Staying in Asking is no new state entry: the revision, the question and the effects it requested stay current.
 	if (!staysAsking) enterTicket(next, ticket, operation.to, facts, at);
 	if (ticket.state === ESCALATED) return reject("invalidTransition", ticket.notes.at(-1)?.text ?? "The ticket could not enter that state");
 	const landed = ticketDefinition(next.workflow, ticket);
@@ -1577,7 +1449,6 @@ function resolveTicket(
 	return { ok: true, value: null };
 }
 
-/** `ask` is null while Meerkat integration is off; with it on, a work seat's question waits on the intent guardians instead of Main. */
 export function applyOperation(
 	state: ReadonlyAgenda,
 	operation: PortInput,
@@ -1623,7 +1494,6 @@ export function applyOperation(
 			return reject("invalidTransition", "Resolve an Escalated ticket before launching it; a delivered ticket needs no seat");
 		if (!dependenciesDone(next, ticket))
 			return reject("invalidTransition", "Every dependency must be delivered before this ticket is launched");
-		// The optional role only names a seat the ticket's current state already offers; every such seat starts either way.
 		if (operation.role && !availableRoles(next, ticket).includes(operation.role))
 			return reject("invalidTransition", `This ticket's current state does not offer a ${operation.role} seat`);
 		ticket.started = true;
@@ -1736,7 +1606,6 @@ export function applyOperation(
 			verdict.status = operation.ok ? "passed" : "failed";
 			verdict.note = operation.note;
 			note(ticket, { kind: "seat", role: operation.role }, "finding", operation.note, at);
-			// Only a passed judge state keeps its approval; a rejected one leaves nothing a later merge or close could use.
 			if (!operation.ok) {
 				delete ticket.gates[ticket.state];
 				enterTicket(next, ticket, routeTarget(definition.on.rejected, ticketHolds(ticket, facts)), facts, at);

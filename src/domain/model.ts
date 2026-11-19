@@ -42,7 +42,6 @@ export type Target = z.infer<typeof targetSchema>;
 export type Entry = z.infer<typeof entrySchema>;
 export type ConveneInput = z.infer<typeof conveneSchema>;
 export type PortInput = z.infer<typeof portInputSchema>;
-/** The parsed tool call: the wire parameters mapped back onto the port input. */
 export type ToolParameters = { input: PortInput };
 export type Role = z.infer<typeof roleSchema>;
 export type Tier = z.infer<typeof tierSchema>;
@@ -53,7 +52,6 @@ export type { Workflow };
 export type Action = z.infer<typeof actionSchema>;
 export const lifecycleEventSchema = object({ id: text, at: millisSchema });
 export type LifecycleEvent = z.infer<typeof lifecycleEventSchema>;
-/** What Meerkat integration observes on an issue: its marker comments and its item in the configured Project; null when Meerkat is off. */
 export const issueMeerkatSchema = object({
 	markers: z.array(markerFactSchema),
 	item: object({ id: text, status: text.nullable() }).nullable(),
@@ -233,7 +231,6 @@ export type FactRead =
 export const terminalSchema = z.union([
 	object({ kind: z.literal("merged"), pr: prRefSchema, mergeSha: shaSchema, at: millisSchema }),
 	object({ kind: z.literal("noCode"), bodyHash: hashSchema, reason: text, at: millisSchema }),
-	/** The ticket's question was settled by replacing its issue with `by` (`owner/repo#n`) in comment `comment`. */
 	object({ kind: z.literal("replaced"), by: text, comment: revision, at: millisSchema }),
 ]);
 export type Terminal = z.infer<typeof terminalSchema>;
@@ -270,7 +267,6 @@ export const parentStampSchema = object({
 export type ParentStamp = z.infer<typeof parentStampSchema>;
 export const verdictSchema = object({ role: roleSchema, status: z.enum(["pending", "passed", "failed"]), note: z.string() });
 export type Verdict = z.infer<typeof verdictSchema>;
-/** One judge state's judgment: the fingerprint under judgment and one verdict per configured judge, keyed by state name. */
 export const ticketGateSchema = object({
 	stamp: z.union([pullRequestStampSchema, mergeCommitStampSchema]),
 	verdicts: z.array(verdictSchema),
@@ -278,7 +274,6 @@ export const ticketGateSchema = object({
 export type TicketGate = z.infer<typeof ticketGateSchema>;
 export const parentGateSchema = object({ stamp: parentStampSchema, verdicts: z.array(verdictSchema) });
 export type ParentGate = z.infer<typeof parentGateSchema>;
-/** Times each state of a machine was entered, for `visits` conditions. */
 const visitsSchema = z.record(z.string(), ordinal);
 export const noteAuthorSchema = z.union([
 	object({ kind: z.literal("seat"), role: roleSchema }),
@@ -293,14 +288,9 @@ export const ticketSchema = object({
 	target: targetSchema,
 	dependsOn: z.array(idSchema),
 	contract: object({ revision, bodyHash: hashSchema, body: z.string() }),
-	/**
-	 * A state of the agenda's workflow, `Escalated` while Main's ruling is due, `Asking` while the intent guardians
-	 * settle a worker's question, or `Replaced` once that question was settled by replacing the issue.
-	 */
 	state: text,
 	started: z.boolean(),
 	visits: visitsSchema,
-	/** The latest accepted session of each work role; a later seat of that role forks it. */
 	sessions: z.record(z.string(), text),
 	pr: object({
 		ref: prRefSchema.nullable(),
@@ -321,12 +311,6 @@ export const ticketSchema = object({
 		}),
 	),
 	terminal: terminalSchema.nullable(),
-	/**
-	 * The worker question the ticket waits on, exactly while it is `Asking`: the decision item, its tier, the asking
-	 * session's id and file, the id of its `ask` comment once GitHub shows it, the work state it was asked from, and
-	 * the council agenda issue once the question was escalated to the council. `from` is null only in a question
-	 * recorded before Dispatch kept it; that state is then the asking session's work role's.
-	 */
 	ask: object({
 		question: text,
 		tier: tierSchema,
@@ -336,7 +320,6 @@ export const ticketSchema = object({
 		from: text.nullable().default(null),
 		agenda: text.nullable().default(null),
 	}).nullable(),
-	/** The answer to the ticket's question, until the work seat it resumes has started; that seat receives it first. */
 	resumeMessage: z.string().nullable().default(null),
 });
 export type Ticket = z.infer<typeof ticketSchema>;
@@ -350,7 +333,6 @@ export const effectResultSchema = z.union([
 	object({ kind: z.literal("rerun"), repo: repoSchema, workflowRunId: revision, attempt: revision }),
 	object({ kind: z.literal("commented"), issue: issueRefSchema, comment: revision }),
 	object({ kind: z.literal("projectFieldSet"), issue: issueRefSchema, field: z.literal("status"), option: text }),
-	/** The intent guardians accepted the decision item: 202 on its first request, 200 on a repeat for the same comment. */
 	object({
 		kind: z.literal("answerRequested"),
 		issue: issueRefSchema,
@@ -359,7 +341,6 @@ export const effectResultSchema = z.union([
 	}),
 ]);
 export type EffectResult = z.infer<typeof effectResultSchema>;
-/** `origin` is the state entry that requested the effect; it advances only that entry. Main's resolve actions have none. */
 export const effectSchema = object({
 	id: idSchema,
 	ticketId: idSchema,
@@ -386,7 +367,6 @@ export const closureSchema = object({
 	notes: z.array(text),
 });
 export type ClosureGate = z.infer<typeof closureSchema>;
-/** The persisted agenda; `workflow` is the file-shaped workflow, parsed by parseAgenda. `run` stays attached only while its coordinator process lives; `pid` and `startedAt` together name that process, since a pid alone is reused. `startedAt` is the start time exactly as the OS reports it, compared only for equality. */
 export const agendaSchema = object({
 	id: agendaIdSchema,
 	version: revision,
@@ -406,17 +386,12 @@ export const agendaSchema = object({
 });
 export type CoordinatorProcess = Pick<Extract<z.infer<typeof agendaSchema>["run"], { kind: "attached" }>, "pid" | "startedAt">;
 export type Agenda = Omit<z.infer<typeof agendaSchema>, "workflow"> & { workflow: Workflow };
-/**
- * A value its holder reads but never writes. The controller's live agenda has this type: views, seat results and
- * observers share it without a copy, and a transition writes only its own draft (`draftAgenda`).
- */
 export type DeepReadonly<T> = T extends readonly (infer Item)[]
 	? readonly DeepReadonly<Item>[]
 	: T extends object
 		? { readonly [Key in keyof T]: DeepReadonly<T[Key]> }
 		: T;
 export type ReadonlyAgenda = DeepReadonly<Agenda>;
-/** A transition's own writable deep copy of the live agenda; the live agenda itself is never written. */
 export function draftAgenda(state: ReadonlyAgenda): Agenda;
 export function draftAgenda(state: unknown): unknown {
 	return structuredClone(state);
@@ -424,14 +399,8 @@ export function draftAgenda(state: unknown): unknown {
 export type Caller =
 	| { agentId: string; sessionId: string; sessionFile: string | null; kind: "main" }
 	| { agentId: string; sessionId: string; sessionFile: string; kind: "seat"; ticketId: string; role: Role; revision: number };
-/** Internal operation from the controller, never part of the public grammar: a work seat's native session has started. */
 export type WorkerStarted = { ticketId: string; revision: number; role: Role; sessionId: string; sessionFile: string };
-/**
- * How a work seat's question is asked under Meerkat integration: the tier it defaults to and the tier help its brief
- * carries; and how the answer reaches the resumed seat: `resumePrompt` opens its first message, before the answer.
- */
 export type MeerkatAsk = { defaultTier: Tier; tierHelp: string; resumePrompt: string };
-/** What the engine needs for Meerkat integration: this coordinator process, the configured Status option names, and how a worker's question is asked. */
 export type MeerkatContext = { host: string; pid: number; status: { inProgress: string; done: string }; ask: MeerkatAsk };
 export type DomainError = {
 	kind:

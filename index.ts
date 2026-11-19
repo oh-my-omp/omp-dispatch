@@ -24,14 +24,12 @@ import { RuntimeExit } from "./src/runtime/exit.ts";
 const SLOT = Symbol.for("omp-dispatch.runtime.v4");
 type Identity = { kind: "absent" } | { kind: "invalid"; message: string } | ({ kind: "coordinator" } & CoordinatorIdentity);
 
-/** Main is one native session for the whole process; seats own their own SDK lifetimes. */
 class ProcessRuntime {
 	private identity: Identity | null = null;
 	private binding: { pi: ExtensionAPI; ctx: ExtensionContext } | null = null;
 	private controller: DispatchController | null = null;
 	private host: HostPort | null = null;
 	private readonly attention = new Attention();
-	/** The host's graceful exit, granted only to a coordinator identity and spent once at an honest finish. */
 	private readonly exit = new RuntimeExit();
 	private started = false;
 	private deferred = false;
@@ -50,11 +48,6 @@ class ProcessRuntime {
 		logger.error("Dispatch runtime error", { error: JSON.stringify(error) });
 		this.binding?.ctx.ui.notify(runtimeErrorText(error), "error");
 	}
-	/**
-	 * Main wakes only for a decision still open when its turn ends: a launchable ticket, an Escalated ticket or
-	 * closure, a failed Meerkat effect, or a finished agenda. While Main is busy it sees the agenda through its own calls, so a decision it
-	 * settles within the same turn (launching what convene unlocked, resolving an escalation) never wakes it again.
-	 */
 	private changed(turnEnded = false): void {
 		const agenda = this.controller?.snapshot(),
 			binding = this.binding,
@@ -66,10 +59,6 @@ class ProcessRuntime {
 		}
 		this.deferred = false;
 		const fresh = this.attention.observe(agenda, (ticketId, role) => host.active(ticketId, role));
-		// A completed agenda has no decisions; the process may end with it. The tool's accepted `finish` and every
-		// relay path that confirms completion surface here through the controller's own snapshot, so the exit fires
-		// at this one gate and `session_shutdown` later keeps its `shutdown()` closing order. Unfinished states
-		// (Asking, Escalated, open decisions) pass the gate unspent and the coordinator keeps running.
 		this.exit.commit(agenda.lifecycle === "completed", agenda);
 		if (!fresh.length) return;
 		binding.pi.sendMessage(
@@ -91,7 +80,6 @@ class ProcessRuntime {
 			throw new Error("Dispatch requires the actual native Main");
 		this.started = true;
 		this.binding = { pi, ctx };
-		// Only a coordinator identity reaches start, so the exit request binds to the exact context it was granted for.
 		this.exit.grant(() => ctx.shutdown());
 		const settings = await readRuntimeSettings(ctx.cwd);
 		if (!settings.ok) {
@@ -160,7 +148,6 @@ class ProcessRuntime {
 						guardians: createGuardiansPort(meerkat.delivery.guardiansURL),
 					}
 				: null,
-			// Read at each convene: a configured file must exist; otherwise the data directory may override the built-in workflow.
 			workflow: () => configuredWorkflow(ctx.cwd, directory),
 			intervalSeconds: settings.value.intervalSeconds,
 			onChange: () => this.changed(),

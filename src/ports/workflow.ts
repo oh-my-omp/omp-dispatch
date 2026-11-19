@@ -5,7 +5,6 @@ import type { Result, Workflow } from "../domain/model.ts";
 import { parseWorkflow } from "../domain/workflow.ts";
 import type { WorkflowError } from "./contracts.ts";
 
-/** Where the next agenda's workflow comes from: a configured file, or the data directory's optional override. */
 export type WorkflowSource = { kind: "configured"; path: string } | { kind: "dataDir"; path: string };
 const BUILT_IN = fileURLToPath(new URL("../default-workflow.yml", import.meta.url));
 
@@ -29,7 +28,6 @@ function decode(source: string, text: string): Result<Workflow, WorkflowError> {
 	return parsed.ok ? parsed : { ok: false, error: { source, reason: `${parsed.error.path}: ${parsed.error.reason}` } };
 }
 
-/** Read once per convene: the parsed workflow is a copy of the file at that moment, frozen into the new agenda. */
 export async function loadWorkflow(source: WorkflowSource): Promise<Result<Workflow, WorkflowError>> {
 	const own = await read(source.path);
 	switch (own.kind) {

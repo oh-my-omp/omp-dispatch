@@ -6,10 +6,9 @@ import * as m from "../domain/model.ts";
 import { parseMarker } from "../meerkat/markers.ts";
 import type { GitHubPort, MeerkatProjectSource, PrWrite } from "./contracts.ts";
 
-// Source schemas deliberately differ from domain schemas. Null/incomplete source data
+// Null/incomplete source data
 // must be rejected before it can become an apparently complete Facts read.
 const positive = z.number().int().positive().max(Number.MAX_SAFE_INTEGER);
-// Match the source ISO grammar before Date.parse can normalize invalid dates.
 const isoDateSource = `(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))`;
 const isoDateTime = new RegExp(`^${isoDateSource}T(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$`);
 const date = z
@@ -111,7 +110,6 @@ const issueRead = z.object({
 	lastReopen: z.object({ nodes: z.array(lifecycle).max(1) }),
 	closedByPullRequestsReferences: connection(sourceRef),
 });
-// Read only when Meerkat is on: every comment (markers are found by their last line) and the issue's Project items.
 const sourceComment = z.object({ databaseId: positive, body: z.string() });
 const sourceProjectItem = z.object({
 	id: z.string().min(1),
@@ -168,7 +166,6 @@ const pathRepo = (value: m.Repo) => `repos/${encodeURIComponent(value.owner)}/${
 const PAGE = 10;
 const afterClause = (cursor: string | null) => (cursor === null ? "" : `,after:${quote(cursor)}`);
 const ruleNodeFields = `type repositoryRuleset { name enforcement } parameters { __typename ... on RequiredStatusChecksParameters { strictRequiredStatusChecksPolicy requiredStatusChecks { context integrationId } } }`;
-// One page of each drilled connection; a follow-up page repeats every argument verbatim.
 const rulesPage = (cursor: string | null) =>
 	`rules(first:${PAGE}${afterClause(cursor)}) { pageInfo { hasNextPage endCursor } nodes { ${ruleNodeFields} } }`;
 const referenceFields = "number repository { nameWithOwner }";
@@ -191,7 +188,6 @@ function prFields(number: number): string {
     ${closingRefsPage(null)}
     statusCheckRollup { ${contextsPage(number, null)} }`;
 }
-// Linked PRs need a second, explicitly numbered query, not a fabricated isRequired.
 const issueFields = `${referenceFields} body updatedAt state ${subIssuesPage(null)}
  lastClose:timelineItems(last:1,itemTypes:[CLOSED_EVENT]) { nodes { ... on ClosedEvent { id createdAt } } }
  lastReopen:timelineItems(last:1,itemTypes:[REOPENED_EVENT]) { nodes { ... on ReopenedEvent { id createdAt } } }
@@ -290,8 +286,7 @@ function checks(value: SourcePr, rules: m.MergeRequirements): m.ChecksSnapshot {
 			failures.push({ kind: "status", identity, context: item.name, sha: value.headRefOid });
 			continue;
 		}
-		// A check run ID is NOT a job ID. The exact job comes from the Actions URL;
-		// the workflow linkage must agree with the structured source workflowRun.
+		// A check run ID is NOT a job ID.
 		const job = item.detailsUrl?.match(/^https:\/\/github\.com\/([^/]+)\/([^/]+)\/actions\/runs\/(\d+)\/job\/(\d+)(?:\?.*)?$/);
 		if (!job || Number(job[3]) !== run.databaseId || `${job[1]}/${job[2]}`.toLowerCase() !== repoKey(repo(value.repository)))
 			return { kind: "unknown", reason: `Required Actions check ${item.name} has no corroborated workflow/job URL` };
@@ -310,16 +305,12 @@ function checks(value: SourcePr, rules: m.MergeRequirements): m.ChecksSnapshot {
 	return { kind: "passing", required: rules.required };
 }
 
-/** Matches `gh api --include` output: one header line, a header block, then the body. */
 const GH_RESPONSE_PREFIX = /^HTTP\/[^\s]+ (\d+)[^\r\n]*\r?\n([\s\S]*?)\r?\n\r?\n/;
-/** Upper bound on `ancestry` containment entries: a miss costs at most one compare request. */
 const ANCESTRY_LIMIT = 500;
-/** `meerkat` names the Project and Status field Meerkat integration reads and writes; null keeps every read and write Meerkat-free. */
 export function createGitHubPort(options: { actor?: string; meerkat: MeerkatProjectSource | null } = { meerkat: null }): GitHubPort {
 	let blockedUntil = 0;
 	const ancestry = new Map<string, "contains" | "notContained">();
 	const rememberAncestry = (key: string, value: "contains" | "notContained"): void => {
-		// Refresh recency so eviction drops the least recently used entry.
 		if (ancestry.has(key)) ancestry.delete(key);
 		ancestry.set(key, value);
 		if (ancestry.size > ANCESTRY_LIMIT) {
@@ -421,9 +412,6 @@ export function createGitHubPort(options: { actor?: string; meerkat: MeerkatProj
 		];
 		if (payload !== undefined) args.push("--input", "-");
 		const output = await command(args, payload === undefined ? undefined : JSON.stringify(payload), write);
-		// Prefix-only match: the body is everything after the header separator, never a
-		// captured copy. `match` carries the status and header block; `raw` aliases the
-		// response tail without copying it.
 		const match = GH_RESPONSE_PREFIX.exec(output.stdout);
 		const headers = new Map<string, string>();
 		for (const line of (match?.[2] ?? "").split(/\r?\n/)) {
@@ -435,9 +423,7 @@ export function createGitHubPort(options: { actor?: string; meerkat: MeerkatProj
 		const trimmed = raw.trim();
 		try {
 			if (trimmed) body = JSON.parse(trimmed);
-		} catch {
-			/* Classified below using the actual status and source response. */
-		}
+		} catch {}
 		const response: HttpResponse = { status: match ? Number(match[1]) : 0, headers, body };
 		if (output.timedOut) fail(write ? "uncertainOutcome" : "unavailable", `${method} ${endpoint}: request timed out`);
 		if (allowNotFound && response.status === 404) return response;
@@ -448,7 +434,6 @@ export function createGitHubPort(options: { actor?: string; meerkat: MeerkatProj
 		if (trimmed && body === null) fail(write ? "uncertainOutcome" : "invalidResponse", `${method} ${endpoint}: malformed JSON response`);
 		return response;
 	}
-	/** `write` marks a mutation: a lost response is an uncertain outcome, not an unavailable read. */
 	async function graph(query: string, cause: string, write = false): Promise<Record<string, unknown>> {
 		const response = await api("graphql", "POST", { query }, cause, false, write);
 		const envelope = decode(graphEnvelope, response.body, "GraphQL envelope");
@@ -465,9 +450,6 @@ export function createGitHubPort(options: { actor?: string; meerkat: MeerkatProj
 	}
 	const selection = (value: m.Repo, fields: string) => `repository(owner:${quote(value.owner)},name:${quote(value.name)}) { ${fields} }`;
 	type SourcePage<Element> = { nodes: Element[]; pageInfo: { hasNextPage: boolean; endCursor: string | null } };
-	// Drain one source connection to its final page. Each follow-up restates the
-	// parent identity and the same anchor the first page was bound to, so a later
-	// page can never be appended to a different issue, PR, branch or commit.
 	async function drain<Element>(options: {
 		label: string;
 		cause: string;
@@ -534,7 +516,6 @@ export function createGitHubPort(options: { actor?: string; meerkat: MeerkatProj
 			source.closedByPullRequestsReferences = { ...source.closedByPullRequestsReferences, nodes };
 		}
 	}
-	/** The issue's item in the configured Project, every page of its items drained. */
 	async function projectItem(raw: unknown, project: MeerkatProjectSource, cause: string): Promise<m.IssueMeerkat["item"]> {
 		const source = decode(z.object({ ...sourceRefFields, projectItems: connection(sourceProjectItem) }), raw, "issue project items");
 		const repository = repo(source.repository),
@@ -563,7 +544,6 @@ export function createGitHubPort(options: { actor?: string; meerkat: MeerkatProj
 		);
 		return item ? { id: item.id, status: item.fieldValueByName?.name ?? null } : null;
 	}
-	/** The issue's marker comments, every page drained, and its Project item; invalid markers are logged and ignored. */
 	async function issueMeerkat(raw: unknown, project: MeerkatProjectSource, cause: string): Promise<m.IssueMeerkat> {
 		const source = decode(z.object({ ...sourceRefFields, comments: connection(sourceComment) }), raw, "issue comments");
 		const repository = repo(source.repository),
@@ -616,8 +596,6 @@ export function createGitHubPort(options: { actor?: string; meerkat: MeerkatProj
 			source.closingIssuesReferences = { ...source.closingIssuesReferences, nodes };
 		}
 		const rollup = source.statusCheckRollup;
-		// Checks are pinned to the first page's head: a page observed at a different
-		// headRefOid is refused instead of concatenated into one checks list.
 		if (rollup?.contexts.pageInfo.hasNextPage) {
 			const nodes = await drain({
 				label: `${anchor} checks`,
@@ -656,8 +634,6 @@ export function createGitHubPort(options: { actor?: string; meerkat: MeerkatProj
 			cause,
 			first: branch.rules,
 			anchor: `${branch.name}@${branch.target.oid}`,
-			// A branch's rules are properties of the branch, so the follow-up pins the
-			// exact ref name and head commit instead of re-resolving a moving default.
 			next: (after) =>
 				selection(repository, `ref(qualifiedName:${quote(`refs/heads/${branch.name}`)}) { name target { oid } ${rulesPage(after)} }`),
 			read: (data) => {
@@ -996,8 +972,6 @@ export function createGitHubPort(options: { actor?: string; meerkat: MeerkatProj
 		failure: Extract<m.CheckFailure, { kind: "actions" }>,
 		cause: string,
 	): Promise<void> {
-		// checks() already pins the check's app, suite commit and structured workflow.
-		// Corroborate its exact job through the attempt's complete source jobs list.
 		let page = 1,
 			total: number | null = null;
 		const jobs = new Map<number, { id: number; run_id: number; run_attempt: number; head_sha: string; check_run_url: string }>();
@@ -1117,7 +1091,6 @@ export function createGitHubPort(options: { actor?: string; meerkat: MeerkatProj
 		).repository.ref;
 		return source ? { kind: "present", head: source.target.oid } : { kind: "missing" };
 	}
-	// Project, field and option node ids are looked up by their configured names once per process.
 	let statusIds: { projectId: string; fieldId: string; options: ReadonlyMap<string, string> } | null = null;
 	async function statusField(project: MeerkatProjectSource, cause: string): Promise<NonNullable<typeof statusIds>> {
 		if (statusIds) return statusIds;
@@ -1156,7 +1129,6 @@ export function createGitHubPort(options: { actor?: string; meerkat: MeerkatProj
 		};
 		return statusIds;
 	}
-	/** Adds the issue to the configured Project when it has no item there, then selects `option` on its Status field. */
 	async function setStatus(issue: m.IssueRef, option: string): Promise<null> {
 		if (!meerkat) return fail("precondition", "Meerkat integration is off; no Project is configured");
 		const ids = await statusField(meerkat, "setProjectField");

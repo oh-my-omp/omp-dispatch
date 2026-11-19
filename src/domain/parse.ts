@@ -36,7 +36,6 @@ function parse<T>(schema: ZodLikeSchema<T>, value: unknown, path = ""): Result<T
 function failure<T>(path: string, reason: string): Result<T, ParseError> {
 	return { ok: false, error: { path, reason } };
 }
-/** Drops fields the caller did not supply, so the domain schemas report a missing required field by name. */
 function compact(fields: Record<string, unknown>): Record<string, unknown> {
 	return Object.fromEntries(Object.entries(fields).filter(([, value]) => value !== undefined));
 }
@@ -57,7 +56,6 @@ function targetRef(value: string | undefined, field: string): Result<Target, Par
 	return parsed.ok ? { ok: true, value: parsed.value } : failure(field, parsed.error);
 }
 
-/** Fields each operation accepts, so a field borrowed from another operation is refused here rather than by the domain union. */
 const MAIN_FIELDS: {
 	convene: readonly string[];
 	resume: readonly string[];
@@ -384,14 +382,12 @@ function seatInput(value: SeatInput): Result<PortInput, ParseError> {
 	}
 }
 
-/** Parse Main's wire parameters into the existing port input. */
 export function parseToolParameters(value: unknown): Result<ToolParameters, ParseError> {
 	const wire = parse(toolParametersSchema, value);
 	if (!wire.ok) return wire;
 	const input = mainInput(wire.value.input);
 	return input.ok ? { ok: true, value: { input: input.value } } : input;
 }
-/** Parse a seat's wire parameters into the existing port input; the seat definition carries only seat operations. */
 export function parseSeatToolParameters(value: unknown): Result<ToolParameters, ParseError> {
 	const wire = parse(seatToolParametersSchema, value);
 	if (!wire.ok) return wire;
@@ -399,7 +395,6 @@ export function parseSeatToolParameters(value: unknown): Result<ToolParameters, 
 	return input.ok ? { ok: true, value: { input: input.value } } : input;
 }
 
-/** Validate graph integrity at the file/input boundary, not at each internal read. */
 export function validateTopology(state: Pick<Agenda, "tickets">): string | null {
 	const byId = new Map(state.tickets.map((ticket) => [ticket.id, ticket]));
 	if (byId.size !== state.tickets.length) return "Ticket IDs must be unique";
@@ -425,11 +420,9 @@ export function validateTopology(state: Pick<Agenda, "tickets">): string | null 
 	for (const ticket of state.tickets) if (!visit(ticket.id)) return "Ticket dependencies must be acyclic";
 	return null;
 }
-/** The persisted form of an agenda: its frozen workflow in file shape. */
 export function encodeAgenda(agenda: Agenda): unknown {
 	return { ...agenda, workflow: encodeWorkflow(agenda.workflow) };
 }
-/** Decode a persisted agenda; every recorded state, gate and session must belong to the workflow frozen in it. */
 export function parseAgenda(value: unknown): Result<Agenda, ParseError> {
 	const parsed = parse(agendaSchema, value);
 	if (!parsed.ok) return parsed;
@@ -444,7 +437,6 @@ export function parseAgenda(value: unknown): Result<Agenda, ParseError> {
 		const ticket = agenda.tickets.some((ticket) => ticket.id === effect.ticketId),
 			closure = effect.ticketId === agenda.closure?.id;
 		if (!ticket && !closure) return { ok: false, error: { path: "effects", reason: "Effect must belong to a ticket or closure" } };
-		// A ticket's question effects are requested by its built-in Asking entry; every other origin is a workflow state.
 		const states = ticket ? workflow.value.ticket.states : workflow.value.parent.states;
 		if (effect.origin && !(effect.origin.state in states) && !(ticket && effect.origin.state === ASKING))
 			return {

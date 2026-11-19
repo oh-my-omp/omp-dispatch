@@ -25,9 +25,6 @@ import {
 	VIEWER,
 } from "./github-fixture.ts";
 
-// Exercise the real gh subprocess boundary. Page-two-only data must affect the
-// returned source snapshot; source drift and invalid cursors must fail closed.
-
 const sha256 = (value: string): string => createHash("sha256").update(value).digest("hex");
 
 function factsOf(source: FakeGhSource, read: Result<Facts, PortError>): Facts {
@@ -161,9 +158,6 @@ describe("github port pagination", () => {
 					state: { kind: "open" },
 					closes: [{ repo: REPO, number: ISSUE_NUMBER }],
 					mergeable: "yes",
-					// ci/nightly is required by the second rules page and observed only on
-					// the second checks page, so a dropped page cannot complete the merge
-					// requirements or the checks snapshot.
 					checks: {
 						kind: "failing",
 						required: [{ kind: "status", identity: { name: "ci/nightly", source: { kind: "any" } }, context: "ci/nightly", sha: HEAD_OID }],

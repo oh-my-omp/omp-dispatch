@@ -7,7 +7,6 @@ export function parseCoordinatorFlag(value: unknown): Result<CoordinatorIdentity
 	const parsed = parseIssueReference(value.trim());
 	return parsed.ok ? { ok: true, value: { issue: parsed.value, reference: refKey(parsed.value) } } : parsed;
 }
-/** What startup found: the ids of the launch issue's saved active agendas, or why they could not be listed. */
 export type SavedAgendas = { kind: "listed"; active: readonly string[] } | { kind: "unreadable"; error: string };
 export type StartupCheck = { reference: string; saved: SavedAgendas };
 export function coordinatorBriefing(check: StartupCheck): string {

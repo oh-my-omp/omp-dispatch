@@ -3,14 +3,11 @@ import { getAgentDir } from "@oh-my-pi/pi-coding-agent";
 import { getPluginSettings } from "@oh-my-pi/pi-coding-agent/extensibility/plugins/loader";
 import type { Result } from "../domain/model.ts";
 
-/** The coordinator's own settings, resolved against its working directory; `meerkat` is null with Meerkat integration off. */
 export type RuntimeSettings = { dataDir: string; intervalSeconds: number; meerkat: string | null };
 
 const DEFAULT_INTERVAL_SECONDS = 120;
-/** The native timer's 32-bit millisecond limit, in whole seconds. */
 const MAX_INTERVAL_SECONDS = 2_147_483;
 
-/** The environment variable, when present (even empty), overrides the plugin setting, as `OMP_DISPATCH_WORKFLOW` does. */
 function pick(
 	raw: Readonly<Record<string, unknown>>,
 	env: Readonly<Record<string, string | undefined>>,
@@ -25,16 +22,11 @@ function invalid(picked: { source: string; value: unknown }, expected: string): 
 	return { ok: false, error: `${picked.source} must be ${expected}, not ${JSON.stringify(picked.value)}` };
 }
 
-/**
- * Whole seconds within the native timer range. `omp plugin config set` stores every value as a string and the
- * environment is text, so a plain decimal string is read as its number; a sign, fraction, or suffix is not.
- */
 function wholeSeconds(value: unknown): number | null {
 	const number = typeof value === "number" ? value : typeof value === "string" && /^\d+$/.test(value.trim()) ? Number(value.trim()) : null;
 	return number !== null && Number.isSafeInteger(number) && number >= 1 && number <= MAX_INTERVAL_SECONDS ? number : null;
 }
 
-/** The omp-dispatch plugin settings the coordinator reads at start, with the defaults package.json declares. */
 export function parseRuntimeSettings(
 	raw: Readonly<Record<string, unknown>>,
 	env: Readonly<Record<string, string | undefined>>,
@@ -56,7 +48,6 @@ export function parseRuntimeSettings(
 	};
 }
 
-/** Reads the store `/settings` and `omp plugin config` write, with the coordinator's project overrides. */
 export async function readRuntimeSettings(cwd: string): Promise<Result<RuntimeSettings, string>> {
 	return parseRuntimeSettings(await getPluginSettings("omp-dispatch", cwd), process.env, cwd, join(getAgentDir(), "omp-dispatch"));
 }

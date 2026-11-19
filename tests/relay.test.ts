@@ -16,9 +16,6 @@ const parsedWorkflow = parseWorkflow(YAML.parse(await Bun.file(new URL("../src/d
 if (!parsedWorkflow.ok) throw new Error(parsedWorkflow.error.reason);
 const defaultWorkflow = parsedWorkflow.value;
 
-// A fake host and a mutable GitHub source drive the real controller, so these tests observe which seats the
-// relay starts, at which exact commit, and when Main is woken. Native sessions and git live in the host port.
-
 const repository = { owner: "test", name: "dispatch" };
 const target = { repo: repository, base: "main" };
 const BASE = "a".repeat(40),
@@ -168,7 +165,6 @@ function harness(root: string, workflow: Workflow = defaultWorkflow) {
 		wakes: string[][] = [],
 		errors: unknown[] = [];
 	let controller: DispatchController | null = null;
-	// Mirrors ProcessRuntime.changed: every durable change and every Main call is observed.
 	function observe(): void {
 		const agenda = controller?.snapshot();
 		if (!agenda) return;
@@ -192,7 +188,6 @@ function harness(root: string, workflow: Workflow = defaultWorkflow) {
 	const dispatch = controller;
 	const main: Caller = { kind: "main", agentId: "Main", sessionId: "main", sessionFile: null };
 	dispatch.setMain(main);
-	// run() is the entry the kick timer uses; calling it directly drains effects and relays deterministically.
 	async function drain(): Promise<void> {
 		for (let round = 0; round < 4; round++) await dispatch.run();
 	}
@@ -257,7 +252,6 @@ test("one launch per ticket: the relay seats every later stage at its exact comm
 		).toBe(true);
 		expect(h.wakes).toEqual([["launch:A"]]);
 
-		// A named role must be one the ticket's current stage offers; a rejected launch leaves the ticket unlaunched.
 		expect(await h.asMain({ op: "launch", ticketId: "A", role: "review" })).toMatchObject({
 			ok: false,
 			error: { error: { kind: "invalidTransition" } },
@@ -269,7 +263,6 @@ test("one launch per ticket: the relay seats every later stage at its exact comm
 		expect(await h.asMain({ op: "launch", ticketId: "A" })).toMatchObject({ ok: false, error: { error: { kind: "invalidTransition" } } });
 		expect(await h.asMain({ op: "launch", ticketId: "B" })).toMatchObject({ ok: false, error: { error: { kind: "invalidTransition" } } });
 
-		// Publication with CI pending and mergeability unknown seats no gate.
 		expect(
 			(
 				await h.asSeat("A", "owner", {
@@ -288,7 +281,6 @@ test("one launch per ticket: the relay seats every later stage at its exact comm
 		expect(h.controller.snapshot()!.tickets[0]).toMatchObject({ state: "AwaitingChecks", gates: {} });
 		expect(h.launches).toHaveLength(1);
 
-		// A mergeable PR with passing checks seats fresh review and accept at the PR head.
 		h.source.prs[0]!.mergeable = "yes";
 		h.source.prs[0]!.checks = { kind: "passing", required: [] };
 		await h.drain();
@@ -297,7 +289,6 @@ test("one launch per ticket: the relay seats every later stage at its exact comm
 			["accept", { kind: "commit", repo: repository, sha: HEAD, pull: 10 }],
 		]);
 
-		// A failed review returns to Coding; the rework Owner waits until every gate seat of the ticket exited.
 		expect(
 			(
 				await h.asSeat("A", "review", {
@@ -373,7 +364,6 @@ test("one launch per ticket: the relay seats every later stage at its exact comm
 		expect(h.controller.snapshot()!.tickets[0]!.state).toBe("Done");
 		expect(h.wakes).toEqual([["launch:A"], ["launch:B"]]);
 
-		// A noCode ruling queues the closure without waking Main; completion wakes it once to finish.
 		expect(
 			(
 				await h.asMain({
@@ -414,7 +404,6 @@ test("a seat that exits without a handoff escalates its current revision instead
 		expect(h.launches).toHaveLength(1);
 		expect(h.wakes).toEqual([["launch:A"], ["escalated:A:2"]]);
 
-		// Main's ruling resumes the relay without another launch.
 		expect((await h.asMain({ op: "resolve", ticketId: "A", revision: 2, ruling: "Retry the implementation.", to: "Coding" })).ok).toBe(
 			true,
 		);
@@ -434,7 +423,6 @@ test("a seat that ends without a handoff while a refresh is in flight is not re-
 			(await h.asMain({ op: "convene", parent: null, tickets: [{ id: "A", issue: issueA, target, dependsOn: [], adoptPr: null }] })).ok,
 		).toBe(true);
 		expect((await h.asMain({ op: "launch", ticketId: "A" })).ok).toBe(true);
-		// The refresh is already reading the source when the Owner leaves; its escalation queues behind the refresh.
 		const refresh = h.controller.run();
 		h.exit("A", "owner", false, "model stopped");
 		await refresh;

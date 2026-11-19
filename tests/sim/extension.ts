@@ -1,11 +1,3 @@
-// The scripted model for the state-flow simulation. Loaded into the real omp
-// process with `-e`, it registers the `sim` provider that both Main
-// (`--model sim/main`) and every seat (agent model `sim/seat`) talk to. Each
-// call is answered from what omp actually sent: the Main notifications, the
-// seat brief, and the results of earlier tool calls in the same session.
-// Script state lives in the transcript, not in module memory, so a forked or
-// resumed session continues exactly where its history says it is.
-
 import { appendFileSync, readFileSync } from "node:fs";
 import { z } from "@oh-my-pi/omptype/zod";
 import {
@@ -29,7 +21,6 @@ let callCounter = 0;
 type Message = Context["messages"][number];
 type Step = { call: { name: string; args: Record<string, unknown> } } | { text: string } | { fail: string };
 type Played = { op: string | null; result: string };
-/** The `{ok, value}` envelope the dispatch tool returns, with the few fields the script branches on. */
 const replySchema = z
 	.object({
 		ok: z.boolean(),
@@ -47,7 +38,6 @@ const replySchema = z
 	})
 	.passthrough();
 type Reply = z.infer<typeof replySchema>;
-// Ticket notes are objects with `text`; closure notes are plain strings.
 const briefTicketSchema = z.object({ id: z.string(), revision: z.number(), notes: z.array(z.unknown()).optional() }).passthrough();
 const intentSchema = z.object({ required: z.array(z.string()).optional() }).passthrough();
 
@@ -57,7 +47,6 @@ const text = (message: Message): string =>
 		: message.content.map((block) => (block.type === "text" ? block.text : "")).join("");
 const quote = (value: string) => `'${value.replaceAll("'", `'\\''`)}'`;
 
-/** The calls of `tool` (any tool when null) made after `from`, paired with their results, in order. */
 function played(messages: Message[], from: number, tool: string | null): Played[] {
 	const out: Played[] = [];
 	for (let index = from; index < messages.length; index++) {
@@ -74,7 +63,6 @@ function played(messages: Message[], from: number, tool: string | null): Played[
 	return out;
 }
 
-/** The latest prompt-like message (user, developer or converted custom notification), optionally matching `marker`. */
 function lastUser(messages: Message[], marker?: RegExp): number {
 	for (let index = messages.length - 1; index >= 0; index--) {
 		const message = messages[index]!;
@@ -92,9 +80,6 @@ function parseReply(result: string): Reply {
 	}
 }
 
-/* ------------------------------------------------------------------ Main */
-
-/** A dispatch call, or a shell command Main runs to wait for the driver. */
 type Ask = { input: Record<string, unknown> } | { shell: string };
 type MainPlan = Generator<Ask, void, Reply>;
 
@@ -144,7 +129,6 @@ function* attentionPlan(trigger: string): MainPlan {
 				};
 		} else if (kind === "failed" && scenario.retryFailed) {
 			yield { shell: `while [ ! -f ${quote(scenario.retryFailed)} ]; do sleep 0.2; done` };
-			// The failed record blocks finish; a seat still retiring refuses it first, so wait that out.
 			let finished = yield finish;
 			while (finished.error?.error?.kind === "ownershipBlocked") {
 				yield { shell: "sleep 0.5" };
@@ -179,7 +163,6 @@ function mainStep(messages: Message[]): { step: Step; note: string } {
 		if (next.done) break;
 		next = plan.next(parseReply(item.result));
 	}
-	// The note names the notification and its position, so the driver can group one turn's calls per notification.
 	const note = `${index}:${/Dispatch needs Main: (.*?)\. launch:/.exec(trigger)?.[1] ?? "start"}`;
 	if (next.done) return { step: { text: "Waiting for the next dispatch decision." }, note };
 	const ask = next.value;
@@ -189,9 +172,6 @@ function mainStep(messages: Message[]): { step: Step; note: string } {
 	};
 }
 
-/* ------------------------------------------------------------------ seats */
-
-/** The ticket the brief carries: its last paragraph is the ticket or closure JSON. */
 function ticketOf(brief: string): z.infer<typeof briefTicketSchema> {
 	return briefTicketSchema.parse(JSON.parse(brief.slice(brief.lastIndexOf("\n\n") + 2)));
 }
@@ -221,7 +201,6 @@ function verdict(expect: Expect, output: string): { ok: boolean; note: string } 
 }
 
 function commitScript(spec: TicketSpec, write: Record<string, string>, remove: string[], label: string): string {
-	// `tee` keeps the script valid under the operator's bash interceptor, which refuses printf/echo redirection into files.
 	const writes = Object.entries(write).map(([path, content]) => `printf '%s' ${quote(content)} | tee -- ${quote(path)} >/dev/null`);
 	const removes = remove.map((path) => `git rm -q --ignore-unmatch ${quote(path)}`);
 	return [
@@ -242,7 +221,6 @@ function ownerStep(messages: Message[], spec: TicketSpec, brief: string): { step
 	const continued = /Continue ticket \S+ at revision (\d+)/.exec(prompt);
 	const ticket = ticketOf(brief);
 	const revision = continued ? Number(continued[1]) : ticket.revision;
-	// Handoffs before the latest prompt: a forked rework session inherits its predecessor's accepted handoffs.
 	const handoffs = played(messages.slice(0, latest), 0, "dispatch").filter(
 		(item) => (item.op === "submit" || item.op === "escalate") && parseReply(item.result).ok,
 	).length;
@@ -340,7 +318,6 @@ function gateStep(messages: Message[], role: string, ticketId: string, brief: st
 	const expect = scenario.parentRoles.includes(role) ? scenario.closure : (spec!.judgeExpect?.[role] ?? spec!.gate);
 	const hold = spec?.hold?.roles.some((item) => item === role) ? spec.hold.marker : null;
 	const step = messages.filter((message) => message.role === "assistant").length;
-	// The provider failure hits the first judge of this role, once: its request fails and the seat ends with that error.
 	if (spec?.judgeFailure?.role === role && step === 0) {
 		const failedBefore = readFileSync(scenario.log, "utf8")
 			.split("\n")
@@ -367,8 +344,6 @@ function gateStep(messages: Message[], role: string, ticketId: string, brief: st
 	return { step: { text: "Verdict recorded." }, note: "done" };
 }
 
-/* ------------------------------------------------------------------ provider */
-
 function respond(model: Model<Api>, context: Context, options?: SimpleStreamOptions) {
 	const messages = context.messages;
 	let decided: { step: Step; note: string };
@@ -383,7 +358,6 @@ function respond(model: Model<Api>, context: Context, options?: SimpleStreamOpti
 		const spec = scenario.tickets.find((item) => item.id === ticketId);
 		decided = scenario.workRoles.includes(role) ? ownerStep(messages, spec!, brief) : gateStep(messages, role, ticketId, brief);
 	}
-	// Tools that trace intent require an `i` argument; supply it only when the schema asks for it.
 	const withIntent = (name: string, args: Record<string, unknown>) => {
 		const schema = intentSchema.safeParse(context.tools?.find((tool) => tool.name === name)?.parameters);
 		return schema.success && schema.data.required?.includes("i") ? { i: "Simulated step", ...args } : args;
@@ -420,7 +394,6 @@ function respond(model: Model<Api>, context: Context, options?: SimpleStreamOpti
 	const stream = createAssistantMessageEventStream();
 	stream.push({ type: "start", partial });
 	if ("fail" in decided.step) {
-		// A provider failure ends the stream with stopReason 'error', as omp reports a request that failed after retries.
 		const failure: AssistantMessage = { ...partial, stopReason: "error", errorMessage: decided.step.fail };
 		stream.push({ type: "error", reason: "error", error: failure });
 	} else if ("call" in decided.step) {

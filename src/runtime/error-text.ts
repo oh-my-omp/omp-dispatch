@@ -1,7 +1,6 @@
 import { tr } from "../../omomp-shared/i18n.ts";
 import type { RuntimeError } from "./controller.ts";
 
-/** Detailed protocol diagnostics remain in the log; notifications render their structured category. */
 export function runtimeErrorText(error: RuntimeError): string {
 	const detail = tr("See the Dispatch runtime error in the log for diagnostic details.", "诊断详情请查看日志中的调度运行错误。");
 	switch (error.kind) {

@@ -193,9 +193,6 @@ describe("webhook listener", () => {
 	});
 
 	test("one issue's opened and edited deliveries, arriving together, start one coordinator", async () => {
-		// A Tern that lists a block only once `new tab` has returned, and returns
-		// only after both deliveries were answered: a second launch that does not
-		// wait for the first sees no block and opens a second tab.
 		const commands: string[] = [];
 		const blocks: { id: number; live: boolean; args: string[] }[] = [];
 		const answered = Promise.withResolvers<void>();
@@ -244,8 +241,6 @@ describe("webhook listener", () => {
 		});
 		try {
 			const url = `http://127.0.0.1:${listener.port}/github/webhook`;
-			// GitHub renders both payloads from the issue as it is when delivering, so
-			// the `opened` body already carries the link the edit added.
 			const edited = JSON.stringify(
 				delivery("edited", { body: badge(own) }, { changes: { body: { from: "Plan\n\n(link written after the issue exists)" } } }),
 			);

@@ -25,7 +25,6 @@ test("a granted exit fires once at a completed agenda", () => {
 	exit.grant(() => requests.push(1));
 	exit.commit(true, agenda("completed"));
 	expect(requests).toEqual([1]);
-	// The spent request keeps later duplicates as no-ops.
 	exit.commit(true, agenda("completed"));
 	expect(requests).toEqual([1]);
 });
@@ -34,7 +33,6 @@ test("no exit before an honest finish", () => {
 	const requests: number[] = [];
 	const exit = new RuntimeExit();
 	exit.grant(() => requests.push(1));
-	// Unfinished states: open tickets, Asking, Escalated, and a rejected finish pass.
 	exit.commit(false, agenda("completed"));
 	exit.commit(true, agenda("active"));
 	exit.commit(false, agenda("active"));
@@ -44,10 +42,8 @@ test("no exit before an honest finish", () => {
 test("a completed agenda never exits without the coordinator identity", () => {
 	const requests: number[] = [];
 	const exit = new RuntimeExit();
-	// No grant: an ordinary omp session or an unstarted runtime.
 	exit.commit(true, agenda("completed"));
 	expect(requests).toEqual([]);
-	// Granting after the fact still cannot spend an already-ignored finish.
 	exit.grant(() => requests.push(1));
 	exit.commit(true, agenda("completed"));
 	expect(requests).toEqual([1]);

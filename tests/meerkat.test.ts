@@ -98,7 +98,6 @@ test("a marker line round-trips; a malformed or incomplete one is invalid and pl
 		kind: "marker",
 		fact: { id: 9, kind: "reply", json: { v: 1, ask: 12, decision: null }, body: "" },
 	});
-	// A reply carries the comment text above its marker line, its answer.
 	expect(parseMarker(9, 'Use JSON.\n\nOne file per export.\n\n<!-- meerkat:reply {"v":1,"ask":12,"decision":null} -->')).toEqual({
 		kind: "marker",
 		fact: { id: 9, kind: "reply", json: { v: 1, ask: 12, decision: null }, body: "Use JSON.\n\nOne file per export." },
@@ -165,7 +164,6 @@ test("a started work seat queues its impl comment and an in-progress Status, bot
 		field: "status",
 		option: "In Progress",
 	});
-	// A later session of the same issue needs its own marker; Status already in progress is not written again.
 	const again = workerStarted(
 		started.value,
 		{ ticketId: "one", revision: started.value.tickets[0]!.revision, role: "owner", sessionId: "sess-2", sessionFile: "/f2" },
@@ -216,8 +214,6 @@ test("a Meerkat record write never escalates its ticket or supersedes the live O
 	const root = await mkdtemp(join(tmpdir(), "dispatch-meerkat-effect-"));
 	const source = facts({ markers: [], item: { id: "item", status: "Todo" } });
 	const meerkat = (): NonNullable<Facts["issues"][number]["meerkat"]> => source.issues[0]!.meerkat!;
-	// `land` decides whether a comment POST reaches GitHub; every POST loses its response, and the confirmation
-	// read right after it fails, as a read does when a live Owner pushes during it.
 	let land = true,
 		failReads = 0,
 		posts = 0;
@@ -278,7 +274,6 @@ test("a Meerkat record write never escalates its ticket or supersedes the live O
 		},
 	};
 	const errors: unknown[] = [];
-	// Every durable change is observed, since a launch also kicks a background run.
 	const seen: { comment: string; ticket: string; revision: number; notes: number; owner: boolean }[] = [];
 	let controller: DispatchController | null = null;
 	const observe = (): void => {
@@ -326,8 +321,6 @@ test("a Meerkat record write never escalates its ticket or supersedes the live O
 		expect((await dispatch.execute(main, { op: "launch", ticketId: "one" })).ok).toBe(true);
 		const revision = dispatch.snapshot()!.tickets[0]!.revision;
 		await drain();
-		// The comment landed, but neither its response nor the read after it showed that: it was left uncertain while
-		// the Owner kept running at its revision, and the next complete read confirmed it without resending.
 		expect(seen).toContainEqual({ comment: "uncertain", ticket: "Coding", revision, notes: 0, owner: true });
 		expect(posts).toBe(1);
 		expect(comments()[0]?.state).toEqual({ kind: "confirmed", result: { kind: "commented", issue, comment: 4001 } });
@@ -335,8 +328,6 @@ test("a Meerkat record write never escalates its ticket or supersedes the live O
 		expect(dispatch.snapshot()!.tickets[0]).toMatchObject({ state: "Coding", revision, notes: [] });
 		expect(launches).toHaveLength(1);
 
-		// A later session's comment that never reached GitHub turns failed on the next complete read: the Owner keeps
-		// running at its revision, and Main is told, instead of `finish`, until it settles the effect.
 		land = false;
 		live.delete("one/owner");
 		dispatch.seatExited({ ticketId: "one", role: "owner", revision }, false, "model stopped");
@@ -415,13 +406,11 @@ test("retry queues a Meerkat record again when the source lacks it, adopts one t
 		if (!resolved.ok) throw new Error(resolved.error.message);
 		return resolved.value.effects.map((effect) => ({ id: effect.id, attempt: effect.attempt, state: effect.state }));
 	};
-	// The source lacks every write: the Meerkat records are queued again under the same id, intent and attempt count.
 	expect(retry(empty)).toEqual([
 		{ id: comment.id, attempt: 1, state: { kind: "ready" } },
 		{ id: field.id, attempt: 1, state: { kind: "ready" } },
 		{ id: body.id, attempt: 1, state: { kind: "cancelled", reason: "Main requested a retry: Retry the writes." } },
 	]);
-	// The source shows both Meerkat records: they are adopted without another write.
 	const shown = facts({
 		markers: [{ id: 77, kind: "impl", json: { v: 1, host: "test-host", pid: 4242, agenda: state.id, session: "sess-1", file: "/f" } }],
 		item: { id: "item", status: "In Progress" },
@@ -437,11 +426,6 @@ test("retry queues a Meerkat record again when the source lacks it, adopts one t
 	]);
 });
 
-/**
- * A Meerkat-on coordinator whose fake GitHub loses the first comment and the first Project field write: each fails
- * without reaching the source, so the complete read after it shows nothing. Every later write lands.
- * The Owner seat is started, both records fail, the seat ends, and the issue is closed outside the agenda.
- */
 async function lostFirstWrites(name: string) {
 	const root = await mkdtemp(join(tmpdir(), `dispatch-meerkat-${name}-`));
 	const source = facts({ markers: [], item: { id: "item", status: "Todo" } });
@@ -516,7 +500,6 @@ async function lostFirstWrites(name: string) {
 	});
 	const main: Caller = { kind: "main", agentId: "Main", sessionId: "main", sessionFile: null };
 	dispatch.setMain(main);
-	// One run executes at most one effect.
 	const drain = async (): Promise<void> => {
 		for (let round = 0; round < 6; round++) await dispatch.run();
 	};
@@ -547,7 +530,6 @@ async function lostFirstWrites(name: string) {
 		ok: false,
 		error: { kind: "domain", error: { kind: "invalidTransition" } },
 	});
-	// Main delivers the ticket as no-code work and retries both records in the same resolution.
 	const resolve = (ruling: string) =>
 		dispatch.execute(main, {
 			op: "resolve",
@@ -594,7 +576,6 @@ test("Main retrying a failed Meerkat record sends it again, the source read conf
 		const action = run.comment.action.kind === "comment" ? run.comment.action : null;
 		expect(run.writes.comments).toEqual([action!.body, action!.body]);
 		expect(run.meerkat().markers.filter((marker) => marker.kind === "impl" && marker.json.session === action!.marker.key)).toHaveLength(1);
-		// The retried In Progress write lands, then entering Done writes the configured done option.
 		expect(run.writes.fields).toEqual(["In Progress", "In Progress", "Done"]);
 		expect(run.meerkat().item?.status).toBe("Done");
 		expect(run.effect(run.comment.id)).toMatchObject({

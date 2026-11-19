@@ -29,14 +29,6 @@ function escapeXml(value: string): string {
 	return value.replace(/[&<>]/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[character] ?? character);
 }
 
-/**
- * The plist carries the interpreter and the installing PATH, because launchd
- * starts an agent with a minimal environment: neither `bun` nor `omp` would be
- * found by name there, and the recorded PATH is what `omp` resolves through.
- * A `trusted-run` on PATH goes first: launchd makes the program it starts the
- * one macOS privacy checks attribute to, and an interpreter reached through a
- * version manager shim changes path on every upgrade, so its grants are lost.
- */
 function plistDocument(interpreter: string, wrapper: string | null): string {
 	const program = [...(wrapper ? [wrapper] : []), interpreter, cliPath, "serve"]
 		.map((argument) => `<string>${escapeXml(argument)}</string>`)
@@ -93,7 +85,6 @@ export function portAnswers(
 	return promise;
 }
 
-/** A cold interpreter start through a PATH shim can take several seconds, so the installer waits rather than reporting a healthy agent as dead. */
 async function waitForPort(patienceMs = 20_000): Promise<boolean> {
 	const started = Date.now();
 	while (Date.now() - started < patienceMs) {
@@ -112,7 +103,6 @@ async function status(): Promise<LauncherStatus> {
 	return { plist: plistPath, installed: existsSync(plistPath), loaded: await launchdLoaded(), responding: await portAnswers(500) };
 }
 
-/** Idempotent: bootout first so a stale or differently configured agent is replaced. */
 export async function installLauncher(): Promise<Result<LauncherReport, LauncherFailure>> {
 	if (process.platform !== "darwin") return failure(diagnosticText({ kind: "notMac" }));
 	const interpreter = interpreterOnPath();

@@ -4,9 +4,6 @@ import { launchFrontend } from "../src/launcher/frontends.ts";
 import { isUserNavigation, launcherLinks, parseLinkPath, resolveTarget } from "../src/launcher/link.ts";
 import { connectedWindow, launchTern, liveCoordinatorBlock } from "../src/launcher/tern.ts";
 
-// The launcher's whole behaviour is: read a link, decide, call a frontend.
-// These checks drive that decision with a fake Tern and a real filesystem stat.
-
 type Call = { command: string; args: readonly string[]; cwd: string | undefined };
 
 function fakeRunner(responses: Readonly<Record<string, RunResult | readonly RunResult[]>>): { calls: Call[]; runner: Runner } {
@@ -118,11 +115,8 @@ describe("Tern frontend: coordinator discovery and launch decision", () => {
 		expect(liveCoordinatorBlock(listing([{ ...liveBlock, live: false }]), reference)).toBeNull();
 		expect(liveCoordinatorBlock(listing([{ id: 9, live: true, args: ["--dispatch", "Acme/dispatch#8"] }]), reference)).toBeNull();
 		expect(liveCoordinatorBlock(listing([{ id: 9, live: true, args: [`--dispatch=${reference}`] }]), reference)).toBe("9");
-		// Tern reports a launched command as `<shell> -c "<command>"`, with the
-		// whole command in one entry; the real launcher tab must still be found.
 		expect(liveCoordinatorBlock(listing([{ id: 11, live: true, args: ["-c", `omp --dispatch '${reference}'`] }]), reference)).toBe("11");
 		expect(liveCoordinatorBlock(listing([{ id: 11, live: true, args: ["-c", `omp --dispatch 'Acme/dispatch#8'`] }]), reference)).toBeNull();
-		// Tern keeps a finished command's pane listed as live with its exit code.
 		expect(
 			liveCoordinatorBlock(listing([{ id: 12, live: true, exited: 1, args: ["-c", `omp --dispatch '${reference}'`] }]), reference),
 		).toBeNull();

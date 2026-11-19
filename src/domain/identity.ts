@@ -21,7 +21,6 @@ export function repoKey(repo: Repo): string {
 export function refKey(ref: IssueRef): string {
 	return `${repoKey(ref.repo)}#${ref.number}`;
 }
-/** The launcher, the coordinator and the tool parameter grammar share the published reference grammar. */
 const namePattern = "[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?";
 export function parseRepoReference(value: string): Result<Repo, string> {
 	const match = new RegExp(`^(${namePattern})/(${namePattern})$`).exec(value);

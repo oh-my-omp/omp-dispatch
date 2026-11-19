@@ -1,11 +1,3 @@
-// Simulated GitHub behind the real `gh` command line. src/ports/github.ts and
-// src/ports/host.ts spawn `gh`; the harness puts this script first on PATH for
-// the omp process only. Every git-visible fact (branch heads, PR heads, pull
-// refs, merges, ancestry) is answered by a real bare repository acting as the
-// GitHub remote; the JSON state holds only what git cannot answer (issues,
-// PR records, CI statuses, required checks). Requests outside the modelled
-// surface are logged as unhandled and answered with a 500 so they fail loudly.
-
 import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmdirSync, writeFileSync, writeSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -33,7 +25,6 @@ const issueSchema = z.object({
 	comments: z.array(commentSchema),
 });
 type SimIssue = z.infer<typeof issueSchema>;
-/** One item of the simulated Project; `history` lists every Status it was set to, in order. */
 const projectItemSchema = z.object({
 	id: z.string(),
 	repo: z.string(),
@@ -63,22 +54,12 @@ const stateSchema = z.object({
 	repos: z.record(z.string(), repoSchema),
 	issues: z.array(issueSchema),
 	prs: z.array(prSchema),
-	/** CI status per commit set by the scenario driver; commits without an entry use ciDefault. */
 	ci: z.record(z.string(), ciStateSchema),
 	ciDefault: ciStateSchema,
-	/** A commit whose tree contains this path fails CI unless ci[sha] says otherwise. */
 	ciFailMarker: z.string().nullable(),
-	/** PR heads GitHub has not finished computing mergeability for. */
 	mergeableUnknown: z.array(z.string()),
 	nextComment: z.number(),
-	/** The single Project the simulation serves: `owner`/#`number`, single-select field `Status` with STATUS_OPTIONS. */
 	project: z.object({ owner: z.string(), number: z.number(), items: z.array(projectItemSchema) }),
-	/**
-	 * Once `skip` comments exist, the next comment request takes this single-shot hold: it touches `arrived` and waits
-	 * for `release` or `drop`. `afterWrite` records the comment first, as if GitHub applied the write and the response
-	 * was lost with the process that sent it. `beforeWrite` records it only on `release`, as a request still in flight
-	 * that reaches GitHub after its sender died; on `drop` the request never reaches GitHub and nothing is recorded.
-	 */
 	commentHold: z
 		.object({ skip: z.number(), at: z.enum(["beforeWrite", "afterWrite"]), arrived: z.string(), release: z.string(), drop: z.string() })
 		.nullable(),
@@ -106,7 +87,6 @@ export function git(cwd: string, args: string[], allowFailure = false): { code: 
 	return result;
 }
 
-/** Runs `work` while holding the simulation lock; every reader and writer of state.json goes through it. */
 export function withState<T>(dir: string, work: (state: SimState) => T): T {
 	const lock = join(dir, "lock");
 	for (let attempt = 0; ; attempt++) {
@@ -130,7 +110,6 @@ export function withState<T>(dir: string, work: (state: SimState) => T): T {
 	}
 }
 
-/** Creates the remote repositories, issue tree and the `gh` shim; returns the directory to put first on PATH. */
 export function seedGitHub(
 	dir: string,
 	seed: {
@@ -198,8 +177,6 @@ export function seedGitHub(
 
 export const remotePath = remoteOf;
 
-/* ------------------------------------------------------------ git facts */
-
 function branchHead(dir: string, repo: string, branch: string): string | null {
 	const result = git(remoteOf(dir, repo), ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}^{commit}`], true);
 	return result.code === 0 ? result.stdout : null;
@@ -222,7 +199,6 @@ function ciOf(dir: string, state: SimState, repo: string, sha: string): CiState 
 	return state.ciDefault;
 }
 
-/** GitHub keeps refs/pull/N/head at the PR branch head; the gate seats fetch it. */
 function syncPullRefs(dir: string, state: SimState): void {
 	for (const pr of state.prs) {
 		if (pr.state !== "OPEN") continue;
@@ -235,7 +211,6 @@ function syncPullRefs(dir: string, state: SimState): void {
 	}
 }
 
-/** Issue numbers a PR body closes in its own repository, as GitHub links them. */
 function closedIssues(pr: SimPr): number[] {
 	const numbers: number[] = [];
 	for (const match of pr.body.matchAll(
@@ -247,8 +222,6 @@ function closedIssues(pr: SimPr): number[] {
 	}
 	return numbers;
 }
-
-/* ------------------------------------------------------------ graph model */
 
 function node(typename: string, fields: Record<string, Value | ((args: Args) => Value)>, allowedArgs: Record<string, string[]> = {}): Node {
 	const resolved: Node["fields"] = {};
@@ -484,7 +457,6 @@ function buildRoot(dir: string, state: SimState): Node {
 	);
 }
 
-/** Project writes; each input is checked against the one simulated Project so a drifting port query fails loudly. */
 function buildMutation(state: SimState): Node {
 	const input = <T>(schema: ZodLikeSchema<T>, args: Args): T => {
 		const parsed = z.object({ input: schema }).strict().safeParse(args);
@@ -528,8 +500,6 @@ function buildMutation(state: SimState): Node {
 		{ addProjectV2ItemById: ["input"], updateProjectV2ItemFieldValue: ["input"] },
 	);
 }
-
-/* ------------------------------------------------------------ REST surface */
 
 type Reply = { status: number; body: unknown };
 const reply = (status: number, body: unknown): Reply => ({ status, body });
@@ -652,8 +622,6 @@ function merge(dir: string, state: SimState, key: string, number: number, expect
 	return null;
 }
 
-/* ------------------------------------------------------------ gh entry */
-
 function envelope(status: number, body: unknown): string {
 	return `HTTP/2.0 ${status} ${status < 300 ? "OK" : "Error"}\r\ncontent-type: application/json\r\nx-ratelimit-remaining: 4999\r\n\r\n${JSON.stringify(body)}`;
 }
@@ -697,7 +665,6 @@ async function main(): Promise<number> {
 		const raw = argv.includes("--input") ? await Bun.stdin.text() : "";
 		const payload = raw.trim() ? payloadSchema.parse(JSON.parse(raw)) : {};
 		const commentPost = method === "POST" && /\/issues\/\d+\/comments$/.test(endpoint);
-		// The hold is taken once, by the comment request that finds `skip` comments recorded.
 		const hold = commentPost
 			? withState(dir, (state) => {
 					const taken =
@@ -706,7 +673,6 @@ async function main(): Promise<number> {
 					return taken;
 				})
 			: null;
-		// Outside the state lock: the driver observes `arrived`, kills the sender, then releases or drops the request.
 		const held = async (taken: NonNullable<SimState["commentHold"]>): Promise<"release" | "drop"> => {
 			writeFileSync(taken.arrived, "");
 			for (;;) {

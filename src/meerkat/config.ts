@@ -4,7 +4,6 @@ import { type ZodLikeSchema, z } from "@oh-my-pi/omptype/zod";
 import { YAML } from "bun";
 import type { Result } from "../domain/model.ts";
 
-/** The Meerkat configuration Dispatch reads from the `meerkatConfigDir` plugin setting: two shared files and its own delivery file. */
 const object = <const S extends Readonly<Record<string, ZodLikeSchema<unknown>>>>(shape: S) => z.object(shape).strict();
 const text = z.string().min(1);
 const repo = z.string().regex(/^[^/\s]+\/[^/\s]+$/);
@@ -39,7 +38,6 @@ export type MeerkatConfig = MeerkatParts & { root: string };
 export const MEERKAT_FILES = { repos: "shared/repos.yaml", project: "shared/project.yaml", delivery: "dispatch/delivery.yaml" } as const;
 const MEERKAT_FILE_LIST: readonly string[] = Object.values(MEERKAT_FILES);
 
-/** One problem: the file (relative to the Meerkat config directory), the key path (`(file)` when the file as a whole is at fault), and the reason. */
 export type MeerkatFileError = { file: string; key: string; message: string };
 
 function parseFile<T>(file: string, source: string, schema: ZodLikeSchema<T>): Result<T, MeerkatFileError[]> {
@@ -66,10 +64,6 @@ function checkFile<T>(files: Readonly<Record<string, string>>, file: string, sch
 	return parseFile(file, source, schema);
 }
 
-/**
- * Strictly validates the full text of every Meerkat file, keyed by its path relative to the Meerkat config directory.
- * Exactly the three Meerkat files are accepted; each problem names its file and key path.
- */
 export function validateMeerkatFiles(files: Readonly<Record<string, string>>): Result<MeerkatParts, MeerkatFileError[]> {
 	const unknown: MeerkatFileError[] = Object.keys(files)
 		.filter((file) => !MEERKAT_FILE_LIST.includes(file))
@@ -85,7 +79,6 @@ export function validateMeerkatFiles(files: Readonly<Record<string, string>>): R
 	};
 }
 
-/** Reads the three Meerkat files under `root` and validates them; any unknown or missing key refuses the whole configuration. */
 export async function loadMeerkatConfig(root: string): Promise<Result<MeerkatConfig, string>> {
 	const files: Record<string, string> = {};
 	const unreadable: MeerkatFileError[] = [];

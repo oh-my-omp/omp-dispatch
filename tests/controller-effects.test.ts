@@ -429,7 +429,6 @@ test("convene checks every configured agent and refuses the agenda when one cann
 	}
 });
 
-// Resume asks the host's process table whether the recorded coordinator still runs: same pid and same start time.
 const quietGithub: GitHubPort = {
 	facts: async () => success(structuredClone(facts)),
 	openPrsByHead: async () => success([]),
@@ -490,7 +489,6 @@ async function convened(root: string, processes: ProcessTable): Promise<{ contro
 test("resume takes over an agenda whose coordinator process was killed", async () => {
 	const root = await mkdtemp(join(tmpdir(), "dispatch-resume-killed-"));
 	const processes = new ProcessTable();
-	// A killed process never shuts down, so its agenda stays attached.
 	const { id } = await convened(root, processes);
 	processes.kill(201);
 	const successor = coordinator(root, processes, 202, SUCCESSOR_START);
@@ -554,7 +552,6 @@ test("a coordinator that shuts down detaches its agenda, and resume then needs n
 	const original = await convened(root, processes);
 	await original.controller.shutdown();
 	expect(await createAgendaFiles(root).load(original.id)).toMatchObject({ ok: true, value: { run: { kind: "detached" } } });
-	// The original process still runs after its session ended; only a detached run lets the successor in.
 	const successor = coordinator(root, processes, 205, SUCCESSOR_START);
 	try {
 		expect((await successor.controller.execute(successor.main, { op: "resume", agenda: original.id })).ok).toBe(true);
@@ -571,7 +568,6 @@ test("resume input carries only op and agenda; any other field is refused", () =
 	expect(parseToolParameters({ input: { op: "resume", agenda, confirmed: true } }).ok).toBe(false);
 });
 
-// The incident's leftover: an active, Escalated agenda of another issue, attached to a coordinator long gone.
 const otherIssue = { repo: repository, number: 2 };
 const otherFacts: Facts = {
 	...structuredClone(facts),
@@ -636,9 +632,7 @@ test("a coordinator lists, resumes and is blocked only by the active agendas of 
 	const first = coordinator(root, processes, 301, ORIGINAL_START);
 	let successor: Coordinator | null = null;
 	try {
-		// Result 1: the leftover of issue 2 is not offered to a coordinator of issue 1, which convenes its own.
 		expect(await first.controller.startup(first.main)).toEqual({ ok: true, value: [] });
-		// Result 2: resuming it is a domain refusal that touches neither the file nor this coordinator.
 		const refused = await first.controller.execute(first.main, { op: "resume", agenda: foreign.id });
 		expect(refused).toMatchObject({ ok: false, error: { kind: "domain", error: { kind: "ownershipBlocked" } } });
 		expect(first.controller.snapshot()).toBeNull();
@@ -654,7 +648,6 @@ test("a coordinator lists, resumes and is blocked only by the active agendas of 
 		).toBe(true);
 		const own = first.controller.snapshot()!.id;
 		await first.controller.shutdown();
-		// Result 3: a later coordinator of issue 1 is offered only its own agenda and takes it over.
 		successor = coordinator(root, processes, 302, SUCCESSOR_START);
 		expect(await successor.controller.startup(successor.main)).toEqual({ ok: true, value: [own] });
 		expect((await successor.controller.execute(successor.main, { op: "resume", agenda: own })).ok).toBe(true);

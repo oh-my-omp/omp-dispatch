@@ -24,10 +24,6 @@ async function readBody(request: IncomingMessage): Promise<Buffer | null> {
 	return Buffer.concat(chunks);
 }
 
-/**
- * The request body is `{"files": {"<path>": "<full text>"}}` with exactly the three Meerkat files. Anything else is a
- * malformed request, answered `400`; a well-formed set is then judged by `validateMeerkatFiles`.
- */
 export function parseCheckRequest(text: string): Result<Readonly<Record<string, string>>, string> {
 	let json: unknown;
 	try {
@@ -44,11 +40,6 @@ export function parseCheckRequest(text: string): Result<Readonly<Record<string, 
 
 const CORS = { "access-control-allow-origin": "*" };
 
-/**
- * Judges a candidate Meerkat configuration in memory with the same schemas the coordinator applies at start, so an editor
- * can refuse a save without starting a coordinator. It reads and writes no Meerkat file. It has its own listener: the link
- * port is local-only and the webhook port is exposed through a tunnel, and this one is reached from another origin (the web UI).
- */
 export async function serveConfigCheck(options: ConfigCheckOptions): Promise<ConfigCheckListener> {
 	const handle = async (request: IncomingMessage, response: ServerResponse): Promise<void> => {
 		const path = new URL(request.url ?? "/", "http://127.0.0.1").pathname;

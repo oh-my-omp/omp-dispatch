@@ -5,16 +5,6 @@ import { z } from "@oh-my-pi/omptype/zod";
 
 import type { RequiredCheckIdentity, SourceScope } from "../src/domain/model.ts";
 
-// Fake source for the GitHub port. The port spawns the real `gh` executable, so
-// a scenario installs an executable shim named `gh` at the head of PATH; the
-// shim answers one GraphQL request from an explicit route table and serves the
-// exact source shapes src/ports/github.ts validates, page cursors included.
-//
-// Routing is deliberately strict: a request must match exactly one route. An
-// unmatched request answers 500 with the query text and an ambiguous request
-// names the colliding routes, so a fixture that drifts from the port's queries
-// fails the read with the offending query instead of passing quietly.
-
 type Json = Record<string, unknown>;
 type RuleNode = Json & { type: string; repositoryRuleset: { name: string; enforcement: string }; parameters: Json | null };
 export type Connection<Element> = { nodes: Element[]; pageInfo: { hasNextPage: boolean; endCursor: string | null } };
@@ -38,8 +28,6 @@ function describe(error: { issues: { path: PropertyKey[]; message: string }[] })
 function connection<Element>(nodes: Element[], next: string | null): Connection<Element> {
 	return { nodes, pageInfo: { hasNextPage: next !== null, endCursor: next } };
 }
-
-/* ------------------------------------------------------------------ source */
 
 export const REPO = { owner: "acme", name: "widgets" };
 const REPO_NAME = `${REPO.owner}/${REPO.name}`;
@@ -71,7 +59,6 @@ function requiredRule(name: string, strict: boolean, checks: { context: string; 
 	});
 }
 
-/** Mirrors how src/ports/github.ts renders one rule into a merge constraint. */
 export function constraintsOf(...pages: Connection<RuleNode>[]): string[] {
 	const constraints: string[] = [];
 	for (const page of pages) {
@@ -84,14 +71,9 @@ export function constraintsOf(...pages: Connection<RuleNode>[]): string[] {
 	return constraints.sort();
 }
 
-/** One rules page only: neither classic protection nor ruleset requirements. */
 const PLAIN_RULES = connection([rule("PULL_REQUEST", "require-pull-request"), rule("REQUIRED_LINEAR_HISTORY", "linear-history")], null);
 const PLAIN_CLASSIC = null;
 
-// Twelve rules across two pages carrying twelve required check identities: one
-// from classic protection, eight from the first rules page, three from the
-// second. A read that never follows the second page loses both rules and
-// requirements.
 const RULES_FIRST = connection(
 	[
 		rule("CREATION", "restrict-create"),
@@ -163,9 +145,6 @@ function statusContext(context: string, state: string): Json {
 	return { __typename: "StatusContext", context, state, isRequired: false, targetUrl: null };
 }
 
-// Twelve status contexts over two pages. ci/nightly and ci/pack are required
-// only by the second rules page and observed only on the second contexts page,
-// so the checks snapshot is complete only when both continuations ran.
 export const CONTEXTS_FIRST = connection(
 	[
 		checkRun("ci/build", 301, 1, "SUCCESS"),
@@ -250,8 +229,6 @@ function childRef(number: number): Json {
 	return { number, repository: { nameWithOwner: REPO_NAME } };
 }
 
-/* ------------------------------------------------------------------- scope */
-
 export function prScope(): SourceScope {
 	return { issues: [], prs: [{ repo: REPO, number: PR_NUMBER }], repos: [], branches: [], commits: [], checkRuns: [], creations: [] };
 }
@@ -260,12 +237,8 @@ export function issueScope(): SourceScope {
 	return { issues: [{ repo: REPO, number: ISSUE_NUMBER }], prs: [], repos: [], branches: [], commits: [], checkRuns: [], creations: [] };
 }
 
-/* ------------------------------------------------------------------ routes */
-
 export type PrScenario = "paginated" | "head-drift" | "stuck-cursor" | "null-cursor";
 
-// The follow-up page of every drilled connection repeats its arguments
-// verbatim, so one route answers each continuation.
 const RULES_CONTINUATION = 'ref(qualifiedName:"refs/heads/main") { name target { oid } rules(first:10,after:"rules-main-1")';
 const CHECKS_CONTINUATION = `pullRequest(number:${PR_NUMBER}) { number headRefOid contexts(first:10,after:"ctx-1")`;
 const SUB_ISSUES_CONTINUATION = `issue(number:${ISSUE_NUMBER}) { number repository { nameWithOwner } subIssues(first:10,after:"sub-1")`;
@@ -309,14 +282,12 @@ export function prRoutes(scenario: PrScenario): FakeGhRoute[] {
 		return [prFirstPage(CONTEXTS_FIRST), rulesContinuation, checksContinuation(HEAD_OID, CONTEXTS_SECOND)];
 	}
 	if (scenario === "head-drift") {
-		// The pull request advanced while its checks were being enumerated.
 		return [prFirstPage(CONTEXTS_FIRST), rulesContinuation, checksContinuation(DRIFTED_OID, CONTEXTS_SECOND)];
 	}
 	if (scenario === "stuck-cursor") {
 		const stuck = { nodes: [statusContext("ci/nightly", "SUCCESS")], pageInfo: { hasNextPage: true, endCursor: "ctx-1" } };
 		return [prFirstPage(CONTEXTS_FIRST), rulesContinuation, checksContinuation(HEAD_OID, stuck)];
 	}
-	// The source claims another page but hands back no cursor for it.
 	return [prFirstPage({ nodes: CONTEXTS_FIRST.nodes, pageInfo: { hasNextPage: true, endCursor: null } }), rulesContinuation];
 }
 
@@ -335,7 +306,6 @@ function linkedPrNode(link: LinkedPr): Json {
 	});
 }
 
-/** Thirteen sub-issues split 10 + 3, plus two closing PR links on the first page. */
 export function issueRoutes(): FakeGhRoute[] {
 	const children = connection([101, 102, 103, 104, 105, 106, 107, 108, 109, 110].map(childRef), "sub-1");
 	const firstLinked = linkedPrNode(LINKED[0]);
@@ -398,12 +368,8 @@ export const SERVED = {
 	rules: [RULES_FIRST, RULES_SECOND],
 	plainRules: PLAIN_RULES,
 	contextsPages: CONTEXTS_FIRST.nodes.length + CONTEXTS_SECOND.nodes.length,
-	// Required check identities in the order the port derives them: classic
-	// protection first, then each rules page in page order.
 	requiredChecks: [...CLASSIC_REQUIREMENTS, ...FIRST_PAGE_REQUIREMENTS, ...SECOND_PAGE_REQUIREMENTS],
 };
-
-/* ------------------------------------------------------------------- shim */
 
 const quoteForShell = (value: string): string => `'${value.replaceAll("'", `'\\''`)}'`;
 const BUN = process.execPath;

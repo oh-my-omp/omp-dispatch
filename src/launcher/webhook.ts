@@ -13,7 +13,6 @@ export type WebhookOptions = {
 	port: number;
 	runner?: Runner;
 	log: (entry: Readonly<Record<string, unknown>>) => void;
-	/** Read per delivery, so registering the App or changing a trigger setting needs no restart. */
 	registration: () => Promise<Result<AppRegistration, string>>;
 	settings: () => Promise<Result<TriggerSettings, string>>;
 };
@@ -21,7 +20,6 @@ export type WebhookListener = { host: string; port: number; close: () => Promise
 
 const MAX_BODY = 5 * 1024 * 1024;
 
-/** GitHub signs the exact delivered bytes with the App's webhook secret: `X-Hub-Signature-256: sha256=<hex>`. */
 export function validSignature(secret: string, body: Uint8Array, header: string | undefined): boolean {
 	if (!header?.startsWith("sha256=")) return false;
 	const expected = createHmac("sha256", secret).update(body).digest();
@@ -46,13 +44,6 @@ function header(request: IncomingMessage, name: string): string | undefined {
 	return Array.isArray(value) ? value[0] : value;
 }
 
-/**
- * The GitHub App's delivery endpoint, separate from the link listener: a
- * tunnel exposes this port, so it trusts nothing but the HMAC signature, and
- * the link listener stays reachable from this machine only. A delivery is
- * answered once the decision is made; the frontend launch continues after the
- * reply, because GitHub abandons a delivery after ten seconds.
- */
 export async function serveWebhook(options: WebhookOptions): Promise<WebhookListener> {
 	const runner = options.runner ?? run;
 	const handle = async (request: IncomingMessage, response: ServerResponse): Promise<void> => {

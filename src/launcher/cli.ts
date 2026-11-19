@@ -19,7 +19,6 @@ if (args[0] === "serve") {
 			`调度启动器正在服务 http://127.0.0.1:${launcher.port}/<owner>/<repo>/issues/<number>?spec=<JSON>`,
 		),
 	);
-	// The config-check address is read once at start; an invalid setting or a bind failure skips only this listener.
 	const configCheck = await readConfigCheckSettings();
 	if (!configCheck.ok)
 		console.error(tr(`Config check listener not started: ${configCheck.error}`, `未启动配置校验监听器：${configCheck.error}`));
@@ -31,7 +30,6 @@ if (args[0] === "serve") {
 			console.error(tr(`Config check listener not started: ${detail}`, `未启动配置校验监听器：${detail}`));
 		}
 	}
-	// The webhook address is read once, for the listener's lifetime; trigger settings and the App are read per delivery.
 	const settings = await readLauncherSettings();
 	if (!settings.ok)
 		console.error(tr(`GitHub App webhook listener not started: ${settings.error}`, `未启动 GitHub App webhook 监听器：${settings.error}`));

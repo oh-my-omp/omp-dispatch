@@ -54,7 +54,6 @@ type EnvelopeHead = { format: number; id: string; version: number; lifecycle: "a
 const ENVELOPE_HEAD =
 	/^\{"format":(-?\d+),"state":\{"id":"([^"]+)","version":(-?\d+),"nextId":-?\d+,"convenedAt":-?\d+,"lifecycle":"(active|completed)"/;
 
-/** The envelope head exactly as this module writes it; null on any older or foreign shape. */
 function envelopeHead(text: string): EnvelopeHead | null {
 	const head = ENVELOPE_HEAD.exec(text);
 	if (head === null) return null;
@@ -85,7 +84,6 @@ export function createAgendaFiles(dataDir: string, metrics?: FileMetrics): Agend
 		await syncDirectory(directory);
 	}
 	function prepare(): Promise<void> {
-		// This port prepares only its own state directory. Failed preparation can retry.
 		preparation ??= prepareDirectory().catch((error) => {
 			preparation = undefined;
 			throw error;
@@ -147,7 +145,6 @@ export function createAgendaFiles(dataDir: string, metrics?: FileMetrics): Agend
 	}
 
 	async function save(expectedVersion: number | null, supplied: Agenda): Promise<StateResult<null>> {
-		// Round-trip through the persisted form, so only a state that loads back exactly is ever written.
 		const encoded = encodeAgenda(supplied);
 		const parsed = parseAgenda(encoded);
 		if (!parsed.ok) return failure("corruptState", `${parsed.error.path}: ${parsed.error.reason}`);
@@ -156,7 +153,6 @@ export function createAgendaFiles(dataDir: string, metrics?: FileMetrics): Agend
 		}
 		const state = parsed.value;
 		const target = join(directory, `${state.id}.json`);
-		// Capture the complete target once, before any I/O. Retrying never recomputes a transition.
 		const contents = `${JSON.stringify({ format: 9, state: encoded })}\n`;
 		let previousText: string | null;
 		try {
@@ -168,8 +164,6 @@ export function createAgendaFiles(dataDir: string, metrics?: FileMetrics): Agend
 		}
 
 		if (previousText === contents) {
-			// Rename may already have succeeded while directory fsync failed. Repair
-			// durability against the actual target without replacing unchanged content.
 			try {
 				await prepare();
 				const handle = await open(target, "r");
@@ -194,8 +188,6 @@ export function createAgendaFiles(dataDir: string, metrics?: FileMetrics): Agend
 			if (head !== null && head.format === 9 && head.id === state.id) {
 				previousVersion = head.version;
 			} else {
-				// Anything this module would not have written gets the full decode, so
-				// corrupt, unsupported or mismatched files report exactly as before.
 				const previous = decode(previousText, state.id);
 				if (!previous.ok) return previous;
 				previousVersion = previous.value.version;
@@ -216,7 +208,6 @@ export function createAgendaFiles(dataDir: string, metrics?: FileMetrics): Agend
 			const handle = await open(temporary, "wx", 0o600);
 			temporaryCreated = true;
 			try {
-				// chmod also makes 0600 exact when the process umask removes owner bits.
 				await handle.chmod(0o600);
 				await handle.writeFile(contents, "utf8");
 				await handle.sync();
@@ -232,13 +223,9 @@ export function createAgendaFiles(dataDir: string, metrics?: FileMetrics): Agend
 			return unavailable(`Save agenda ${state.id}`, error);
 		} finally {
 			if (temporaryCreated && !renamed) {
-				// Only our uncommitted temporary file is disposable. Preserve the
-				// original failure if cleanup itself cannot access the filesystem.
 				try {
 					await unlink(temporary);
-				} catch {
-					/* The save result already reports failure. */
-				}
+				} catch {}
 			}
 		}
 	}

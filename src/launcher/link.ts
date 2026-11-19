@@ -7,16 +7,12 @@ import { diagnosticText } from "./diagnostics.ts";
 import { type FrontendSpec, frontendSpec } from "./frontends.ts";
 
 /**
- * Fixed by the published link contract. A configurable port would invalidate
+ * A configurable port would invalidate
  * every link already written into an issue, so it is a constant, not a setting.
  */
 export const LAUNCHER_PORT = 47591;
 export const LAUNCHER_ORIGIN = `http://127.0.0.1:${LAUNCHER_PORT}`;
 
-/**
- * The link's `spec` query value: one JSON object, so a frontend's own options
- * travel in the link without widening its path or query grammar.
- */
 const linkSpec = z.object({ cwd: z.string(), frontend: frontendSpec }).strict();
 
 export type LaunchTarget = { issue: IssueRef; reference: string; cwd: string; frontend: FrontendSpec };
@@ -26,17 +22,10 @@ export function refuse(reason: string): { ok: false; error: Rejection } {
 	return { ok: false, error: { kind: "rejected", reason } };
 }
 
-/**
- * Only a user's top-level click may start an agent from a link. Any page can
- * GET `127.0.0.1` through an image, a fetch or a prefetch, and GitHub's
- * `no-referrer-when-downgrade` policy drops Referer on the https→http hop, so
- * the click itself is the authorization the operator gives.
- */
 export function isUserNavigation(navigation: { mode: string | undefined; user: string | undefined }): boolean {
 	return navigation.mode === "navigate" && navigation.user === "?1";
 }
 
-/** The link's path: `/<owner>/<repo>/issues/<number>`. */
 export function parseLinkPath(pathname: string): Result<IssueRef, Rejection> {
 	const segments = pathname.split("/").filter((segment) => segment.length > 0);
 	if (segments.length !== 4) return refuse(diagnosticText({ kind: "linkPath" }));
@@ -47,13 +36,6 @@ export function parseLinkPath(pathname: string): Result<IssueRef, Rejection> {
 	return issue.ok ? { ok: true, value: issue.value } : refuse(diagnosticText({ kind: "issueReference", value: reference }));
 }
 
-/**
- * `cwd` is the coordinator's local checkout and travels in the link. The
- * launcher neither reconciles it with the linked repository nor clones or maps
- * anything: a writer of the link is responsible for its truth, and only its
- * being an existing absolute directory is a precondition for starting a process
- * in it.
- */
 export async function resolveTarget(input: { pathname: string; search: string }): Promise<Result<LaunchTarget, Rejection>> {
 	const path = parseLinkPath(input.pathname);
 	if (!path.ok) return path;
@@ -82,11 +64,6 @@ export async function resolveTarget(input: { pathname: string; search: string })
 
 const LINK_PATTERN = new RegExp(`${LAUNCHER_ORIGIN.replaceAll(".", "\\.")}/[^\\s()<>"'\\]]+`, "g");
 
-/**
- * Every launcher link written in a text, in order. An issue body carries the
- * link inside a Markdown link, so it ends at whitespace or Markdown/HTML
- * punctuation; `spec` is percent-encoded and contains none of those.
- */
 export function launcherLinks(text: string): URL[] {
 	return [...text.matchAll(LINK_PATTERN)].flatMap((match) => (URL.canParse(match[0]) ? [new URL(match[0])] : []));
 }

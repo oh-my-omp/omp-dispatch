@@ -1,12 +1,5 @@
-// A closed-vocabulary GraphQL evaluator for the simulated GitHub. It parses the
-// selection sets src/ports/github.ts sends and resolves them against typed
-// nodes. Any field, argument shape or fragment the node type does not declare
-// fails the whole request, so a port query that drifts from this model fails
-// loudly instead of being answered with invented data.
-
 export type Args = Record<string, unknown>;
 export type Value = null | string | number | boolean | Node | Value[];
-/** A GraphQL object: its concrete type name and the fields it can resolve. */
 export type Node = { typename: string; fields: Record<string, (args: Args) => Value> };
 type Selection =
 	| { kind: "field"; alias: string; name: string; args: Args; selections: Selection[] | null }
@@ -59,7 +52,6 @@ function tokenize(source: string): Token[] {
 	return tokens;
 }
 
-/** Parses `query { ... }` or `mutation { ... }` into its operation and root selection set. */
 export function parseQuery(source: string): { operation: "query" | "mutation"; selections: Selection[] } {
 	const tokens = tokenize(source);
 	let position = 0;
@@ -162,7 +154,6 @@ function shape(value: Value, selected: Selection[] | null, path: string): unknow
 	return value;
 }
 
-/** Evaluates a query or mutation against its root node. Throws QueryError on anything outside the model. */
 export function evaluate(source: string, roots: { query: Node; mutation: Node }): Record<string, unknown> {
 	const parsed = parseQuery(source);
 	return project(roots[parsed.operation], parsed.selections, parsed.operation);

@@ -2,7 +2,6 @@ import type { z as facadeZ, ZodLikeSchema } from "@oh-my-pi/omptype/zod";
 
 type PublicZ = Pick<typeof facadeZ, "string" | "number" | "boolean" | "literal" | "enum" | "union" | "array" | "object">;
 
-/** Build schema nodes in the consuming module graph, including the host facade. */
 export function buildPublicGrammar(z: PublicZ) {
 	const object = <const S extends Readonly<Record<string, ZodLikeSchema<unknown>>>>(shape: S) => z.object(shape).strict();
 	const text = z.string().min(1);
@@ -18,7 +17,6 @@ export function buildPublicGrammar(z: PublicZ) {
 	const prRefSchema = issueRefSchema;
 	const shaRefSchema = object({ repo: repoSchema, sha: shaSchema });
 	const targetSchema = object({ repo: repoSchema, base: text });
-	/** A configured seat name; which names exist is decided by the agenda's frozen workflow, not by the grammar. */
 	const roleSchema = z.string().regex(/^[A-Za-z][A-Za-z0-9_-]*$/);
 	const entrySchema = object({
 		id: idSchema,
@@ -28,7 +26,6 @@ export function buildPublicGrammar(z: PublicZ) {
 		adoptPr: prRefSchema.nullable(),
 	});
 	const conveneSchema = object({ op: z.literal("convene"), parent: issueRefSchema.nullable(), tickets: z.array(entrySchema).min(1) });
-	/** The intent guardians' routing of a decision item: one implementation detail, or a decision across modules or contracts. */
 	const tierSchema = z.enum(["simple", "complex"]);
 	const actionSchema = z.union([
 		object({
@@ -69,11 +66,8 @@ export function buildPublicGrammar(z: PublicZ) {
 			previousAttempt: revision,
 			head: shaSchema,
 		}),
-		/** `body` is the whole comment, ending with its marker line; the marker's key field identifies the comment at source. */
 		object({ kind: z.literal("comment"), issue: issueRefSchema, body: text, marker: object({ kind: z.enum(["impl", "ask"]), key: text }) }),
-		/** `option` is the configured option name of the Project field. */
 		object({ kind: z.literal("setProjectField"), issue: issueRefSchema, field: z.literal("status"), option: text }),
-		/** Hands an `ask` comment's decision item to the intent guardians; `comment` is that comment's id. */
 		object({ kind: z.literal("requestAnswer"), issue: issueRefSchema, comment: revision, question: text, tier: tierSchema }),
 	]);
 	const effectResolutionSchema = object({ effectId: idSchema, disposition: z.enum(["retry", "adopt", "cancel"]) });
@@ -82,7 +76,6 @@ export function buildPublicGrammar(z: PublicZ) {
 		ticketId: idSchema,
 		revision,
 		ruling: text,
-		/** A state of the agenda's workflow machine: the ticket machine for a ticket, the parent machine for the closure. */
 		to: z.string().regex(/^[A-Za-z][A-Za-z0-9_-]*$/),
 		dependsOn: z.array(idSchema).optional(),
 		target: targetSchema.optional(),
@@ -108,7 +101,6 @@ export function buildPublicGrammar(z: PublicZ) {
 			revision,
 			kind: z.literal("question"),
 			reason: text,
-			/** How hard the decision item is; only a question carries it, and Meerkat integration falls back to its configured default. */
 			tier: tierSchema.optional(),
 		}),
 		object({ op: z.literal("escalate"), ticketId: idSchema, revision, kind: z.enum(["blocked", "split", "noCode"]), reason: text }),
@@ -116,12 +108,6 @@ export function buildPublicGrammar(z: PublicZ) {
 		object({ op: z.literal("finish"), summary: text }),
 	]);
 
-	/*
-	 * The caller-facing parameter definitions. They are wire definitions only: the entry parse maps them back to
-	 * `portInputSchema` and `actionSchema`, which stay the domain and persisted types. A tool's model sees one
-	 * object whose enum chooses the operation, scalar fields, and descriptions; no unions, no nulls, and at most
-	 * two object levels. References are strings because a flattened action item is already the second level.
-	 */
 	const ticketIdField = text.optional().describe("The ticket id, exactly as returned by dispatch status or dispatch tickets.");
 	const revisionField = revision
 		.optional()

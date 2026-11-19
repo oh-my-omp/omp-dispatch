@@ -1,15 +1,13 @@
 import type { ChecksSnapshot, DeepReadonly, ParseError, PrSnapshot, Result, Role, Verdict } from "./model.ts";
 
-/** The built-in transition target: hand the ticket or closure to Main as `Escalated`. */
 export const ESCALATE = "escalate";
-/** The built-in holding state an escalation enters; no workflow state may take its name. */
+/** No workflow state may take its name. */
 export const ESCALATED = "Escalated";
-/** The built-in holding state a work seat's question enters under Meerkat integration; no workflow state may take its name. */
+/** No workflow state may take its name. */
 export const ASKING = "Asking";
-/** The built-in final state of a ticket whose issue was replaced while it asked; no workflow state may take its name. */
+/** No workflow state may take its name. */
 export const REPLACED = "Replaced";
 
-/** A predicate over source-confirmed facts and the machine's own visit counts. */
 export type Condition =
 	| { kind: "checks"; is: ChecksSnapshot["kind"] }
 	| { kind: "mergeable"; is: PrSnapshot["mergeable"] }
@@ -18,12 +16,9 @@ export type Condition =
 	| { kind: "any"; of: Condition[] }
 	| { kind: "not"; of: Condition };
 export type Branch = { when: Condition; to: string };
-/** Where one outcome leads: the first branch whose condition holds, else `otherwise`. */
 export type Route = { branches: Branch[]; otherwise: string };
-/** An entry condition: the state is entered only while `when` holds; otherwise the ticket goes to `otherwise` instead. */
 export type Guard = { when: Condition; otherwise: string };
 export type Judge = { role: Role; agent: string; brief: string };
-/** Where source events lead while the ticket holds an open PR in this state. Unconfigured events escalate. */
 export type Observe = { checksFailed: string; conflict: string; behind: string; drift: string };
 export type TicketAction =
 	| { kind: "publishPr" }
@@ -55,13 +50,10 @@ export type ParentState =
 	| { kind: "action"; action: { kind: "closeParent"; requires: string[] }; guard: Guard | null; on: { done: Route } }
 	| { kind: "decision"; guard: Guard | null; branches: Branch[]; otherwise: string | null }
 	| { kind: "final"; guard: Guard | null };
-/** The ticket and parent-closure state machines; frozen into each agenda at convene. */
 export type Workflow = {
 	ticket: { initial: string; adopted: { pullRequest: string; mergeCommit: string }; states: Record<string, TicketState> };
 	parent: { initial: string; states: Record<string, ParentState> };
 };
-
-/* ------------------------------------------------------------ parsing */
 
 class Invalid extends Error {
 	constructor(
@@ -145,7 +137,6 @@ function route(value: unknown, path: string): Route {
 	}
 	throw new Invalid(path, "the last branch must omit when and name the fallback target");
 }
-/** A decision's branches; an unconditional last branch is its fallback, and without one the decision waits. */
 function decisionBranches(value: unknown, path: string): { branches: Branch[]; otherwise: string | null } {
 	const items = list(value, path);
 	if (!items.length) throw new Invalid(path, "must list at least one branch");
@@ -333,8 +324,6 @@ function states<S>(value: unknown, path: string, parse: (value: unknown, path: s
 	return result;
 }
 
-/* ------------------------------------------------------------ validation */
-
 type AnyState = TicketState | ParentState;
 function conditions(state: AnyState): Condition[] {
 	const routes = [...("on" in state ? Object.values(state.on) : [])];
@@ -384,7 +373,6 @@ function validateMachine(machine: Record<string, AnyState>, entries: string[], p
 			if (parent && (item.kind === "checks" || item.kind === "mergeable"))
 				throw new Invalid(`${path}.states.${key}`, "the parent machine has no pull request; use visits, all, any or not");
 		}
-		// An entry guard's fallback chain must end in a state that is entered unconditionally or escalates.
 		const seen = new Set<string>([key]);
 		for (let next = state.guard?.otherwise; next && next !== ESCALATE; next = machine[next]?.guard?.otherwise) {
 			if (seen.has(next)) throw new Invalid(`${path}.states.${key}`, `entry guards form a cycle through ${next}`);
@@ -415,7 +403,6 @@ function validate(workflow: Workflow): void {
 		false,
 	);
 	validateMachine(parent, [workflow.parent.initial], "parent", true);
-	// Seat names key sessions, verdicts, notes and seat lifetimes: a judge name denotes one judge, a work name one session.
 	const agents = new Map<Role, string>(),
 		judgeRoles = new Set<Role>();
 	for (const [key, state] of Object.entries(ticket))
@@ -467,7 +454,6 @@ function validate(workflow: Workflow): void {
 			required(`parent.states.${key}.requires`, state.action.requires, (item) => item?.kind === "judge", "a parent judge state");
 }
 
-/** Parse untrusted workflow data (a YAML file or a persisted agenda) into the exact state machines. */
 export function parseWorkflow(value: unknown): Result<Workflow, ParseError> {
 	try {
 		const raw = record(value, "workflow", ["ticket", "parent"]);
@@ -493,9 +479,6 @@ export function parseWorkflow(value: unknown): Result<Workflow, ParseError> {
 	}
 }
 
-/* ------------------------------------------------------------ queries */
-
-/** Every seat a delivery ticket can hold: its work roles, then its judges, in configured order. */
 export function ticketSeatRoles(workflow: DeepReadonly<Workflow>): Role[] {
 	const roles: Role[] = [];
 	for (const state of Object.values(workflow.ticket.states)) {
@@ -507,7 +490,6 @@ export function ticketSeatRoles(workflow: DeepReadonly<Workflow>): Role[] {
 export function parentSeatRoles(workflow: DeepReadonly<Workflow>): Role[] {
 	return Object.values(workflow.parent.states).flatMap((state) => (state.kind === "judge" ? state.judges.map((judge) => judge.role) : []));
 }
-/** Every agent the workflow names, checked before the workflow is frozen into an agenda. */
 export function workflowAgents(workflow: Workflow): string[] {
 	const states = [...Object.values(workflow.ticket.states), ...Object.values(workflow.parent.states)];
 	return [
@@ -521,7 +503,6 @@ export function workflowAgents(workflow: Workflow): string[] {
 export function openVerdicts(roster: readonly Judge[]): Verdict[] {
 	return roster.map((judge) => ({ role: judge.role, status: "pending", note: "" }));
 }
-/** The frozen roster, not the recorded verdicts, decides which judges a state requires; an empty roster passes. */
 export function stagePassed(roster: readonly Judge[], verdicts: readonly Verdict[]): boolean {
 	return roster.every((judge) => verdicts.some((verdict) => verdict.role === judge.role && verdict.status === "passed"));
 }
@@ -530,18 +511,13 @@ export function pendingRoles(roster: readonly Judge[], verdicts: readonly Verdic
 		.filter((judge) => verdicts.some((verdict) => verdict.role === judge.role && verdict.status === "pending"))
 		.map((judge) => judge.role);
 }
-/** Recorded verdicts must name exactly the state's configured judges, in order. */
 export function verdictsMatch(roster: readonly Judge[], verdicts: readonly Verdict[]): boolean {
 	return roster.length === verdicts.length && roster.every((judge, index) => verdicts[index]!.role === judge.role);
 }
-/** The first branch whose condition holds decides the target; otherwise the route's fallback. */
 export function routeTarget(route: DeepReadonly<Route>, holds: (condition: DeepReadonly<Condition>) => boolean): string {
 	return route.branches.find((branch) => holds(branch.when))?.to ?? route.otherwise;
 }
 
-/* ------------------------------------------------------------ encoding */
-
-/** The file-shaped form of a parsed workflow; `parseWorkflow(encodeWorkflow(w))` reproduces `w` exactly. Agendas persist this form. */
 export function encodeWorkflow(workflow: Workflow): unknown {
 	const condition = (item: Condition): unknown => {
 		switch (item.kind) {

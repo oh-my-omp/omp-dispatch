@@ -84,7 +84,6 @@ const owner = (revision: number): Caller => ({
 	role: "owner",
 });
 
-/** An attached agenda whose Owner is seated in Coding. */
 function seated(facts: Facts): Agenda {
 	const created = createAgenda(
 		{
@@ -142,12 +141,10 @@ test("under Meerkat an Owner question waits in Asking with an ask comment; Meerk
 			},
 		},
 	]);
-	// Asking seats nobody and asks nothing of Main; it survives a save and reload.
 	expect(new Attention().observe(asked, () => false)).toEqual([]);
 	expect(parseAgenda(JSON.parse(JSON.stringify(encodeAgenda(asked)))).ok).toBe(true);
 	const tiered = applied(applyOperation(agenda, { ...question, tier: "complex" }, owner(revision), facts, 2, MEERKAT.ask));
 	expect(tiered.tickets[0]!.ask?.tier).toBe("complex");
-	// Result 5: without Meerkat a question, and with Meerkat a blocker, split or noCode, still escalate to Main.
 	expect(applied(applyOperation(agenda, question, owner(revision), facts, 2, null)).tickets[0]).toMatchObject({
 		state: "Escalated",
 		ask: null,
@@ -174,7 +171,6 @@ test("a confirmed ask comment records its id and asks the guardians exactly once
 			MEERKAT.ask,
 		),
 	);
-	// The comment is not on GitHub yet: nothing chains.
 	reconcile(asked, facts, 3);
 	expect(asked.effects.map((effect) => effect.action.kind)).toEqual(["comment"]);
 	facts.issues[0]!.meerkat!.markers.push({ id: 900, kind: "ask", json: { v: 1, tier: "complex", session: "session-1" } });
@@ -286,7 +282,6 @@ test("the guardians receive the ask comment once; a request cut by a restart is 
 	const root = await mkdtemp(join(tmpdir(), "dispatch-meerkat-ask-"));
 	const facts = source(),
 		processes = new ProcessTable();
-	// The first request reaches the guardians, but its process dies before the answer arrives.
 	const lost = Promise.withResolvers<Result<200 | 202, PortError>>(),
 		reached = Promise.withResolvers<void>();
 	const first = harness(root, facts, processes, 101, () => {
@@ -315,7 +310,6 @@ test("the guardians receive the ask comment once; a request cut by a restart is 
 		tier: "complex",
 	});
 	expect(escalated.ok && "ticket" in escalated.value && escalated.value.ticket.state).toBe("Asking");
-	// The request is sent only after its executing intent is durable, so its arrival marks the moment to kill the process.
 	const pending = first.controller.run();
 	await reached.promise;
 	expect(first.controller.snapshot()!.effects.find((effect) => effect.action.kind === "requestAnswer")?.state.kind).toBe("executing");
@@ -360,7 +354,6 @@ test("unreachable guardians fail the request with their connection error, wake M
 	const root = await mkdtemp(join(tmpdir(), "dispatch-meerkat-ask-down-"));
 	const facts = source(),
 		processes = new ProcessTable();
-	// A port nothing listens on: the bound server is stopped before the request.
 	const closed = Bun.serve({ port: 0, fetch: () => new Response("") });
 	const port = closed.port;
 	await closed.stop(true);
@@ -403,7 +396,6 @@ test("Main retries a failed guardians request by resolving to Asking; the reques
 	const root = await mkdtemp(join(tmpdir(), "dispatch-meerkat-ask-retry-"));
 	const facts = source(),
 		processes = new ProcessTable();
-	// The first request finds the guardians unreachable; the retried one is accepted.
 	const answers: Result<200 | 202, PortError>[] = [
 		{ ok: false, error: { kind: "unavailable", message: "POST http://127.0.0.1:1/v1/asks: ECONNREFUSED" } },
 		success(202),
@@ -423,7 +415,6 @@ test("Main retries a failed guardians request by resolving to Asking; the reques
 		expect((await h.controller.execute(MAIN, { op: "launch", ticketId: "one" })).ok).toBe(true);
 		for (let round = 0; round < 3; round++) await h.controller.run();
 		const revision = h.controller.snapshot()!.tickets[0]!.revision;
-		// Only a ticket already waiting on a question can stay in Asking.
 		const early = await h.controller.execute(MAIN, {
 			op: "resolve",
 			ticketId: "one",

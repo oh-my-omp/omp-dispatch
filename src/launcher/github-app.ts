@@ -9,14 +9,8 @@ import { tr } from "../../omomp-shared/i18n.ts";
 import type { Result } from "../domain/model.ts";
 import { type Runner, run } from "./exec.ts";
 
-/** The path GitHub delivers to; a tunnel in front of the webhook listener may restrict ingress to it. */
 export const WEBHOOK_PATH = "/github/webhook";
 
-/**
- * The App's credentials, written once by the manifest conversion. The
- * launcher owns them: nothing else creates or rotates them, and registering
- * again replaces the file with a new App's credentials.
- */
 export const credentialsPath = join(homedir(), ".config", "omp-dispatch", "github-app.json");
 
 const appCredentials = z
@@ -55,7 +49,6 @@ export async function readAppCredentials(): Promise<Result<AppRegistration, stri
 		: { ok: false, error: `${credentialsPath}: ${read.error.message}` };
 }
 
-/** `POST /app-manifests/{code}/conversions`: only the fields the launcher keeps. */
 const conversion = z.object({
 	id: z.number(),
 	slug: z.string(),
@@ -77,16 +70,8 @@ function escapeHtml(value: string): string {
 	);
 }
 
-/** The environment variable that carries the URL into the Windows opener's fixed script. */
 const OPEN_URL_ENV = "OMP_DISPATCH_OPEN_URL";
 
-/**
- * The command that hands `url` to the default browser: `open` on macOS; on Windows, Windows PowerShell's `Start-Process`, which
- * passes the URL to the shell's protocol handler and exits non-zero when that hand-off fails. PowerShell is named by its System32
- * path, so a program of that name earlier on PATH cannot run instead; the URL reaches the fixed script through the environment, so
- * no shell parses it. omp's own `openPath` does the same hand-off but reports nothing back, and a failed open has to end the
- * registration at once rather than at its timeout.
- */
 function browserOpen(url: string): { command: string; args: string[]; env: Record<string, string> } {
 	if (process.platform !== "win32") return { command: "open", args: [url], env: {} };
 	const powershell = join(process.env.SystemRoot ?? "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
@@ -101,13 +86,6 @@ function page(title: string, body: string): string {
 	return `<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(title)}</title></head><body><h1>${escapeHtml(title)}</h1>${body}</body></html>`;
 }
 
-/**
- * GitHub's manifest flow: the browser posts the manifest to GitHub, the
- * operator confirms the App there, and GitHub redirects back with a one-time
- * code that converts into the App's credentials. The callback listener lives
- * only for this registration, on an ephemeral loopback port, and accepts only
- * the `state` it issued.
- */
 export async function registerApp(options: RegisterOptions): Promise<Result<AppCredentials, string>> {
 	if (!URL.canParse(options.webhookUrl) || new URL(options.webhookUrl).protocol !== "https:")
 		return {
@@ -235,7 +213,6 @@ export async function registerApp(options: RegisterOptions): Promise<Result<AppC
 	return result;
 }
 
-/** A default App name; GitHub App names are global, so the suffix keeps one operator's re-registrations apart. */
 export function defaultAppName(): string {
 	return `omp-dispatch-${randomBytes(3).toString("hex")}`;
 }

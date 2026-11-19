@@ -2,12 +2,6 @@ import { awaitsLaunch, delivered, ESCALATES_ON_FAILURE, parentDefinition } from 
 import type { ReadonlyAgenda, Role } from "../domain/model.ts";
 import { ESCALATED, parentSeatRoles, ticketSeatRoles } from "../domain/workflow.ts";
 
-/**
- * The decisions only Main can make, one key each: a ticket it may launch, an Escalated ticket or
- * closure awaiting its ruling (keyed by revision, so a re-escalation is new), a failed effect that escalates no
- * ticket and blocks `finish` until Main resolves it, and a finished agenda awaiting `finish`. Seats running and
- * effects in flight are not decisions.
- */
 export function attentionKeys(agenda: ReadonlyAgenda, active: (ticketId: string, role: Role) => boolean): string[] {
 	if (agenda.lifecycle !== "active") return [];
 	const keys: string[] = [];
@@ -30,10 +24,8 @@ export function attentionKeys(agenda: ReadonlyAgenda, active: (ticketId: string,
 	return keys;
 }
 
-/** Wakes Main only for a decision it has not been told about; resolved decisions leave silently. */
 export class Attention {
 	private notified = new Set<string>();
-	/** The decisions that are new since the previous observation, or an empty list when Main need not wake. */
 	observe(agenda: ReadonlyAgenda, active: (ticketId: string, role: Role) => boolean): string[] {
 		const keys = attentionKeys(agenda, active);
 		const fresh = keys.filter((key) => !this.notified.has(key));

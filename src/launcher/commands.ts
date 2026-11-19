@@ -58,7 +58,6 @@ async function githubAppStatus(): Promise<string> {
 	return describeGitHubApp(await readAppCredentials(), webhook);
 }
 
-/** `--key value` pairs after the subcommand; a repeated or valueless flag is a usage error. */
 function flags(args: readonly string[]): Result<ReadonlyMap<string, string>, string> {
 	const found = new Map<string, string>();
 	for (let index = 0; index < args.length; index += 2) {
@@ -71,10 +70,6 @@ function flags(args: readonly string[]): Result<ReadonlyMap<string, string>, str
 	return { ok: true, value: found };
 }
 
-/**
- * The launcher is a separate local process, so installing it is never part of
- * starting a coordinator: this command is the whole user interface to it.
- */
 export async function launcherCommand(args: readonly string[]): Promise<Result<string, string>> {
 	const command = args[0] ?? "status";
 	if (command === "install") {

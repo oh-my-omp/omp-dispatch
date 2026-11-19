@@ -110,7 +110,6 @@ test("only markers naming the waited ask settle it; reply or replaced wins over 
 		settlement: null,
 		ignored: [{ commentId: 14, ask: null }],
 	});
-	// Comments up to the ask settled earlier asks of the issue: they neither settle this one nor count as ignored.
 	expect(settlement(10, [reply(8, 7, "Old answer."), replaced(9, 10, "o/r#9"), reply(11, 7, "Late answer.")])).toEqual({
 		settlement: null,
 		ignored: [{ commentId: 11, ask: 7 }],
@@ -118,7 +117,6 @@ test("only markers naming the waited ask settle it; reply or replaced wins over 
 });
 
 type Harness = { controller: DispatchController; launches: SeatLaunch[]; errors: unknown[]; host: HostPort };
-/** A Meerkat-on controller over a fake GitHub whose comments become markers, and guardians that accept every request. */
 function harness(root: string, facts: Facts, pid: number): Harness {
 	let next = 5000;
 	const meerkat = (): NonNullable<Facts["issues"][number]["meerkat"]> => facts.issues[0]!.meerkat!;
@@ -189,7 +187,6 @@ function harness(root: string, facts: Facts, pid: number): Harness {
 const drain = async (controller: DispatchController): Promise<void> => {
 	for (let round = 0; round < 6; round++) await controller.run();
 };
-/** The ticket's Owner asked; its ask comment is on the issue and the guardians accepted the request. Returns the ask comment id. */
 async function asked(h: Harness, facts: Facts): Promise<number> {
 	expect(
 		(
@@ -253,7 +250,6 @@ test("a reply returns the ticket to Coding within one recompute and forks the as
 		await drain(h.controller);
 		expect(impls(facts)).toEqual(["session-1", "session-2"]);
 		expect(new Attention().observe(h.controller.snapshot()!, h.host.active)).toEqual([]);
-		// The answer is consumed: a later work seat of the ticket starts without it.
 		expect(h.controller.snapshot()!.tickets[0]!.resumeMessage).toBeNull();
 		expect(h.errors).toEqual([]);
 	} finally {
@@ -325,7 +321,6 @@ test("an earlier answer on the issue is skipped silently; a later settlement of 
 		h = harness(root, facts, 101);
 	try {
 		const ask = await asked(h, facts);
-		// The reply to an older ask of this issue, posted before the current ask.
 		facts.issues[0]!.meerkat!.markers.unshift(reply(4000, 3999, "An answer to the earlier question."));
 		await drain(h.controller);
 		expect(h.controller.snapshot()!.tickets[0]!.notes.filter((note) => note.text.startsWith("ignored settlement"))).toEqual([]);
@@ -356,7 +351,6 @@ test("a question recorded before Dispatch kept its work state loads unchanged an
 	try {
 		const ask = await asked(h, facts);
 		await h.controller.shutdown();
-		// Rewrite the agenda file as an earlier Dispatch wrote it: no work state on the question, no answer on the ticket.
 		const files = createAgendaFiles(root),
 			saved = await files.list();
 		if (!saved.ok) throw new Error(saved.error.message);

@@ -38,9 +38,6 @@ const defaultWorkflow = unwrap(
 	"default workflow",
 );
 
-// These typed in-memory source snapshots exercise domain transitions only.
-// GitHub subprocess pagination and real TUI delivery have separate integration coverage.
-
 const REPO: Repo = { owner: "RiriAgent", name: "dispatch-lifecycle" };
 const ISSUE: IssueRef = { repo: REPO, number: 189 };
 const PR: IssueRef = { repo: REPO, number: 99 };
@@ -144,12 +141,10 @@ const MAINTAINABLE: MaintenanceObservation = {
 	},
 };
 
-/** Facts before the Owner opens a PR: only issue, target base, and branch exist. */
 function openSource(): Facts {
 	return buildFacts({ issues: [issueSnapshot("open", null)], repos: [repoSnapshot(BASE)], branches: [branch(HEAD)] });
 }
 
-/** Facts for a submitted or published ticket, with an observed PR at the given head. */
 function scenario(options: {
 	prHead: string;
 	baseHead: string;
@@ -197,7 +192,6 @@ function conveneTicket(workflow: Workflow = defaultWorkflow): Agenda {
 	);
 }
 
-/** Drive convene → Owner submit → source-confirmed publication (Reviewing with both gates pending). */
 function publishTicket(workflow: Workflow = defaultWorkflow): { agenda: Agenda; facts: Facts } {
 	const publishing = unwrap(
 		applyOperation(
@@ -218,7 +212,6 @@ function publishTicket(workflow: Workflow = defaultWorkflow): { agenda: Agenda; 
 	return { agenda: publishing, facts };
 }
 
-/** Drive publication → both gate approvals, which reconcile the ticket into Merging. */
 function driveToMerging(): { agenda: Agenda; facts: Facts } {
 	const { agenda, facts } = publishTicket();
 	const reviewed = unwrap(verdict(agenda, facts, "review"), "review verdict");
@@ -1657,8 +1650,6 @@ describe("review regressions", () => {
 	});
 });
 
-// Each reconcile above and below also runs the controller's copy-on-write pass on a shared copy (reconcile-check.ts);
-// these cases reach the write sites the delivery scenarios above leave unvisited.
 describe("reconcile writes reached only by source changes", () => {
 	test("unknown required checks on an observed PR escalate the ticket", () => {
 		const { agenda, facts } = publishTicket(),
@@ -1750,7 +1741,6 @@ describe("reconcile writes reached only by source changes", () => {
 		};
 		closure.state = "Waiting";
 		reconcile(agenda, source, AT + 1);
-		// Closing requires a passed Reviewing gate the closure does not hold yet, so the move lands with Main.
 		expect(agenda.closure).toMatchObject({ state: "Escalated" });
 		expect(agenda.closure!.revision).toBeGreaterThan(revision);
 	});

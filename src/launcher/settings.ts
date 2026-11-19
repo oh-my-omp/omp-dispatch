@@ -23,16 +23,11 @@ function invalid(raw: Readonly<Record<string, unknown>>, key: string, expected: 
 	return { ok: false, error: `omp-dispatch.${key} must be ${expected}, not ${JSON.stringify(raw[key])}` };
 }
 
-/**
- * A TCP port setting. `omp plugin config set` stores every value as a string, so a plain decimal string is read as its
- * number; anything else (a sign, a fraction, a suffix, an empty value) is not a port.
- */
 function portValue(value: unknown): number | null {
 	const number = typeof value === "number" ? value : typeof value === "string" && /^\d+$/.test(value.trim()) ? Number(value.trim()) : null;
 	return number !== null && Number.isInteger(number) && number >= 1 && number <= 65535 ? number : null;
 }
 
-/** The omp-dispatch plugin settings the launcher reads, with the defaults package.json declares. */
 export function parseLauncherSettings(raw: Readonly<Record<string, unknown>>): Result<LauncherSettings, string> {
 	const mode = raw.githubTrigger ?? "link";
 	if (mode !== "link" && mode !== "label") return invalid(raw, "githubTrigger", '"link" or "label"');
@@ -53,10 +48,7 @@ export function parseLauncherSettings(raw: Readonly<Record<string, unknown>>): R
 	return { ok: true, value: { trigger: { mode, labels: list(labels), associations }, webhook: { host: host.trim(), port } } };
 }
 
-/**
- * The Meerkat configuration check listener's address. It is parsed apart from the launcher settings so an invalid
- * value disables only this listener; it must differ from the link port and from the webhook port.
- */
+/** It must differ from the link port and from the webhook port. */
 export function parseConfigCheckSettings(raw: Readonly<Record<string, unknown>>): Result<ConfigCheckAddress, string> {
 	const host = raw.configCheckHost ?? "127.0.0.1";
 	if (typeof host !== "string" || host.trim().length === 0) return invalid(raw, "configCheckHost", "a nonempty host");
@@ -67,11 +59,6 @@ export function parseConfigCheckSettings(raw: Readonly<Record<string, unknown>>)
 	return { ok: true, value: { host: host.trim(), port } };
 }
 
-/**
- * The launcher is a separate process from omp, so it reads the same store
- * `/settings` and `omp plugin config` write; the home directory as cwd keeps a
- * project's plugin-overrides.json out of a machine-wide listener.
- */
 export async function readLauncherSettings(): Promise<Result<LauncherSettings, string>> {
 	return parseLauncherSettings(await getPluginSettings("omp-dispatch", homedir()));
 }

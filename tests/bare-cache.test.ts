@@ -15,7 +15,6 @@ const outcome = z.union([
 	z.object({ ok: z.literal(false), error: z.string() }),
 ]);
 
-/** A data directory, local origin repositories, and a `gh` shim on PATH that clones them; nothing touches the network. */
 type Fixture = { root: string; origins: string; reposDir: string; worktreesDir: string; env: Record<string, string> };
 async function fixture(): Promise<Fixture> {
 	const root = await mkdtemp("/tmp/dispatch-bare-cache-"),
@@ -44,7 +43,6 @@ function originGit(f: Fixture, args: string[]): string {
 	if (run.exitCode !== 0) throw new Error(`git ${args.join(" ")}: ${run.stderr.toString()}`);
 	return run.stdout.toString().trim();
 }
-/** Creates the origin of `name` with one commit on main, or advances its main by one commit; returns the new head. */
 function advance(f: Fixture, name = repo.name): string {
 	const origin = join(f.origins, repo.owner, `${name}.git`);
 	originGit(f, ["init", "--bare", "--quiet", "-b", "main", origin]);
@@ -57,7 +55,6 @@ function advance(f: Fixture, name = repo.name): string {
 	return next;
 }
 const bareOf = (f: Fixture, name = repo.name) => join(f.reposDir, `${repo.owner}__${name}.git`);
-/** The cache is intact: `fsck` reports nothing, and every listed worktree still has its directory. */
 async function intact(bare: string): Promise<void> {
 	expect(await git(["-C", bare, "fsck", "--no-progress"])).toBe("");
 	const list = (await git(["-C", bare, "worktree", "list", "--porcelain"])).split("\n");
@@ -67,10 +64,6 @@ async function intact(bare: string): Promise<void> {
 	await access(`${bare}.lock`);
 }
 
-/**
- * Each child is a separate coordinator process: it loads the module, reports ready, and checks out once its stdin
- * closes, so every child enters the cache at the same moment.
- */
 async function processes(f: Fixture, checkouts: { path: string; spec: Spec }[]): Promise<z.infer<typeof outcome>[]> {
 	const driver = join(f.root, "checkout.ts");
 	await writeFile(
@@ -111,10 +104,6 @@ catch(error){console.log(JSON.stringify({ok:false,error:error instanceof Error?e
 		}),
 	);
 }
-/**
- * Settles to whether `promise` is still pending after `ms`. A lock that is correctly withheld emits no signal to await,
- * so this one negative observation waits on the real clock.
- */
 async function pendingAfter(promise: Promise<unknown>, ms: number): Promise<boolean> {
 	let settled = false;
 	promise.then(
@@ -227,7 +216,6 @@ describe("bare repository cache shared by coordinator processes", () => {
 			const head = advance(f);
 			await inProcess(f, () => checkout(f.reposDir, join(f.worktreesDir, "seed", "owner"), f.root, base()));
 			const driver = join(f.root, "hold.ts");
-			// The holder keeps the lock until it is killed; its interval only keeps the process alive.
 			await writeFile(
 				driver,
 				`import {lockBare} from ${JSON.stringify(MODULE)};

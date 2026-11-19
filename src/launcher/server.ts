@@ -22,7 +22,6 @@ function header(request: IncomingMessage, name: string): string | undefined {
 	return Array.isArray(value) ? value[0] : value;
 }
 
-/** One page per request states the single observable end of that request. */
 function renderPage(outcome: LauncherOutcome, url: string): { status: number; title: string; body: string } {
 	switch (outcome.kind) {
 		case "launched":

@@ -3,16 +3,9 @@ import { refKey, sameRef } from "../domain/identity.ts";
 import type { IssueRef } from "../domain/model.ts";
 import { type LaunchTarget, launcherLinks, resolveTarget } from "./link.ts";
 
-/**
- * `link`: a valid launcher link for the issue is enough. `label`: the link and
- * a matching label are both required. `labels` empty means any label;
- * `associations` lists the issue author associations GitHub reports
- * (OWNER, MEMBER, COLLABORATOR, CONTRIBUTOR, ...) that may start a coordinator.
- */
 export type TriggerSettings = { mode: "link" | "label"; labels: readonly string[]; associations: readonly string[] };
 export type TriggerDecision = { kind: "launch"; target: LaunchTarget } | { kind: "ignored"; reason: string };
 
-/** The fields of an `issues` delivery the decision reads; GitHub sends many more. */
 const issuesEvent = z.object({
 	action: z.string(),
 	issue: z.object({
@@ -38,7 +31,6 @@ function labelMatches(snapshot: Snapshot, settings: TriggerSettings): boolean {
 	return snapshot.labels.some((label) => wanted.has(label.toLowerCase()));
 }
 
-/** The first launcher link in the body that names this very issue and resolves. */
 async function linkedTarget(body: string, issue: IssueRef): Promise<Holds> {
 	const reasons: string[] = [];
 	for (const link of launcherLinks(body)) {
@@ -62,12 +54,6 @@ async function holds(snapshot: Snapshot, issue: IssueRef, settings: TriggerSetti
 	return linkedTarget(snapshot.body, issue);
 }
 
-/**
- * A coordinator starts on the event that makes the trigger condition true, not
- * on every event while it holds: a title edit or an unrelated label on an
- * issue that already qualified starts nothing. The snapshot before the event
- * comes from the delivery itself (`changes.body.from`, the label just added).
- */
 export async function decideIssuesEvent(payload: unknown, settings: TriggerSettings): Promise<TriggerDecision> {
 	const read = issuesEvent.safeParse(payload);
 	if (!read.success) return ignored(`not an issues delivery: ${read.error.message}`);

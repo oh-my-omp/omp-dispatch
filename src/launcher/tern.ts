@@ -4,10 +4,8 @@ import { diagnosticText } from "./diagnostics.ts";
 import { type Runner, run } from "./exec.ts";
 import type { CoordinatorTarget, LaunchOutcome } from "./frontends.ts";
 
-/** `{"kind":"tern"}`: Tern takes no options yet; unknown fields are refused rather than ignored. */
 export const ternSpec = z.object({ kind: z.literal("tern") }).strict();
 
-/** `tern ls --json`, read only where a block can carry a coordinator command; every other field is ignored. */
 const listingSchema = z.object({
 	sessions: z.array(
 		z.object({
@@ -27,14 +25,12 @@ const listingSchema = z.object({
 	),
 });
 
-/** `tern inspect --json`, read only for the connected clients; everything else is ignored. */
 const inspectionSchema = z.object({ clients: z.array(z.object({ kind: z.string().optional() })) });
 
 function describe(result: { code: number; stdout: string; stderr: string }): string {
 	return result.stderr.trim() || result.stdout.trim() || diagnosticText({ kind: "exitCode", code: result.code });
 }
 
-/** Tern launches every block as `<shell> -c "<command>"`, so one launcher argument arrives as a fragment of one array entry; compare whitespace-separated, unquoted tokens rather than raw entries. */
 function coordinatorTokens(args: readonly string[]): string[] {
 	return args
 		.flatMap((value) => value.split(/\s+/))
@@ -42,13 +38,6 @@ function coordinatorTokens(args: readonly string[]): string[] {
 		.filter((token) => token.length > 0);
 }
 
-/**
- * Tern owns existence: a live block already running the exact reference is the
- * coordinator for that issue. Nothing here keeps its own dedup record, so a
- * coordinator that exited simply stops matching and the next click starts one.
- * Tern keeps a finished command's pane listed as `live` with its exit code, so
- * only a pane that has not exited holds a coordinator.
- */
 export function liveCoordinatorBlock(listing: string, reference: string): string | null {
 	let parsed: unknown;
 	try {
@@ -71,12 +60,6 @@ export function liveCoordinatorBlock(listing: string, reference: string): string
 	return null;
 }
 
-/**
- * Tern's daemon outlives its window: with the app closed it still lists
- * sessions and accepts a new tab, so a block started then is running but
- * invisible. A connected `window` client is the evidence that a launch is
- * visible to the operator; an unreadable report is not evidence of one.
- */
 export function connectedWindow(inspection: string): boolean {
 	let parsed: unknown;
 	try {
@@ -89,11 +72,6 @@ export function connectedWindow(inspection: string): boolean {
 	return read.data.clients.some((client) => client.kind === "window");
 }
 
-/**
- * Start or reveal the coordinator for one issue in Tern. `omp` is taken from
- * PATH, as the operator's own shell would resolve it, and the extension arrives
- * through the installed plugin rather than an `-e` flag that would load it twice.
- */
 export async function launchTern(target: CoordinatorTarget, exec: Runner = run): Promise<LaunchOutcome> {
 	const inspection = await exec("tern", ["inspect", "--json"], {});
 	let listing = await exec("tern", ["ls", "--json"], {});

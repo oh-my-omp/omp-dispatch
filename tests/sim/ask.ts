@@ -1,8 +1,3 @@
-// Meerkat ask scenarios: an Owner's question goes to the intent guardians instead of Main. The guardians are a fake
-// HTTP endpoint inside this driver process that records every POST /v1/asks and answers 202 for a comment it has
-// not seen and 200 for a repeat, as the real guardians do. The settlement scenarios then write the guardians' or
-// the council's settlement comment on the issue at scripted points, as those programs do.
-
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "@oh-my-pi/omptype/zod";
@@ -13,7 +8,6 @@ import { type SimState, withState } from "./github-sim.ts";
 import type { Case, LogEntry, Run, SeatSession } from "./run.ts";
 import type { Expect } from "./scenario.ts";
 
-/** The run.ts helpers these scenarios drive and observe through. */
 export type SimApi = {
 	agenda: (run: Run) => Promise<Agenda | null>;
 	waitUntil: (run: Run, label: string, ready: (state: Agenda | null) => boolean | Promise<boolean>) => Promise<void>;
@@ -22,14 +16,12 @@ export type SimApi = {
 	modelLog: (run: Run) => LogEntry[];
 	seatSessions: (run: Run, agendaId: string) => SeatSession[];
 	simState: (run: Run) => SimState;
-	/** The checks every delivery scenario passes: completed agenda, Main's launches and wakes, judges, closed issues, main's files. */
 	commonChecks: (run: Run, expectOnMain: Expect) => Promise<string[]>;
 };
 
 const askSchema = z.object({ issue: z.string(), comment: z.number(), question: z.string(), tier: z.enum(["simple", "complex"]) }).strict();
 type Received = { request: z.infer<typeof askSchema>; status: 200 | 202 };
 
-/** The fake guardians. `holdFirst` keeps the first response back until `release()`, as if its caller died waiting. */
 const guardians = (() => {
 	let received: Received[] = [];
 	let held: { promise: Promise<void>; resolve: () => void } | null = null;
@@ -61,7 +53,6 @@ const guardians = (() => {
 	};
 })();
 
-/** A port no process listens on: a server bound to it is stopped before any scenario runs. */
 const unreachable = await (async () => {
 	const probe = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response("") });
 	const url = `http://127.0.0.1:${probe.port}`;
@@ -91,10 +82,6 @@ const blockSchema = z
 	})
 	.passthrough();
 
-/**
- * Why the Owner's transcript does not end right after its question: it must hold the accepted escalate, then at most
- * the aborted turn Dispatch's stop leaves, with no content and the guardians as its reason. Null when it does.
- */
 function abortProblem(session: SeatSession): string | null {
 	const messages = session.lines.flatMap((line) => {
 		const parsed = messageSchema.safeParse(line);
@@ -129,13 +116,11 @@ export function askCases(sim: SimApi): Case[] {
 		const state = await sim.agenda(run);
 		return state ? sim.seatSessions(run, state.id).filter((session) => session.role === "owner") : [];
 	};
-	/** The Owner's session has stopped: its transcript ends at its question with Dispatch's abort. */
 	const stopped = async (run: Run): Promise<boolean> => {
 		const [owner] = await owners(run);
 		return owner !== undefined && abortProblem(owner) === null;
 	};
 
-	/** What every ask scenario must leave: one Owner, aborted at its question; one ask comment; the ticket Asking. */
 	async function asked(run: Run, tier: "simple" | "complex"): Promise<string[]> {
 		const failures: string[] = [];
 		const state = await sim.agenda(run),
@@ -148,8 +133,6 @@ export function askCases(sim: SimApi): Case[] {
 		const sessions = await owners(run);
 		if (sessions.length !== 1) failures.push(`expected exactly one Owner session, found ${sessions.length}`);
 		const [owner] = sessions;
-		// The stop reaches the agent loop through its event stream, after the loop may already have opened the next model
-		// request; that request is cut before any content, so the transcript, not the provider log, is the evidence.
 		if (owner) {
 			const problem = abortProblem(owner);
 			if (problem) failures.push(problem);
@@ -208,9 +191,6 @@ export function askCases(sim: SimApi): Case[] {
 		}),
 	};
 
-	/* -------------------------------------------------------------- settlements */
-
-	/** The Owner asks, then, once the answer arrives, resumes as a fork of its asking session and delivers a.txt = 1. */
 	const settled = {
 		...base,
 		meerkat: { holdComment: null, guardiansURL: guardians.url },
@@ -231,7 +211,6 @@ export function askCases(sim: SimApi): Case[] {
 			],
 		}),
 	};
-	/** Writes a comment on the issue as the guardians or the council would, closing the issue when it replaces it. */
 	const comment = (run: Run, body: string, close = false): void =>
 		withState(run.github, (state) => {
 			const issue = state.issues.find((item) => item.number === 1)!,
@@ -243,7 +222,6 @@ export function askCases(sim: SimApi): Case[] {
 				issue.events.push({ kind: "closed", id: `CE_${state.nextEvent++}`, createdAt: at });
 			}
 		});
-	/** The ask comment id once the guardians accepted the question and the asking Owner stopped. */
 	async function waitAsked(run: Run): Promise<number> {
 		guardians.reset(false);
 		await sim.waitUntil(
@@ -257,7 +235,6 @@ export function askCases(sim: SimApi): Case[] {
 	}
 	const ANSWER = "Include the tenant id: caches are shared across tenants in one process.";
 	const reply = (ask: number, text: string) => `${text}\n\n<!-- meerkat:reply {"v":1,"ask":${ask},"decision":null} -->`;
-	/** One recompute runs every second in a simulation; this outlasts two. */
 	const twoCycles = () => Bun.sleep(2500);
 	const stillAsking = async (run: Run, label: string): Promise<void> => {
 		const ticket = (await sim.agenda(run))?.tickets[0];
@@ -277,11 +254,6 @@ export function askCases(sim: SimApi): Case[] {
 						)
 						.join("")
 				: "";
-	/**
-	 * Result 1 on a delivered run: the ticket went back to Coding and reached Done; the second Owner session forks the
-	 * asking one and its first own message opens with the resume prompt and the answer; the issue shows `kinds` in order
-	 * with the second `impl` naming the resumed session; and Main was never woken for the question.
-	 */
 	async function resumedChecks(run: Run, kinds: string): Promise<string[]> {
 		const failures = await sim.commonChecks(run, { "a.txt": "1\n" });
 		const state = await sim.agenda(run);
@@ -375,7 +347,6 @@ export function askCases(sim: SimApi): Case[] {
 			},
 		},
 		{
-			// The coordinator dies while the guardians hold their answer; after resume the request is sent again and answered 200.
 			...base,
 			name: "ask-restart",
 			meerkat: { holdComment: null, guardiansURL: guardians.url },
@@ -431,7 +402,6 @@ export function askCases(sim: SimApi): Case[] {
 			},
 		},
 		{
-			// Row 3: nothing listens at the guardians address; the request fails with the connection error and wakes Main.
 			...base,
 			name: "ask-unreachable",
 			meerkat: { holdComment: null, guardiansURL: unreachable },
@@ -459,7 +429,6 @@ export function askCases(sim: SimApi): Case[] {
 			},
 		},
 		{
-			// Row 1: the guardians reply to the ask; the Owner resumes from its asking session with the answer and delivers.
 			...settled,
 			name: "ask-reply",
 			async drive(run) {
@@ -470,7 +439,6 @@ export function askCases(sim: SimApi): Case[] {
 			check: (run) => resumedChecks(run, "impl,ask,reply,impl"),
 		},
 		{
-			// Row 2: the ask is settled by replacing the issue; the ticket ends Replaced with no new Owner and Main finishes.
 			...settled,
 			name: "ask-replace",
 			async drive(run) {
@@ -516,7 +484,6 @@ export function askCases(sim: SimApi): Case[] {
 			},
 		},
 		{
-			// Row 3: the ask goes to the council first; the ticket keeps waiting through two recomputes, then a reply resumes it.
 			...settled,
 			name: "ask-escalate",
 			async drive(run) {
@@ -531,7 +498,6 @@ export function askCases(sim: SimApi): Case[] {
 			check: (run) => resumedChecks(run, "impl,ask,escalated,reply,impl"),
 		},
 		{
-			// Row 4: a reply to another ask is ignored with one note; the reply to this ask then resumes the Owner.
 			...settled,
 			name: "ask-reply-ignored",
 			async drive(run) {

@@ -1,13 +1,8 @@
 import type { PortError, Result } from "../domain/model.ts";
 import type { AskRequest, GuardiansPort } from "./contracts.ts";
 
-/** Like the GitHub port's `gh` calls, a request that has not answered within a minute is abandoned. */
 const TIMEOUT_MS = 60_000;
 
-/**
- * The intent guardians at `baseURL` (delivery.yaml `guardiansURL`). A refused or broken connection and any answer
- * other than 202 or 200 fail with their text as received.
- */
 export function createGuardiansPort(baseURL: string): GuardiansPort {
 	const url = `${baseURL.replace(/\/+$/, "")}/v1/asks`;
 	return {

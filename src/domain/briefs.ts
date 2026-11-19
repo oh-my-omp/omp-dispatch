@@ -1,7 +1,6 @@
 import type { SeatSpec } from "./engine.ts";
 import type { MeerkatAsk, ReadonlyAgenda } from "./model.ts";
 
-/** The handoff contract of a seat's kind and subject; the workflow supplies only the seat's duty. */
 function protocol(seat: SeatSpec): string {
 	if (seat.kind === "work")
 		return "Push your code branch. Submit ticketId, revision, branch, head, title, and a complete PR body closing exactly this issue through dispatch submit. If blocked, ambiguous, split, or already satisfied, use escalate with kind question/blocked/split/noCode and evidence. The workflow publishes and merges; do not merge your branch into the target yourself.";
@@ -14,15 +13,10 @@ function protocol(seat: SeatSpec): string {
 	return `Your working directory is ${checkout}. Judge it against the complete current contract and the exact gate stamp. Submit dispatch verdict with ticketId, revision, role ${seat.role}, ok, and a concrete evidence note; the workflow decides where a pass or a failure leads. Do not modify code. Use escalate for a non-programmatic question or blocker.`;
 }
 
-/**
- * Under Meerkat integration a work seat's question goes to the intent guardians: the brief explains the tier from the
- * Meerkat configuration and that asking ends the session.
- */
 function askProtocol(ask: MeerkatAsk): string {
 	return `A question goes to the intent guardians, not to Main: escalate with kind question, reason holding the decision item exactly as they should read it, and tier simple or complex (${ask.defaultTier} when omitted). ${ask.tierHelp} Asking ends this session at once: Dispatch stops it right after the escalate succeeds, so ask only when you cannot continue without the answer, and make the question complete on its own.`;
 }
 
-/** Seat scope is one ticket. Ordinary user/tool messages carry it once at entry. `ask` is null while Meerkat integration is off. */
 export function seatBrief(state: ReadonlyAgenda, ticketId: string, seat: SeatSpec, ask: MeerkatAsk | null): string {
 	const ticket = state.tickets.find((ticket) => ticket.id === ticketId) ?? (state.closure?.id === ticketId ? state.closure : null);
 	if (!ticket) throw new Error("Cannot brief an unknown ticket");

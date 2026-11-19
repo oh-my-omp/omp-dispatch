@@ -1,13 +1,3 @@
-/**
- * The #218 §7 load: a real DispatchController on fixture ports and real agenda files, holding a large agenda
- * (20 tickets × 200 notes, 100 settled effects per ticket). It runs N unchanged `run()` ticks, N `status` and
- * N `read` calls, up to 20 ticks that each escalate one ticket, and N Main resolutions that each persist the agenda, and prints one JSON line of metrics per
- * phase. The tool texts and agenda files it writes to `<out>` are normalized (agenda id, run id, data root) so
- * runs on different commits diff byte for byte.
- *
- *   bun tests/bench/agenda-load.ts <out-dir> [N]
- */
-
 import { heapStats } from "bun:jsc";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -27,7 +17,6 @@ const TICKETS = 20,
 	NOTES = 200,
 	EFFECTS = 100;
 
-// Every timestamp the controller records comes from this clock, so two runs write the same bytes.
 let clock = 1_800_000_000_000;
 Date.now = () => ++clock;
 
@@ -76,7 +65,6 @@ const source: Facts = {
 		},
 	],
 };
-// The fixture's own copies are not agenda copies, so they bypass the clone counter below.
 const realClone = globalThis.structuredClone;
 const github: GitHubPort = {
 	facts: async () => success(realClone(source)),
@@ -157,7 +145,6 @@ function must<T>(result: Result<T, unknown>): T {
 }
 
 try {
-	// Convene the agenda through the controller, then grow its append-only records on disk and resume it.
 	const files = createAgendaFiles(root),
 		first = controller(101, files);
 	must(
@@ -195,7 +182,6 @@ try {
 	await writeFile(path, `${JSON.stringify(envelope)}\n`);
 	const dispatch = controller(102, files);
 	must(await dispatch.execute(main, { op: "resume", agenda: agendaId }));
-	// Let the resume's own kick settle before measuring.
 	await Bun.sleep(10);
 	await dispatch.run();
 
@@ -246,7 +232,6 @@ try {
 	const fileAfterTicks = await readFile(path, "utf8");
 	await writeFile(join(out, "agenda-after-ticks.json"), normalize(fileAfterTicks));
 	console.log(JSON.stringify({ phase: "tick-file", unchanged: fileAfterTicks === fileBefore }));
-	// The tool text is exactly what the dispatch tool returns: JSON.stringify of the controller's result.
 	let status = "",
 		read = "";
 	await phase("status", async () => {
@@ -258,7 +243,6 @@ try {
 	});
 	await writeFile(join(out, "status.json"), normalize(status));
 	await writeFile(join(out, "read.json"), normalize(read));
-	// Ticks that do change the agenda: each rewrites one ticket's issue body, which escalates that ticket.
 	await phase("changed-tick", async () => {
 		for (let index = 0; index < Math.min(N, TICKETS); index++) {
 			const issue = source.issues[index]!;

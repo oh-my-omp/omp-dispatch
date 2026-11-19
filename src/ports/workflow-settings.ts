@@ -4,7 +4,6 @@ import type { Result, Workflow } from "../domain/model.ts";
 import type { WorkflowError } from "./contracts.ts";
 import { loadWorkflow } from "./workflow.ts";
 
-/** A new agenda reads current plugin settings; an attached agenda keeps its frozen workflow. */
 export async function configuredWorkflow(cwd: string, dataDir: string): Promise<Result<Workflow, WorkflowError>> {
 	const settings = await getPluginSettings("omp-dispatch", cwd);
 	const file: unknown = process.env.OMP_DISPATCH_WORKFLOW ?? settings.workflowFile;
