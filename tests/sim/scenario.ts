@@ -9,9 +9,17 @@ import { z } from "@oh-my-pi/omptype/zod";
 const expectSchema = z.record(z.string(), z.string());
 export type Expect = z.infer<typeof expectSchema>;
 
+/** A step an Owner takes before it commits: call a tool, or wait for a marker file. */
+const preStepSchema = z.union([
+	z.object({ kind: z.literal("call"), name: z.string(), args: z.record(z.string(), z.unknown()) }),
+	z.object({ kind: z.literal("wait"), marker: z.string() }),
+]);
+
 const ownerRoundSchema = z.union([
 	z.object({
 		kind: z.literal("commit"),
+		/** Steps the Owner takes, one per model request, before its commit. */
+		before: z.array(preStepSchema).optional(),
 		write: z.record(z.string(), z.string()),
 		remove: z.array(z.string()).optional(),
 		/** What the Owner does after its accepted submit, while it is still a live seat. */

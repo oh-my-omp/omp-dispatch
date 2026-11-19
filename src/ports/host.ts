@@ -10,7 +10,7 @@ import { AgentRegistry, MAIN_AGENT_ID } from "@oh-my-pi/pi-coding-agent/registry
 import { isLocalAgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session-handle";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { discoverAgents, getAgent } from "@oh-my-pi/pi-coding-agent/task/discovery";
-import { createMCPProxyTools, followMCPTools, type MCPToolFollower } from "@oh-my-pi/pi-coding-agent/task/executor";
+import { followMCPTools, type MCPToolFollower } from "@oh-my-pi/pi-coding-agent/task/executor";
 import { cfgTaskAgentModelOverrides, cfgTaskDisabledAgents } from "@oh-my-pi/pi-coding-agent/task/settings";
 import { USER_TODO_EDIT_CUSTOM_TYPE } from "@oh-my-pi/pi-coding-agent/tools/todo";
 import { tr } from "../../omomp-shared/i18n.ts";
@@ -223,11 +223,12 @@ export function createHostPort(options: HostOptions): HostPort {
 					...(modelPattern !== undefined ? { activeModelPattern: modelPattern, fallbackModelPattern: modelPattern } : {}),
 				});
 				const cacheKey = manager.getHeader()?.providerPromptCacheKey ?? manager.getHeader()?.id;
-				// Main's MCP manager is shared like a native subagent's; its tools follow reloads through proxies.
+				// Main's MCP manager is shared like a native subagent's, but the seat views it through its own
+				// session scope, so tools a seat's MCP call makes a server add stay out of Main's table and of
+				// other seats. The follower subscribes before proxies are minted and replays changes on bind.
 				const mcpManager = MCPManager.instance();
-				const mcpToolScope = manager.getSessionId();
-				mcpFollower = mcpManager ? followMCPTools(mcpManager, { scope: mcpToolScope }, new Set(["dispatch"])) : undefined;
-				const mcpTools = mcpManager ? createMCPProxyTools(mcpManager, mcpToolScope).filter((proxy) => proxy.name !== "dispatch") : [];
+				mcpFollower = mcpManager ? followMCPTools(mcpManager, { scope: manager.getSessionId() }, new Set(["dispatch"])) : undefined;
+				const mcpTools = mcpFollower?.proxyTools() ?? [];
 				const created = await createAgentSession({
 					cwd: workspace,
 					sessionManager: manager,
@@ -249,6 +250,8 @@ export function createHostPort(options: HostOptions): HostPort {
 					customTools: [tool],
 					enableMCP: true,
 					...(mcpManager ? { mcpManager, ...(mcpTools.length ? { mcpTools } : {}) } : {}),
+					// The seat's own view is also what helper sessions it derives start from.
+					...(mcpFollower ? { mcpToolScope: mcpFollower.scope } : {}),
 					// An empty list would bind no extensions and prune Main's extension-provided model sources.
 					...(parent.preparedExtensions?.length ? { preloadedPreparedExtensions: parent.preparedExtensions } : {}),
 					...(parent.extensionPaths?.length ? { preloadedExtensionPaths: [...parent.extensionPaths] } : {}),
@@ -270,6 +273,13 @@ export function createHostPort(options: HostOptions): HostPort {
 				});
 				seat.session = created.session;
 				mcpFollower?.bind(created.session);
+				// omp applies a rebind as a queued tool-registry mutation that a request does not wait for, so a tool the
+				// seat's own MCP call just added could miss its next request. Each request first waits for the mutations
+				// already queued, then carries the seat's settled tool table.
+				if (mcpFollower)
+					created.session.addDisposer(
+						created.session.agent.addBeforeModelCallHook((signal) => created.session.runToolRegistryMutation(async () => {}, signal)),
+					);
 				const extensionSends: Promise<unknown>[] = [];
 				await initializeExtensions(created.session, {
 					reportSendError: (_action, error) => options.onSeatError(input.ticketId, error.message),
@@ -339,6 +349,8 @@ export function createHostPort(options: HostOptions): HostPort {
 						try {
 							if (signal.aborted) throw new Error("Seat was cancelled before dispatch");
 							await session.prompt(prompt);
+							// The run stays open while descendant work can still wake it (jobs, queued deliveries, live
+							// children); waiting for its end settles all of it, and abort closes it at once.
 							await session.waitForRunEnd();
 							if (signal.aborted) throw new Error("Seat was cancelled while descendant work settled");
 							if (!handedOff) {

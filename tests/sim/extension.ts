@@ -274,15 +274,25 @@ function ownerStep(messages: Message[], spec: TicketSpec, brief: string): { step
 					: { text: "Escalated." },
 			note,
 		};
-	const bash = played(messages, latest + 1, "bash");
-	if (step === 0)
+	const before = owner.before ?? [];
+	const pre = before[step];
+	if (pre?.kind === "call") return { step: { call: { name: pre.name, args: pre.args } }, note };
+	if (pre?.kind === "wait")
+		return {
+			step: { call: { name: "bash", args: { command: `while [ ! -f ${quote(pre.marker)} ]; do sleep 0.2; done`, timeout: 0 } } },
+			note,
+		};
+	// Steps after the pre-commit ones, counted from the commit.
+	const at = step - before.length;
+	if (at === 0)
 		return {
 			step: { call: { name: "bash", args: { command: commitScript(spec, owner.write, owner.remove ?? [], `round ${round}`) } } },
 			note,
 		};
-	if (step === 1) {
-		const head = [...(bash[0]?.result ?? "").matchAll(/\b([0-9a-f]{40})\b/g)].at(-1)?.[1];
-		if (!head) return { step: { text: `Commit failed: ${bash[0]?.result ?? "no output"}` }, note };
+	if (at === 1) {
+		const committed = played(messages, latest + 1, null)[before.length]?.result;
+		const head = [...(committed ?? "").matchAll(/\b([0-9a-f]{40})\b/g)].at(-1)?.[1];
+		if (!head) return { step: { text: `Commit failed: ${committed ?? "no output"}` }, note };
 		return {
 			step: {
 				call: {
@@ -303,12 +313,12 @@ function ownerStep(messages: Message[], spec: TicketSpec, brief: string): { step
 			note,
 		};
 	}
-	if (step === 2 && owner.after?.kind === "block")
+	if (at === 2 && owner.after?.kind === "block")
 		return {
 			step: { call: { name: "bash", args: { command: `while [ ! -f ${quote(owner.after.marker)} ]; do sleep 0.2; done`, timeout: 0 } } },
 			note,
 		};
-	if (step === 2 && owner.after?.kind === "push")
+	if (at === 2 && owner.after?.kind === "push")
 		return {
 			step: {
 				call: {
@@ -378,9 +388,17 @@ function respond(model: Model<Api>, context: Context, options?: SimpleStreamOpti
 		const schema = intentSchema.safeParse(context.tools?.find((tool) => tool.name === name)?.parameters);
 		return schema.success && schema.data.required?.includes("i") ? { i: "Simulated step", ...args } : args;
 	};
+	// `tools` is what omp sent: the names of every tool the requesting session presented to the model.
 	appendFileSync(
 		scenario.log,
-		`${JSON.stringify({ at: Date.now(), session: options?.sessionId ?? null, ...who, note: decided.note, step: "call" in decided.step ? decided.step.call : "fail" in decided.step ? { error: decided.step.fail } : decided.step })}\n`,
+		`${JSON.stringify({
+			at: Date.now(),
+			session: options?.sessionId ?? null,
+			...who,
+			note: decided.note,
+			tools: (context.tools ?? []).map((tool) => tool.name),
+			step: "call" in decided.step ? decided.step.call : "fail" in decided.step ? { error: decided.step.fail } : decided.step,
+		})}\n`,
 	);
 	const partial: AssistantMessage = {
 		role: "assistant",

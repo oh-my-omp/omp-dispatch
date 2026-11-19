@@ -1,9 +1,10 @@
 // State-flow simulation of omp-dispatch. Each scenario runs the real `omp`
 // binary in RPC mode with the real extension (index.ts), the real controller,
-// host, git worktrees, native sessions and forks. Only two things are
-// simulated: the model (tests/sim/extension.ts plays Main and every seat) and
-// GitHub (tests/sim/github-sim.ts behind a `gh` shim on PATH, backed by real
-// bare repositories). Run: `bun run sim [scenario...]`.
+// host, git worktrees, native sessions and forks. What is simulated: the model
+// (tests/sim/extension.ts plays Main and every seat), GitHub
+// (tests/sim/github-sim.ts behind a `gh` shim on PATH, backed by real bare
+// repositories), and, in mcp-scope, an MCP server (tests/sim/mcp-fixture.ts).
+// Run: `bun run sim [scenario...]`.
 
 import { closeSync, cpSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
@@ -90,6 +91,8 @@ export type Run = {
 	meerkat: string | null;
 	proc: Subprocess<"pipe", number, number> | null;
 	starts: number;
+	/** The work directory's `.omp/mcp.json` serves the `fx` fixture, and omp presents MCP tools top-level. */
+	mcp: boolean;
 };
 export type Case = {
 	name: string;
@@ -104,6 +107,8 @@ export type Case = {
 	 * for the run.
 	 */
 	meerkat?: { holdComment: Pick<NonNullable<SimState["commentHold"]>, "skip" | "at"> | null; guardiansURL?: string };
+	/** The project `.omp/mcp.json` serves tests/sim/mcp-fixture.ts as `fx`; its first `load` call creates `markers/fx-loaded`. */
+	mcp?: boolean;
 	files: Record<string, string>;
 	/** Issue titles in creation order; issue N is the Nth entry. The first may list children. */
 	issues: { title: string; children?: number[] }[];
@@ -185,6 +190,23 @@ function setup(spec: Case): Run {
 			1,
 		),
 	);
+	if (spec.mcp)
+		writeFileSync(
+			join(work, ".omp", "mcp.json"),
+			JSON.stringify(
+				{
+					mcpServers: {
+						fx: {
+							command: "bun",
+							args: [join(ROOT, "tests/sim/mcp-fixture.ts")],
+							env: { FX_LOADED: join(markers, "fx-loaded") },
+						},
+					},
+				},
+				null,
+				1,
+			),
+		);
 	return {
 		name: spec.name,
 		dir,
@@ -200,6 +222,7 @@ function setup(spec: Case): Run {
 		meerkat,
 		proc: null,
 		starts: 0,
+		mcp: spec.mcp ?? false,
 	};
 }
 
@@ -209,7 +232,9 @@ function start(run: Run): void {
 		stderr = openSync(join(run.dir, `omp-${run.starts}.stderr.log`), "a");
 	// The injected provider failure must surface at once: omp's automatic retry would otherwise wait out its budget.
 	const config = join(run.dir, "omp-config.yml");
-	writeFileSync(config, "retry:\n  enabled: false\n");
+	// With xd:// mounting on, MCP tools reach the model as devices, not by name; MCP runs present them top-level
+	// so each request's tool list shows the session's MCP view.
+	writeFileSync(config, `retry:\n  enabled: false\n${run.mcp ? "tools:\n  xdev: false\n" : ""}`);
 	// The operator's environment would take precedence over the run's plugin settings, so none of it reaches omp.
 	const {
 		OMP_DISPATCH_DIR: _dir,
@@ -306,6 +331,8 @@ const logSchema = z.object({
 	role: z.string().optional(),
 	ticket: z.string().optional(),
 	note: z.string(),
+	/** Names of the tools the request presented to the model. */
+	tools: z.array(z.string()),
 	step: z.object({ name: z.string().optional(), args: z.record(z.string(), z.unknown()).optional(), text: z.string().optional() }),
 });
 export type LogEntry = z.infer<typeof logSchema>;
@@ -1358,6 +1385,95 @@ const cases: Case[] = [
 			console.log(
 				`  ${run.name}: resume ${foreign} -> ${JSON.stringify(resume?.reply?.error)}; convene ok ${convene?.reply?.ok}; own agenda ${(await agenda(run))?.id}`,
 			);
+			return failures;
+		},
+	},
+	{
+		// Two seats share Main's MCP server. A's Owner calls fx `load`, which makes the server add `added` during the
+		// call, then calls `added`; B's Owner waits for that load before it commits. The added tool belongs to A's view
+		// alone: A's next request presents it and the call runs, while Main's and every other seat's later requests do
+		// not. The scripted model answers within milliseconds, so A's next request also shows that it waited for the
+		// rebind of the seat's tools instead of racing it.
+		name: "mcp-scope",
+		mcp: true,
+		files: { "a.txt": "0\n", "b.txt": "0\n" },
+		issues: [{ title: "A" }, { title: "B" }],
+		requiredChecks: [],
+		ci: { default: "SUCCESS", failMarker: null },
+		rootIssue: 1,
+		scenario: (markers) => ({
+			parent: null,
+			closure: {},
+			tickets: [
+				ticket(
+					"A",
+					1,
+					[
+						{
+							kind: "commit",
+							before: [
+								{ kind: "call", name: "mcp__fx_load", args: {} },
+								{ kind: "call", name: "mcp__fx_added", args: {} },
+							],
+							write: { "a.txt": "1\n" },
+						},
+					],
+					{ "a.txt": "1\n" },
+				),
+				ticket("B", 2, [{ kind: "commit", before: [{ kind: "wait", marker: join(markers, "fx-loaded") }], write: { "b.txt": "1\n" } }], {
+					"b.txt": "1\n",
+				}),
+			],
+		}),
+		async check(run) {
+			const failures = await commonChecks(run, { "a.txt": "1\n", "b.txt": "1\n" });
+			const log = modelLog(run);
+			const isOwner = (entry: LogEntry, ticketId: string) => entry.kind === "seat" && entry.ticket === ticketId && entry.role === "owner";
+			const load = log.find((entry) => isOwner(entry, "A") && entry.step.name === "mcp__fx_load");
+			if (!load) return [...failures, "A never called mcp__fx_load"];
+			const later = log.filter((entry) => entry.at > load.at);
+			// The readings the scenario judges are printed as it reads them: every request after the load, then every seat.
+			const who = (entry: LogEntry) => (entry.kind === "main" ? "Main" : `${entry.ticket} ${entry.role}`);
+			console.log(`  ${run.name}: +0ms ${who(load)} request answered with mcp__fx_load`);
+			for (const entry of later)
+				console.log(
+					`  ${run.name}: +${entry.at - load.at}ms ${who(entry)} request answered with ${entry.step.name ?? "text"} presents mcp__fx_added ${entry.tools.includes("mcp__fx_added")}`,
+				);
+			const aNext = later.find((entry) => isOwner(entry, "A"));
+			if (aNext?.step.name !== "mcp__fx_added" || !aNext.tools.includes("mcp__fx_added"))
+				failures.push(
+					`A's next request after load does not present and call mcp__fx_added: ${JSON.stringify({ step: aNext?.step.name, tools: aNext?.tools })}`,
+				);
+			const others = later.filter((entry) => !isOwner(entry, "A"));
+			const leaked = others.filter((entry) => entry.tools.includes("mcp__fx_added"));
+			if (leaked.length) failures.push(`mcp__fx_added reached ${leaked.map(who).join(", ")}`);
+			if (!others.some((entry) => entry.kind === "main")) failures.push("Main sent no request after the load");
+			if (!others.some((entry) => isOwner(entry, "B"))) failures.push("B sent no request after the load");
+			const state = await agenda(run);
+			const sessions = seatSessions(run, state!.id);
+			// The call to the added tool ran on the server instead of failing as an unknown tool.
+			const aOwner = owners(sessions, "A")[0];
+			const added = aOwner?.lines
+				.flatMap((line) => {
+					const parsed = messageLineSchema.safeParse(line);
+					return parsed.success ? [parsed.data.message] : [];
+				})
+				.find((message) => message.role === "toolResult" && JSON.stringify(message.content).includes("fx added ran"));
+			console.log(`  ${run.name}: A owner mcp__fx_added result ${JSON.stringify(added?.content)} isError ${added?.isError === true}`);
+			if (!added || added.isError === true) failures.push(`A's mcp__fx_added call returned no server result: ${JSON.stringify(added)}`);
+			// Every seat starts from Main's MCP view and holds exactly one dispatch tool, the bound one.
+			for (const session of sessions) {
+				const first = log.find((entry) => entry.kind === "seat" && entry.session === session.id);
+				if (!first?.tools.includes("mcp__fx_load"))
+					failures.push(`${session.ticket} ${session.role} first request lacks mcp__fx_load: ${JSON.stringify(first?.tools)}`);
+				const contract = session.lines.find((line) => line.type === "custom" && line.customType === "dispatch-session-contract");
+				const tools = z.object({ data: z.object({ tools: z.array(z.string()) }) }).safeParse(contract);
+				const count = tools.success ? tools.data.data.tools.filter((name) => name === "dispatch").length : 0;
+				console.log(
+					`  ${run.name}: seat ${session.ticket} ${session.role} first request presents mcp__fx_load ${first?.tools.includes("mcp__fx_load")}; contract tools list dispatch ${count} times`,
+				);
+				if (count !== 1) failures.push(`${session.ticket} ${session.role} contract lists dispatch ${count} times`);
+			}
 			return failures;
 		},
 	},
