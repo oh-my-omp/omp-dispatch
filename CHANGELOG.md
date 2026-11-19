@@ -4,6 +4,7 @@
 
 ### Changed
 
+- Updated the shared copies of `active-tools.ts`, `i18n.ts` to oh-my-omp/shared@e054d56.
 - Scoped seat MCP tools to each seat's own session so server-added tools no longer appear in Main or other seats, and a tool a seat's own MCP call adds is presented on that seat's next request
 - Settled seat runs, including descendant work, with a single run-end wait that aborts immediately on cancellation
 
