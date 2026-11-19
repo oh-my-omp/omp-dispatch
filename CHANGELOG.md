@@ -7,6 +7,12 @@
 - Scoped seat MCP tools to each seat's own session so server-added tools no longer appear in Main or other seats, and a tool a seat's own MCP call adds is presented on that seat's next request
 - Settled seat runs, including descendant work, with a single run-end wait that aborts immediately on cancellation
 
+## [0.2.1] - 2026-11-19
+
+### Changed
+
+- Updated the shared copy of `i18n.ts` to oh-my-omp/shared@33dbe00.
+
 ## [0.2.0] - 2026-11-15
 
 ### Added
