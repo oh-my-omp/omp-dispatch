@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-11-20
+
 ### Changed
 
 - Scoped seat MCP tools to each seat's own session so server-added tools no longer appear in Main or other seats, and a tool a seat's own MCP call adds is presented on that seat's next request
