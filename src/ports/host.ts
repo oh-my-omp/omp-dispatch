@@ -241,7 +241,7 @@ export function createHostPort(options: HostOptions): HostPort {
 					extensionRoots: () => parent.effectiveExtensionRoots,
 					hasUI: false,
 					bindProcessState: false,
-					cacheWarming: false,
+					cacheWarming: "off",
 					enableIrc: false,
 					agentId: id,
 					agentName: agent.name,
