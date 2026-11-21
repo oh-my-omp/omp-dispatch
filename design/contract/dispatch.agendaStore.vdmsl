@@ -1,7 +1,7 @@
--- Agenda State box: the durable record of each external GitHub write a workflow effect performs.
--- Only each port's data promise; persisting, performing, confirming and crash recovery are ordered by design/behavior.
--- Precision stops at "a write is marked executing at most once and settles once": the write's content and target,
--- agendas, tickets, rulings and the attached coordinator stay outside this box.
+-- Agenda State 这个盒子：工作流效果每一次对 GitHub 的外部写入的持久记录。
+-- 只写每个端口在数据上的前后条件；持久化、执行、确认与崩溃恢复的先后由 design/behavior 持有。
+-- 精度停在“一次写入至多记为执行中一次、只结算一次”：写入的内容与目标，
+-- 以及议程、工单、裁决与占用议程的协调者，都不在这个盒子里展开。
 module dispatch_agendaStore
 exports
   types
@@ -12,10 +12,10 @@ exports
 definitions
 types
   EffectId = token;
-  -- How a write ended: shown by a fresh GitHub read, failed, or with an unknown outcome.
+  -- 一次写入的结局：新的 GitHub 读取显示了它、失败，或结局未知。
   Outcome = <Confirmed> | <Failed> | <Uncertain>;
 
--- Which writes are marked executing without an outcome yet, and the outcome of each settled write.
+-- 哪些写入已记为执行中、尚无结局，以及每次已结算写入的结局。
 state Effects of
   executing : set of EffectId
   outcomes  : map EffectId to Outcome
@@ -26,7 +26,7 @@ end
 
 operations
   -- REQ-91
-  -- A write is persisted as executing before it is performed; a write already executing or settled is never marked again.
+  -- 写入在执行之前先持久记为执行中；已在执行中或已结算的写入不会再次被记为执行中。
   beginWrite(e : EffectId)
   ext rd outcomes
       wr executing
@@ -34,7 +34,7 @@ operations
   post executing = executing~ union {e};
 
   -- REQ-91
-  -- An executing write settles exactly once with its outcome.
+  -- 执行中的写入恰好结算一次，记下它的结局。
   settleWrite(e : EffectId, o : Outcome)
   ext wr executing, outcomes
   pre e in set executing

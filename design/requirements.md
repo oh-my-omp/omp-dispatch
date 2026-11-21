@@ -1,4 +1,4 @@
-# omp-dispatch requirements
+# omp-dispatch 需求
 
 - REQ-1 "Dispatch delivers GitHub issue graphs through durable tickets that move along a configurable workflow state machine, with source-confirmed effects, one-shot seat sessions, and fresh independent judges."
 - REQ-2 "Main chooses which independent tickets run concurrently and which dependency edges enforce serial delivery; the workflow decides what happens to each ticket on the way."

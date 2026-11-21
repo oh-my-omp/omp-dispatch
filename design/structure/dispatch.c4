@@ -136,7 +136,7 @@ model {
 }
 
 deployment {
-  host workstation 'Operator workstation' {
+  host workstation '操作员本机' {
     description 'Operator machine running the launcher, coordinators, the terminal frontend, Meerkat, and all local state'
     instanceOf dispatch.launcher
     instanceOf dispatch.coordinator
@@ -146,7 +146,7 @@ deployment {
     instanceOf tern
     instanceOf meerkat
   }
-  host internet 'Internet services' {
+  host internet '互联网服务' {
     #untrusted
     description 'External services reached over the public internet, outside the operator machine trust boundary'
     instanceOf github
