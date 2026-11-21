@@ -18,126 +18,126 @@ specification {
 
 model {
   operator = actor 'Operator' {
-    description 'Person who writes issue trees on GitHub, launches their delivery, and directs it'
+    description '在 GitHub 上写 issue 树、发起并指挥其交付的人'
   }
 
   dispatch = system 'omp-dispatch' {
-    description 'Delivers a GitHub issue tree with dependencies into merged pull requests and closed issues'
+    description '把一棵带依赖的 GitHub issue 树交付成已合并的 PR 与已关闭的 issue'
 
     launcher = container 'Launcher' {
-      technology 'Local HTTP service'
-      description 'Local HTTP entry for callers outside any coordinator; starts coordinators through the terminal frontend'
+      technology '本机 HTTP 服务'
+      description '供协调者之外的调用方使用的本机 HTTP 入口；经终端前端启动协调者'
     }
 
     coordinator = container 'Coordinator' {
-      technology 'omp process'
-      description 'Runs the delivery of one issue tree, moving each issue through its workflow with agent sessions'
+      technology 'omp 进程'
+      description '运行一棵 issue 树的交付，借助 agent 会话让每个 issue 走完工作流'
 
       main = component 'Main' {
-        description 'Coordinator main session that convenes the agenda, decides when each ticket launches, and rules on escalations'
+        description '协调者的主会话：召集议程，决定每张工单何时发起，裁决上报'
       }
       controller = component 'Workflow Controller' {
-        description 'Advances each issue, and then the parent issue, through the workflow'
+        description '推动每个 issue、随后推动父 issue 走完工作流'
       }
       seatHost = component 'Seat Host' {
-        description 'Runs one-shot work and review sessions in their own checkouts and accepts their results'
+        description '在各自的检出里运行一次性的工作与评审会话，并收下它们的结果'
       }
       sourceReader = component 'Source Reader' {
-        description 'Reads issue, PR, check, and Project facts from GitHub and Meerkat configuration for workflow conditions'
+        description '为工作流条件读取 GitHub 上的 issue、PR、检查与看板事实，以及 Meerkat 配置'
       }
       effects = component 'Effect Executor' {
-        description 'Performs external GitHub and Meerkat writes and records each outcome'
+        description '执行对 GitHub 与 Meerkat 的外部写入，并记录每次的结局'
       }
     }
 
     agendaStore = store 'Agenda State' {
       #contract
-      technology 'Local state files'
-      description 'Authoritative record of delivery progress and of every external write'
+      technology '本机状态文件'
+      description '交付进度与每次外部写入的权威记录'
     }
 
     repoCache = store 'Repository Cache' {
-      technology 'Local git repositories'
-      description 'Local clone of each repository and the per-session checkouts derived from it'
+      technology '本机 git 仓库'
+      description '每个仓库的本机克隆，以及由它派生的各会话检出'
     }
 
     sessionStore = store 'Session Files' {
-      technology 'omp session files'
-      description 'Agent session transcripts that later sessions for the same issue continue from'
+      technology 'omp 会话文件'
+      description 'agent 会话记录，同一 issue 的后续会话从这里接续'
     }
   }
 
   github = system 'GitHub' {
     #external
-    description 'Code platform hosting issues, pull requests, checks, and Projects, and delivering issue events'
+    description '托管 issue、PR、检查与项目看板，并投递 issue 事件的代码平台'
   }
 
   tern = system 'Tern' {
     #external
-    description 'Terminal frontend that runs omp-dispatch delivery processes in its tabs'
+    description '在标签页里运行 omp-dispatch 交付进程的终端前端'
   }
 
   modelProvider = system 'Model Provider' {
     #external
-    description 'Large language model service that answers omp-dispatch'
+    description '为 omp-dispatch 生成回复的大模型服务'
   }
 
   meerkat = system 'Meerkat' {
     #external
-    description 'External collaboration system that supplies configuration and answers questions raised during delivery'
+    description '提供配置、并回答交付中提出的问题的外部协作系统'
   }
 
-  // context
-  operator -> github 'writes issue trees'
-  operator -> tern 'watches delivery tabs'
-  operator -> dispatch 'launches and directs deliveries'
-  github -> dispatch 'delivers issue events'
-  meerkat -> dispatch 'asks to validate configuration edits'
-  dispatch -> tern 'opens a delivery tab'
-  tern -> dispatch 'runs delivery processes'
-  dispatch -> github 'reads and writes issues and code'
-  dispatch -> modelProvider 'requests replies'
-  dispatch -> meerkat 'reads configuration and asks questions'
+  // 顶层
+  operator -> github '编写 issue 树'
+  operator -> tern '查看交付标签页'
+  operator -> dispatch '发起并指挥交付'
+  github -> dispatch '投递 issue 事件'
+  meerkat -> dispatch '请求校验配置改动'
+  dispatch -> tern '打开交付标签页'
+  tern -> dispatch '运行交付进程'
+  dispatch -> github '读写 issue 与代码'
+  dispatch -> modelProvider '请求回复'
+  dispatch -> meerkat '读取配置并提出问题'
 
-  // dispatch containers
-  operator -> dispatch.launcher 'clicks a launch link'
-  operator -> dispatch.coordinator 'reviews status and directs delivery'
-  github -> dispatch.launcher 'delivers issue events'
-  meerkat -> dispatch.launcher 'asks to validate configuration edits'
-  dispatch.launcher -> tern 'opens or focuses a coordinator tab'
-  tern -> dispatch.coordinator 'runs the coordinator process'
-  dispatch.coordinator -> github 'reads and writes issues and code'
-  dispatch.coordinator -> modelProvider 'requests replies'
-  dispatch.coordinator -> meerkat 'reads configuration and asks questions'
-  dispatch.coordinator -> dispatch.agendaStore 'persists delivery progress and external writes'
-  dispatch.coordinator -> dispatch.repoCache 'updates clones and checks out workspaces'
-  dispatch.coordinator -> dispatch.sessionStore 'creates and continues sessions'
+  // dispatch 容器层
+  operator -> dispatch.launcher '点击启动链接'
+  operator -> dispatch.coordinator '查看状态并指挥交付'
+  github -> dispatch.launcher '投递 issue 事件'
+  meerkat -> dispatch.launcher '请求校验配置改动'
+  dispatch.launcher -> tern '打开或聚焦协调者标签页'
+  tern -> dispatch.coordinator '运行协调者进程'
+  dispatch.coordinator -> github '读写 issue 与代码'
+  dispatch.coordinator -> modelProvider '请求回复'
+  dispatch.coordinator -> meerkat '读取配置并提出问题'
+  dispatch.coordinator -> dispatch.agendaStore '持久化交付进度与外部写入'
+  dispatch.coordinator -> dispatch.repoCache '更新克隆并检出工作区'
+  dispatch.coordinator -> dispatch.sessionStore '新建并接续会话'
 
-  // coordinator components
-  operator -> dispatch.coordinator.main 'reviews status and gives directions'
-  tern -> dispatch.coordinator.main 'runs the main session'
-  dispatch.coordinator.main -> modelProvider 'requests main-session replies'
-  dispatch.coordinator.main -> dispatch.coordinator.controller 'directs the agenda and issue launches'
-  dispatch.coordinator.controller -> dispatch.coordinator.main 'wakes Main for open decisions'
-  dispatch.coordinator.controller -> dispatch.coordinator.seatHost 'starts work and review sessions'
-  dispatch.coordinator.seatHost -> dispatch.coordinator.controller 'submits work, verdicts, and escalations'
-  dispatch.coordinator.controller -> dispatch.coordinator.sourceReader 'reads source facts'
-  dispatch.coordinator.controller -> dispatch.coordinator.effects 'requests external writes'
-  dispatch.coordinator.controller -> dispatch.agendaStore 'persists delivery progress'
-  dispatch.coordinator.effects -> dispatch.agendaStore 'records external writes and outcomes'
-  dispatch.coordinator.effects -> github 'writes issues, PRs, and Projects'
-  dispatch.coordinator.effects -> meerkat 'sends question requests'
-  dispatch.coordinator.sourceReader -> github 'reads issues, PRs, checks, and Projects'
-  dispatch.coordinator.sourceReader -> meerkat 'reads configuration'
-  dispatch.coordinator.seatHost -> dispatch.repoCache 'updates clones and checks out workspaces'
-  dispatch.coordinator.seatHost -> dispatch.sessionStore 'creates and continues sessions'
-  dispatch.coordinator.seatHost -> modelProvider 'requests session replies'
-  dispatch.coordinator.seatHost -> github 'fetches and pushes code'
+  // coordinator 组件层
+  operator -> dispatch.coordinator.main '查看状态并下达指示'
+  tern -> dispatch.coordinator.main '运行主会话'
+  dispatch.coordinator.main -> modelProvider '请求主会话回复'
+  dispatch.coordinator.main -> dispatch.coordinator.controller '指挥议程与 issue 的发起'
+  dispatch.coordinator.controller -> dispatch.coordinator.main '为待决事项唤醒 Main'
+  dispatch.coordinator.controller -> dispatch.coordinator.seatHost '启动工作与评审会话'
+  dispatch.coordinator.seatHost -> dispatch.coordinator.controller '提交工作成果、评审结论与上报'
+  dispatch.coordinator.controller -> dispatch.coordinator.sourceReader '读取来源事实'
+  dispatch.coordinator.controller -> dispatch.coordinator.effects '请求外部写入'
+  dispatch.coordinator.controller -> dispatch.agendaStore '持久化交付进度'
+  dispatch.coordinator.effects -> dispatch.agendaStore '记录外部写入及其结局'
+  dispatch.coordinator.effects -> github '写入 issue、PR 与看板'
+  dispatch.coordinator.effects -> meerkat '发送提问请求'
+  dispatch.coordinator.sourceReader -> github '读取 issue、PR、检查与看板'
+  dispatch.coordinator.sourceReader -> meerkat '读取配置'
+  dispatch.coordinator.seatHost -> dispatch.repoCache '更新克隆并检出工作区'
+  dispatch.coordinator.seatHost -> dispatch.sessionStore '新建并接续会话'
+  dispatch.coordinator.seatHost -> modelProvider '请求会话回复'
+  dispatch.coordinator.seatHost -> github '拉取并推送代码'
 }
 
 deployment {
   host workstation '操作员本机' {
-    description 'Operator machine running the launcher, coordinators, the terminal frontend, Meerkat, and all local state'
+    description '操作员的本机：运行启动器、协调者、终端前端、Meerkat 与全部本机状态'
     instanceOf dispatch.launcher
     instanceOf dispatch.coordinator
     instanceOf dispatch.agendaStore
@@ -148,7 +148,7 @@ deployment {
   }
   host internet '互联网服务' {
     #untrusted
-    description 'External services reached over the public internet, outside the operator machine trust boundary'
+    description '经公网访问的外部服务，在操作员本机的信任边界之外'
     instanceOf github
     instanceOf modelProvider
   }
@@ -156,26 +156,26 @@ deployment {
 
 views {
   view index {
-    title 'omp-dispatch system context'
-    description 'Whom omp-dispatch serves and which external systems it interacts with'
+    title 'omp-dispatch 系统上下文'
+    description 'omp-dispatch 为谁服务，与哪些外部系统交互'
     include *
   }
 
   view dispatchView of dispatch {
-    title 'omp-dispatch container diagram'
-    description 'Which runtime units and data stores make up omp-dispatch and how they call each other and the outside'
+    title 'omp-dispatch 容器图'
+    description 'omp-dispatch 由哪些运行单元与数据存储组成，它们彼此以及与外部怎样调用'
     include *
   }
 
   view coordinatorView of dispatch.coordinator {
-    title 'Coordinator component diagram'
-    description 'Which functional blocks make up the Coordinator and how they call each other and the outside'
+    title 'Coordinator 组件图'
+    description 'Coordinator 由哪些功能块组成，它们彼此以及与外部怎样调用'
     include *
   }
 
   deployment view deployed {
-    title 'omp-dispatch deployment diagram'
-    description 'Where the omp-dispatch containers and data stores run and where the trust boundary lies'
+    title 'omp-dispatch 部署图'
+    description 'omp-dispatch 的容器与数据存储运行在哪里，信任边界在哪里'
     include workstation.**
     include internet.**
     exclude * -> * where source.kind is component or target.kind is component

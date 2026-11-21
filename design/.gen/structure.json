@@ -190,207 +190,207 @@
     {
       "source": "dispatch",
       "target": "github",
-      "title": "reads and writes issues and code"
+      "title": "读写 issue 与代码"
     },
     {
       "source": "dispatch",
       "target": "meerkat",
-      "title": "reads configuration and asks questions"
+      "title": "读取配置并提出问题"
     },
     {
       "source": "dispatch",
       "target": "modelProvider",
-      "title": "requests replies"
+      "title": "请求回复"
     },
     {
       "source": "dispatch",
       "target": "tern",
-      "title": "opens a delivery tab"
+      "title": "打开交付标签页"
     },
     {
       "source": "dispatch.coordinator",
       "target": "dispatch.agendaStore",
-      "title": "persists delivery progress and external writes"
+      "title": "持久化交付进度与外部写入"
     },
     {
       "source": "dispatch.coordinator",
       "target": "dispatch.repoCache",
-      "title": "updates clones and checks out workspaces"
+      "title": "更新克隆并检出工作区"
     },
     {
       "source": "dispatch.coordinator",
       "target": "dispatch.sessionStore",
-      "title": "creates and continues sessions"
+      "title": "新建并接续会话"
     },
     {
       "source": "dispatch.coordinator",
       "target": "github",
-      "title": "reads and writes issues and code"
+      "title": "读写 issue 与代码"
     },
     {
       "source": "dispatch.coordinator",
       "target": "meerkat",
-      "title": "reads configuration and asks questions"
+      "title": "读取配置并提出问题"
     },
     {
       "source": "dispatch.coordinator",
       "target": "modelProvider",
-      "title": "requests replies"
+      "title": "请求回复"
     },
     {
       "source": "dispatch.coordinator.controller",
       "target": "dispatch.agendaStore",
-      "title": "persists delivery progress"
+      "title": "持久化交付进度"
     },
     {
       "source": "dispatch.coordinator.controller",
       "target": "dispatch.coordinator.effects",
-      "title": "requests external writes"
+      "title": "请求外部写入"
     },
     {
       "source": "dispatch.coordinator.controller",
       "target": "dispatch.coordinator.main",
-      "title": "wakes Main for open decisions"
+      "title": "为待决事项唤醒 Main"
     },
     {
       "source": "dispatch.coordinator.controller",
       "target": "dispatch.coordinator.seatHost",
-      "title": "starts work and review sessions"
+      "title": "启动工作与评审会话"
     },
     {
       "source": "dispatch.coordinator.controller",
       "target": "dispatch.coordinator.sourceReader",
-      "title": "reads source facts"
+      "title": "读取来源事实"
     },
     {
       "source": "dispatch.coordinator.effects",
       "target": "dispatch.agendaStore",
-      "title": "records external writes and outcomes"
+      "title": "记录外部写入及其结局"
     },
     {
       "source": "dispatch.coordinator.effects",
       "target": "github",
-      "title": "writes issues, PRs, and Projects"
+      "title": "写入 issue、PR 与看板"
     },
     {
       "source": "dispatch.coordinator.effects",
       "target": "meerkat",
-      "title": "sends question requests"
+      "title": "发送提问请求"
     },
     {
       "source": "dispatch.coordinator.main",
       "target": "dispatch.coordinator.controller",
-      "title": "directs the agenda and issue launches"
+      "title": "指挥议程与 issue 的发起"
     },
     {
       "source": "dispatch.coordinator.main",
       "target": "modelProvider",
-      "title": "requests main-session replies"
+      "title": "请求主会话回复"
     },
     {
       "source": "dispatch.coordinator.seatHost",
       "target": "dispatch.coordinator.controller",
-      "title": "submits work, verdicts, and escalations"
+      "title": "提交工作成果、评审结论与上报"
     },
     {
       "source": "dispatch.coordinator.seatHost",
       "target": "dispatch.repoCache",
-      "title": "updates clones and checks out workspaces"
+      "title": "更新克隆并检出工作区"
     },
     {
       "source": "dispatch.coordinator.seatHost",
       "target": "dispatch.sessionStore",
-      "title": "creates and continues sessions"
+      "title": "新建并接续会话"
     },
     {
       "source": "dispatch.coordinator.seatHost",
       "target": "github",
-      "title": "fetches and pushes code"
+      "title": "拉取并推送代码"
     },
     {
       "source": "dispatch.coordinator.seatHost",
       "target": "modelProvider",
-      "title": "requests session replies"
+      "title": "请求会话回复"
     },
     {
       "source": "dispatch.coordinator.sourceReader",
       "target": "github",
-      "title": "reads issues, PRs, checks, and Projects"
+      "title": "读取 issue、PR、检查与看板"
     },
     {
       "source": "dispatch.coordinator.sourceReader",
       "target": "meerkat",
-      "title": "reads configuration"
+      "title": "读取配置"
     },
     {
       "source": "dispatch.launcher",
       "target": "tern",
-      "title": "opens or focuses a coordinator tab"
+      "title": "打开或聚焦协调者标签页"
     },
     {
       "source": "github",
       "target": "dispatch",
-      "title": "delivers issue events"
+      "title": "投递 issue 事件"
     },
     {
       "source": "github",
       "target": "dispatch.launcher",
-      "title": "delivers issue events"
+      "title": "投递 issue 事件"
     },
     {
       "source": "meerkat",
       "target": "dispatch",
-      "title": "asks to validate configuration edits"
+      "title": "请求校验配置改动"
     },
     {
       "source": "meerkat",
       "target": "dispatch.launcher",
-      "title": "asks to validate configuration edits"
+      "title": "请求校验配置改动"
     },
     {
       "source": "operator",
       "target": "dispatch",
-      "title": "launches and directs deliveries"
+      "title": "发起并指挥交付"
     },
     {
       "source": "operator",
       "target": "dispatch.coordinator",
-      "title": "reviews status and directs delivery"
+      "title": "查看状态并指挥交付"
     },
     {
       "source": "operator",
       "target": "dispatch.coordinator.main",
-      "title": "reviews status and gives directions"
+      "title": "查看状态并下达指示"
     },
     {
       "source": "operator",
       "target": "dispatch.launcher",
-      "title": "clicks a launch link"
+      "title": "点击启动链接"
     },
     {
       "source": "operator",
       "target": "github",
-      "title": "writes issue trees"
+      "title": "编写 issue 树"
     },
     {
       "source": "operator",
       "target": "tern",
-      "title": "watches delivery tabs"
+      "title": "查看交付标签页"
     },
     {
       "source": "tern",
       "target": "dispatch",
-      "title": "runs delivery processes"
+      "title": "运行交付进程"
     },
     {
       "source": "tern",
       "target": "dispatch.coordinator",
-      "title": "runs the coordinator process"
+      "title": "运行协调者进程"
     },
     {
       "source": "tern",
       "target": "dispatch.coordinator.main",
-      "title": "runs the main session"
+      "title": "运行主会话"
     }
   ],
   "views": [
