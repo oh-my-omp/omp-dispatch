@@ -22,22 +22,22 @@ model {
   }
 
   dispatch = system 'omp-dispatch' {
-    description 'Delivers a dependent GitHub issue tree through durable tickets into merged and closed results'
+    description 'Delivers a GitHub issue tree with dependencies into merged pull requests and closed issues'
 
     launcher = container 'Launcher' {
       technology 'Local HTTP service'
-      description 'Accepts launch-link clicks and issue-event deliveries, starts coordinators through a frontend, and validates Meerkat configuration edits'
+      description 'Local HTTP entry for callers outside any coordinator: starts coordinators on launch-link clicks and issue-event deliveries, and validates Meerkat configuration edits'
     }
 
     coordinator = container 'Coordinator' {
       technology 'omp process with the dispatch extension'
-      description 'Runs the delivery of one issue tree, moving every ticket and the parent closure through its workflow with one-shot agent sessions'
+      description 'Runs the delivery of one issue tree, moving every ticket through its workflow with agent sessions'
 
       main = component 'Main' {
         description 'Coordinator main session that convenes the agenda, decides when each ticket launches, and rules on escalations'
       }
       controller = component 'Workflow Controller' {
-        description 'Advances tickets and the parent closure along the frozen workflow and wakes Main for open decisions'
+        description 'Advances tickets and the parent closure through the workflow and wakes Main for open decisions'
       }
       seatHost = component 'Seat Host' {
         description 'Runs one-shot work and judge seat sessions in their own checkouts and accepts their handoffs'
@@ -46,7 +46,7 @@ model {
         description 'Reads issue, PR, check, and Project facts from GitHub and Meerkat configuration for workflow conditions'
       }
       effects = component 'Effect Executor' {
-        description 'Performs external GitHub and Meerkat writes, persisting each intent and confirming each outcome'
+        description 'Performs external GitHub and Meerkat writes and records each outcome'
       }
     }
 
@@ -63,13 +63,13 @@ model {
 
     sessionStore = store 'Session Files' {
       technology 'omp session files'
-      description 'Agent session transcripts that later sessions of the same ticket role continue from'
+      description 'Agent session transcripts that later sessions for the same ticket continue from'
     }
   }
 
   github = system 'GitHub' {
     #external
-    description 'Code platform hosting issues, PRs, checks, and Projects, and delivering issue events through a GitHub App'
+    description 'Code platform hosting issues, pull requests, checks, and Projects, and delivering issue events'
   }
 
   tern = system 'Tern' {
@@ -89,26 +89,27 @@ model {
 
   // context
   operator -> github 'writes issue trees'
+  operator -> tern 'watches delivery tabs'
   operator -> dispatch 'launches and directs deliveries'
   github -> dispatch 'delivers issue events'
-  meerkat -> dispatch 'validates configuration edits'
+  meerkat -> dispatch 'asks to validate configuration edits'
   dispatch -> tern 'opens a delivery tab'
   tern -> dispatch 'runs delivery processes'
   dispatch -> github 'reads and writes issues and code'
   dispatch -> modelProvider 'requests replies'
-  dispatch -> meerkat 'reads configuration, submits questions'
+  dispatch -> meerkat 'reads configuration and asks questions'
 
   // dispatch containers
   operator -> dispatch.launcher 'clicks a launch link'
   operator -> dispatch.coordinator 'reviews status and directs delivery'
   github -> dispatch.launcher 'delivers issue events'
-  meerkat -> dispatch.launcher 'validates configuration edits'
+  meerkat -> dispatch.launcher 'asks to validate configuration edits'
   dispatch.launcher -> tern 'opens or focuses a coordinator tab'
   tern -> dispatch.coordinator 'runs the coordinator process'
   dispatch.coordinator -> github 'reads and writes issues and code'
   dispatch.coordinator -> modelProvider 'requests replies'
-  dispatch.coordinator -> meerkat 'reads configuration, submits questions'
-  dispatch.coordinator -> dispatch.agendaStore 'persists delivery progress and writes'
+  dispatch.coordinator -> meerkat 'reads configuration and asks questions'
+  dispatch.coordinator -> dispatch.agendaStore 'persists delivery progress and external writes'
   dispatch.coordinator -> dispatch.repoCache 'updates clones and checks out workspaces'
   dispatch.coordinator -> dispatch.sessionStore 'creates and continues sessions'
 
@@ -122,14 +123,14 @@ model {
   dispatch.coordinator.seatHost -> dispatch.coordinator.controller 'submits work, verdicts, and escalations'
   dispatch.coordinator.controller -> dispatch.coordinator.sourceReader 'reads source facts'
   dispatch.coordinator.controller -> dispatch.coordinator.effects 'requests external writes'
-  dispatch.coordinator.controller -> dispatch.agendaStore 'persists agendas and state transitions'
-  dispatch.coordinator.effects -> dispatch.agendaStore 'records effect intents and outcomes'
-  dispatch.coordinator.effects -> github 'writes and re-reads issues, PRs, and Projects'
+  dispatch.coordinator.controller -> dispatch.agendaStore 'persists delivery progress'
+  dispatch.coordinator.effects -> dispatch.agendaStore 'records external writes and outcomes'
+  dispatch.coordinator.effects -> github 'writes issues, PRs, and Projects'
   dispatch.coordinator.effects -> meerkat 'sends question requests'
   dispatch.coordinator.sourceReader -> github 'reads issues, PRs, checks, and Projects'
   dispatch.coordinator.sourceReader -> meerkat 'reads configuration'
   dispatch.coordinator.seatHost -> dispatch.repoCache 'updates clones and checks out seat workspaces'
-  dispatch.coordinator.seatHost -> dispatch.sessionStore 'creates and forks seat sessions'
+  dispatch.coordinator.seatHost -> dispatch.sessionStore 'creates and continues seat sessions'
   dispatch.coordinator.seatHost -> modelProvider 'requests seat replies'
   dispatch.coordinator.seatHost -> github 'fetches and pushes code'
 }

@@ -1,5 +1,5 @@
 // Worry: after a coordinator crash between GitHub applying a write and the write's outcome being recorded,
-// resume performs the same write again, or a write whose outcome was unknown is sent again by itself (REQ-90).
+// resume performs the same write again, or a write whose outcome was unknown is sent again by itself (REQ-91).
 // Boxes: the coordinator's effect executor (steps below), the coordinator crash environment epoch,
 // GitHub with its in-flight requests and replies, and the contract box dispatch_agendaStore.
 // A write is a chain of steps (requestWrite → markExecuting → performWrite → confirmWrite | giveUpWaiting);
@@ -64,7 +64,7 @@ module writeRecovery {
     commit(NoCall),
   }
 
-  // REQ-90: the write is persisted as executing before it is performed.
+  // REQ-91: the write is persisted as executing before it is performed.
   action markExecuting(e: Store::EffectId): bool = all {
     e.in(toMark),
     toMark' = toMark.exclude(Set(e)),
@@ -85,7 +85,7 @@ module writeRecovery {
     commit(NoCall),
   }
 
-  // REQ-90: once the call returns, a fresh GitHub read decides the outcome.
+  // REQ-91: once the call returns, a fresh GitHub read decides the outcome.
   action confirmWrite(e: Store::EffectId): bool = all {
     e.in(awaiting),
     (e, epoch).in(replies),
@@ -97,7 +97,7 @@ module writeRecovery {
       e: e, o: if (shown(e)) Store::Outcome_Confirmed else Store::Outcome_Failed }))),
   }
 
-  // REQ-90: a call that never returns has an unknown outcome unless a fresh read already shows the write.
+  // REQ-91: a call that never returns has an unknown outcome unless a fresh read already shows the write.
   action giveUpWaiting(e: Store::EffectId): bool = all {
     e.in(awaiting),
     not((e, epoch).in(replies)),
@@ -127,7 +127,7 @@ module writeRecovery {
     commit(NoCall),
   }
 
-  // REQ-90: resume reconciles an interrupted executing write against GitHub instead of performing it again.
+  // REQ-91: resume reconciles an interrupted executing write against GitHub instead of performing it again.
   action reconcile(e: Store::EffectId): bool = all {
     e.in(agenda.executing),
     not(e.in(toPerform.union(awaiting))),
@@ -152,21 +152,28 @@ module writeRecovery {
   }
 
   // ---------- Properties on observable wires ----------
-  // REQ-90: no write takes effect on GitHub twice, across crashes, resumes and unknown outcomes.
+  // REQ-91: no write takes effect on GitHub twice, across crashes, resumes and unknown outcomes.
   val atMostOnce = EFFECTS.forall(e => applied.get(e) <= 1)
-  // REQ-90: a write recorded as confirmed is one GitHub shows.
+  // REQ-91: a write recorded as confirmed is one GitHub shows.
   val confirmedIsShown = agenda.outcomes.keys().forall(e =>
     agenda.outcomes.get(e) == Store::Outcome_Confirmed implies shown(e))
-  val safety = atMostOnce and confirmedIsShown
+  // REQ-91: a write recorded as failed is one GitHub does not show.
+  val failedIsNotShown = agenda.outcomes.keys().forall(e =>
+    agenda.outcomes.get(e) == Store::Outcome_Failed implies not(shown(e)))
+  val safety = atMostOnce and confirmedIsShown and failedIsNotShown
 
   // ---------- Coverage targets ----------
   val witnessConfirmed = agenda.outcomes.keys().exists(e => agenda.outcomes.get(e) == Store::Outcome_Confirmed)
   val witnessFailed = agenda.outcomes.keys().exists(e => agenda.outcomes.get(e) == Store::Outcome_Failed)
-  // REQ-90: GitHub applied a write whose run crashed before recording its outcome; it still waits for resume.
+  // REQ-91: GitHub applied a write whose run crashed before recording its outcome; it still waits for resume.
   val witnessCrashAfterApply = agenda.executing.exists(e => shown(e) and not(e.in(awaiting)))
   pure val maxSteps_witnessCrashAfterApply = 30
-  // REQ-90: a write settled as uncertain later took effect on GitHub, and nothing sent it again.
+  // REQ-91: a write settled as uncertain later took effect on GitHub, and nothing sent it again.
   val witnessLateApplyAfterUncertain = agenda.outcomes.keys().exists(e =>
     agenda.outcomes.get(e) == Store::Outcome_Uncertain and shown(e))
   pure val maxSteps_witnessLateApplyAfterUncertain = 30
+  // REQ-91: resume settled a write from GitHub's record while its reply to the crashed run was never consumed.
+  val witnessReconciledAfterCrash = agenda.outcomes.keys().exists(e =>
+    agenda.outcomes.get(e) == Store::Outcome_Confirmed and replies.exists(r => r._1 == e))
+  pure val maxSteps_witnessReconciledAfterCrash = 40
 }
