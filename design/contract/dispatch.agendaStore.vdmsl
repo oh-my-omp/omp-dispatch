@@ -1,0 +1,43 @@
+-- Agenda State box: the durable record of each external GitHub write a workflow effect performs.
+-- Only each port's data promise; persisting, performing, confirming and crash recovery are ordered by design/behavior.
+-- Precision stops at "a write is marked executing at most once and settles once": the write's content and target,
+-- agendas, tickets, rulings and the attached coordinator stay outside this box.
+module dispatch_agendaStore
+exports
+  types
+    EffectId; struct Outcome
+  operations
+    beginWrite : EffectId ==> ();
+    settleWrite : EffectId * Outcome ==> ()
+definitions
+types
+  EffectId = token;
+  -- How a write ended: shown by a fresh GitHub read, failed, or with an unknown outcome.
+  Outcome = <Confirmed> | <Failed> | <Uncertain>;
+
+-- Which writes are marked executing without an outcome yet, and the outcome of each settled write.
+state Effects of
+  executing : set of EffectId
+  outcomes  : map EffectId to Outcome
+inv mk_Effects(x, o) ==
+  x inter dom o = {}
+init s == s = mk_Effects({}, {|->})
+end
+
+operations
+  -- REQ-90
+  -- A write is persisted as executing before it is performed; a write already executing or settled is never marked again.
+  beginWrite(e : EffectId)
+  ext rd outcomes
+      wr executing
+  pre e not in set executing and e not in set dom outcomes
+  post executing = executing~ union {e};
+
+  -- REQ-90
+  -- An executing write settles exactly once with its outcome.
+  settleWrite(e : EffectId, o : Outcome)
+  ext wr executing, outcomes
+  pre e in set executing
+  post executing = executing~ \ {e} and outcomes = outcomes~ munion {e |-> o};
+
+end dispatch_agendaStore

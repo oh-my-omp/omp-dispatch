@@ -18,7 +18,7 @@ specification {
 
 model {
   operator = actor 'Operator' {
-    description 'Person who prepares issue trees on GitHub, clicks launch links, and directs delivery in the coordinator session'
+    description 'Person who writes issue trees on GitHub, launches their delivery, and directs it'
   }
 
   dispatch = system 'omp-dispatch' {
@@ -26,24 +26,24 @@ model {
 
     launcher = container 'Launcher' {
       technology 'Local HTTP service'
-      description 'Accepts launch-link clicks and issue-event deliveries, starts coordinators through a frontend, and checks Meerkat configuration'
+      description 'Accepts launch-link clicks and issue-event deliveries, starts coordinators through a frontend, and validates Meerkat configuration edits'
     }
 
     coordinator = container 'Coordinator' {
       technology 'omp process with the dispatch extension'
-      description 'Convenes the agenda of one issue and moves every ticket and the parent closure along its frozen workflow'
+      description 'Runs the delivery of one issue tree, moving every ticket and the parent closure through its workflow with one-shot agent sessions'
 
       main = component 'Main' {
         description 'Coordinator main session that convenes the agenda, decides when each ticket launches, and rules on escalations'
       }
-      controller = component 'Relay Controller' {
+      controller = component 'Workflow Controller' {
         description 'Advances tickets and the parent closure along the frozen workflow and wakes Main for open decisions'
       }
       seatHost = component 'Seat Host' {
         description 'Runs one-shot work and judge seat sessions in their own checkouts and accepts their handoffs'
       }
       sourceReader = component 'Source Reader' {
-        description 'Reads issue, PR, check, and Project facts from GitHub for workflow conditions and confirmations'
+        description 'Reads issue, PR, check, and Project facts from GitHub and Meerkat configuration for workflow conditions'
       }
       effects = component 'Effect Executor' {
         description 'Performs external GitHub and Meerkat writes, persisting each intent and confirming each outcome'
@@ -51,18 +51,19 @@ model {
     }
 
     agendaStore = store 'Agenda State' {
+      #contract
       technology 'Local state files'
-      description 'Authoritative record of agendas, ticket states, rulings, the attached coordinator, and effect intents'
+      description 'Authoritative record of delivery progress and of every external write'
     }
 
     repoCache = store 'Repository Cache' {
       technology 'Local git repositories'
-      description 'Local clone of each repository and the seat checkouts derived from it'
+      description 'Local clone of each repository and the per-session checkouts derived from it'
     }
 
     sessionStore = store 'Session Files' {
       technology 'omp session files'
-      description 'Seat session transcripts that later seats of the same role fork from'
+      description 'Agent session transcripts that later sessions of the same ticket role continue from'
     }
   }
 
@@ -73,79 +74,80 @@ model {
 
   tern = system 'Tern' {
     #external
-    description 'Terminal frontend that opens tabs and runs coordinator processes in them'
+    description 'Terminal frontend that runs omp-dispatch delivery processes in its tabs'
   }
 
   modelProvider = system 'Model Provider' {
     #external
-    description 'Large language model service answering the main and seat sessions'
+    description 'Large language model service answering the agent sessions omp-dispatch runs'
   }
 
   meerkat = system 'Meerkat' {
     #external
-    description 'External collaboration system whose configuration repository, intent guardians, and council settle owner questions'
+    description 'External collaboration system that supplies configuration and settles owner questions'
   }
 
   // context
-  operator -> dispatch 'clicks launch links and directs delivery'
+  operator -> github 'writes issue trees'
+  operator -> dispatch 'launches and directs deliveries'
   github -> dispatch 'delivers issue events'
-  meerkat -> dispatch 'checks candidate configuration'
-  dispatch -> tern 'opens or focuses a coordinator tab'
-  tern -> dispatch 'runs the coordinator process'
-  dispatch -> github 'reads and writes issues, PRs, and Projects, and syncs code'
-  dispatch -> modelProvider 'requests model replies'
-  dispatch -> meerkat 'reads configuration and submits questions'
+  meerkat -> dispatch 'validates configuration edits'
+  dispatch -> tern 'opens a delivery tab'
+  tern -> dispatch 'runs delivery processes'
+  dispatch -> github 'reads and writes issues and code'
+  dispatch -> modelProvider 'requests replies'
+  dispatch -> meerkat 'reads configuration, submits questions'
 
   // dispatch containers
   operator -> dispatch.launcher 'clicks a launch link'
-  operator -> dispatch.coordinator 'reviews status and directs Main'
+  operator -> dispatch.coordinator 'reviews status and directs delivery'
   github -> dispatch.launcher 'delivers issue events'
-  meerkat -> dispatch.launcher 'checks candidate configuration'
+  meerkat -> dispatch.launcher 'validates configuration edits'
   dispatch.launcher -> tern 'opens or focuses a coordinator tab'
   tern -> dispatch.coordinator 'runs the coordinator process'
-  dispatch.coordinator -> github 'reads and writes issues, PRs, and Projects, and syncs code'
-  dispatch.coordinator -> modelProvider 'requests model replies'
-  dispatch.coordinator -> meerkat 'reads configuration and submits questions'
-  dispatch.coordinator -> dispatch.agendaStore 'persists agendas and effect intents'
-  dispatch.coordinator -> dispatch.repoCache 'updates clones and checks out seat workspaces'
-  dispatch.coordinator -> dispatch.sessionStore 'creates and forks seat sessions'
+  dispatch.coordinator -> github 'reads and writes issues and code'
+  dispatch.coordinator -> modelProvider 'requests replies'
+  dispatch.coordinator -> meerkat 'reads configuration, submits questions'
+  dispatch.coordinator -> dispatch.agendaStore 'persists delivery progress and writes'
+  dispatch.coordinator -> dispatch.repoCache 'updates clones and checks out workspaces'
+  dispatch.coordinator -> dispatch.sessionStore 'creates and continues sessions'
 
   // coordinator components
   operator -> dispatch.coordinator.main 'reviews status and gives directions'
   tern -> dispatch.coordinator.main 'runs the main session'
   dispatch.coordinator.main -> modelProvider 'requests main-session replies'
-  dispatch.coordinator.main -> dispatch.coordinator.controller 'convenes, launches, resolves, and finishes'
-  dispatch.coordinator.controller -> dispatch.coordinator.main 'wakes it for open decisions'
+  dispatch.coordinator.main -> dispatch.coordinator.controller 'directs the agenda and ticket launches'
+  dispatch.coordinator.controller -> dispatch.coordinator.main 'wakes Main for open decisions'
   dispatch.coordinator.controller -> dispatch.coordinator.seatHost 'seats work and judge roles'
-  dispatch.coordinator.seatHost -> dispatch.coordinator.controller 'hands back submissions, verdicts, and escalations'
+  dispatch.coordinator.seatHost -> dispatch.coordinator.controller 'submits work, verdicts, and escalations'
   dispatch.coordinator.controller -> dispatch.coordinator.sourceReader 'reads source facts'
   dispatch.coordinator.controller -> dispatch.coordinator.effects 'requests external writes'
   dispatch.coordinator.controller -> dispatch.agendaStore 'persists agendas and state transitions'
-  dispatch.coordinator.controller -> meerkat 'reads Meerkat configuration'
   dispatch.coordinator.effects -> dispatch.agendaStore 'records effect intents and outcomes'
-  dispatch.coordinator.effects -> dispatch.coordinator.sourceReader 'confirms writes with fresh reads'
-  dispatch.coordinator.effects -> github 'writes issues, PRs, and Projects'
+  dispatch.coordinator.effects -> github 'writes and re-reads issues, PRs, and Projects'
   dispatch.coordinator.effects -> meerkat 'sends question requests'
   dispatch.coordinator.sourceReader -> github 'reads issues, PRs, checks, and Projects'
+  dispatch.coordinator.sourceReader -> meerkat 'reads configuration'
   dispatch.coordinator.seatHost -> dispatch.repoCache 'updates clones and checks out seat workspaces'
   dispatch.coordinator.seatHost -> dispatch.sessionStore 'creates and forks seat sessions'
   dispatch.coordinator.seatHost -> modelProvider 'requests seat replies'
-  dispatch.coordinator.seatHost -> github 'fetches code and pushes branches'
+  dispatch.coordinator.seatHost -> github 'fetches and pushes code'
 }
 
 deployment {
   host workstation 'Operator workstation' {
-    description 'Operator machine running the launcher, coordinators, the terminal frontend, and all local state'
+    description 'Operator machine running the launcher, coordinators, the terminal frontend, Meerkat, and all local state'
     instanceOf dispatch.launcher
     instanceOf dispatch.coordinator
     instanceOf dispatch.agendaStore
     instanceOf dispatch.repoCache
     instanceOf dispatch.sessionStore
     instanceOf tern
+    instanceOf meerkat
   }
   host internet 'Internet services' {
     #untrusted
-    description 'External services reached over the public internet, a separate trust boundary whose deliveries are accepted only with a valid App signature'
+    description 'External services reached over the public internet, outside the operator machine trust boundary'
     instanceOf github
     instanceOf modelProvider
   }

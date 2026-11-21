@@ -22,10 +22,14 @@
       "kind": "store",
       "parent": "dispatch",
       "children": [],
-      "tags": [],
+      "tags": [
+        "contract"
+      ],
       "group": null,
       "business": false,
-      "contract": null
+      "contract": {
+        "module": "dispatch_agendaStore"
+      }
     },
     {
       "fqn": "dispatch.coordinator",
@@ -186,52 +190,52 @@
     {
       "source": "dispatch",
       "target": "github",
-      "title": "reads and writes issues, PRs, and Projects, and syncs code"
+      "title": "reads and writes issues and code"
     },
     {
       "source": "dispatch",
       "target": "meerkat",
-      "title": "reads configuration and submits questions"
+      "title": "reads configuration, submits questions"
     },
     {
       "source": "dispatch",
       "target": "modelProvider",
-      "title": "requests model replies"
+      "title": "requests replies"
     },
     {
       "source": "dispatch",
       "target": "tern",
-      "title": "opens or focuses a coordinator tab"
+      "title": "opens a delivery tab"
     },
     {
       "source": "dispatch.coordinator",
       "target": "dispatch.agendaStore",
-      "title": "persists agendas and effect intents"
+      "title": "persists delivery progress and writes"
     },
     {
       "source": "dispatch.coordinator",
       "target": "dispatch.repoCache",
-      "title": "updates clones and checks out seat workspaces"
+      "title": "updates clones and checks out workspaces"
     },
     {
       "source": "dispatch.coordinator",
       "target": "dispatch.sessionStore",
-      "title": "creates and forks seat sessions"
+      "title": "creates and continues sessions"
     },
     {
       "source": "dispatch.coordinator",
       "target": "github",
-      "title": "reads and writes issues, PRs, and Projects, and syncs code"
+      "title": "reads and writes issues and code"
     },
     {
       "source": "dispatch.coordinator",
       "target": "meerkat",
-      "title": "reads configuration and submits questions"
+      "title": "reads configuration, submits questions"
     },
     {
       "source": "dispatch.coordinator",
       "target": "modelProvider",
-      "title": "requests model replies"
+      "title": "requests replies"
     },
     {
       "source": "dispatch.coordinator.controller",
@@ -246,7 +250,7 @@
     {
       "source": "dispatch.coordinator.controller",
       "target": "dispatch.coordinator.main",
-      "title": "wakes it for open decisions"
+      "title": "wakes Main for open decisions"
     },
     {
       "source": "dispatch.coordinator.controller",
@@ -259,24 +263,14 @@
       "title": "reads source facts"
     },
     {
-      "source": "dispatch.coordinator.controller",
-      "target": "meerkat",
-      "title": "reads Meerkat configuration"
-    },
-    {
       "source": "dispatch.coordinator.effects",
       "target": "dispatch.agendaStore",
       "title": "records effect intents and outcomes"
     },
     {
       "source": "dispatch.coordinator.effects",
-      "target": "dispatch.coordinator.sourceReader",
-      "title": "confirms writes with fresh reads"
-    },
-    {
-      "source": "dispatch.coordinator.effects",
       "target": "github",
-      "title": "writes issues, PRs, and Projects"
+      "title": "writes and re-reads issues, PRs, and Projects"
     },
     {
       "source": "dispatch.coordinator.effects",
@@ -286,7 +280,7 @@
     {
       "source": "dispatch.coordinator.main",
       "target": "dispatch.coordinator.controller",
-      "title": "convenes, launches, resolves, and finishes"
+      "title": "directs the agenda and ticket launches"
     },
     {
       "source": "dispatch.coordinator.main",
@@ -296,7 +290,7 @@
     {
       "source": "dispatch.coordinator.seatHost",
       "target": "dispatch.coordinator.controller",
-      "title": "hands back submissions, verdicts, and escalations"
+      "title": "submits work, verdicts, and escalations"
     },
     {
       "source": "dispatch.coordinator.seatHost",
@@ -311,7 +305,7 @@
     {
       "source": "dispatch.coordinator.seatHost",
       "target": "github",
-      "title": "fetches code and pushes branches"
+      "title": "fetches and pushes code"
     },
     {
       "source": "dispatch.coordinator.seatHost",
@@ -322,6 +316,11 @@
       "source": "dispatch.coordinator.sourceReader",
       "target": "github",
       "title": "reads issues, PRs, checks, and Projects"
+    },
+    {
+      "source": "dispatch.coordinator.sourceReader",
+      "target": "meerkat",
+      "title": "reads configuration"
     },
     {
       "source": "dispatch.launcher",
@@ -341,22 +340,22 @@
     {
       "source": "meerkat",
       "target": "dispatch",
-      "title": "checks candidate configuration"
+      "title": "validates configuration edits"
     },
     {
       "source": "meerkat",
       "target": "dispatch.launcher",
-      "title": "checks candidate configuration"
+      "title": "validates configuration edits"
     },
     {
       "source": "operator",
       "target": "dispatch",
-      "title": "clicks launch links and directs delivery"
+      "title": "launches and directs deliveries"
     },
     {
       "source": "operator",
       "target": "dispatch.coordinator",
-      "title": "reviews status and directs Main"
+      "title": "reviews status and directs delivery"
     },
     {
       "source": "operator",
@@ -369,9 +368,14 @@
       "title": "clicks a launch link"
     },
     {
+      "source": "operator",
+      "target": "github",
+      "title": "writes issue trees"
+    },
+    {
       "source": "tern",
       "target": "dispatch",
-      "title": "runs the coordinator process"
+      "title": "runs delivery processes"
     },
     {
       "source": "tern",
