@@ -200,6 +200,7 @@ export default function dispatch(pi: ExtensionAPI): void {
 		label: tr("Dispatch", "调度"),
 		description:
 			"Main coordinates a durable ticket graph and launches each ticket once; Dispatch then relays its seats until Done, Escalated, or Asking (a work seat's question with the intent guardians, which resumes the worker on a reply or ends the ticket Replaced). Seats read one ticket and hand off with submit/verdict/escalate. GitHub writes are performed and freshly confirmed by the state machine.",
+		loadMode: "essential",
 		parameters: buildPublicGrammar(z).toolParametersSchema,
 		defaultInactive: true,
 		async execute(_id, params, _signal, _update, ctx) {

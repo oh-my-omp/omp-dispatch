@@ -201,7 +201,7 @@ function start(run: Run): void {
 		stderr = openSync(join(run.dir, `omp-${run.starts}.stderr.log`), "a");
 	// The injected provider failure must surface at once: omp's automatic retry would otherwise wait out its budget.
 	const config = join(run.dir, "omp-config.yml");
-	writeFileSync(config, `retry:\n  enabled: false\n${run.mcp ? "tools:\n  xdev: false\n" : ""}`);
+	writeFileSync(config, `retry:\n  enabled: false\n${run.mcp ? "tools:\n  commands: false\n" : ""}`);
 	const {
 		OMP_DISPATCH_DIR: _dir,
 		OMP_DISPATCH_RECOMPUTE_SECONDS: _interval,

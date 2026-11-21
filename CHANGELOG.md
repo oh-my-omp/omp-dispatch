@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Updated seat session contract recording to call `getMountedToolCommandNames()` for omp 19.1.0 compatibility
+- Declared `loadMode: "essential"` on the `dispatch` tool for Main and seats so it stays top-level when `tools.commands` is active
+
 ## [0.2.2] - 2026-11-20
 
 ### Changed

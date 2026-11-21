@@ -174,6 +174,7 @@ export function createHostPort(options: HostOptions): HostPort {
 					name: "dispatch",
 					label: tr("Dispatch", "调度"),
 					description: "Read or hand off only your bound ticket. A successful submit/verdict/escalate ends this seat.",
+					loadMode: "essential",
 					parameters: buildPublicGrammar(z).seatToolParametersSchema,
 					async execute(_id, params) {
 						if (handedOff) return { content: [{ type: "text", text: "This seat has already handed off." }], details: null, isError: true };
@@ -278,7 +279,7 @@ export function createHostPort(options: HostOptions): HostPort {
 					manager.appendCustomEntry("dispatch-session-contract", {
 						systemPrompt: created.session.systemPrompt,
 						tools,
-						mountedTools: created.session.getMountedXdevToolNames(),
+						mountedTools: created.session.getMountedToolCommandNames(),
 					});
 					manager.appendSessionInit({
 						systemPrompt: created.session.systemPrompt,
