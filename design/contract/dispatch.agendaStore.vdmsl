@@ -25,7 +25,7 @@ init s == s = mk_Effects({}, {|->})
 end
 
 operations
-  -- REQ-90
+  -- REQ-91
   -- A write is persisted as executing before it is performed; a write already executing or settled is never marked again.
   beginWrite(e : EffectId)
   ext rd outcomes
@@ -33,7 +33,7 @@ operations
   pre e not in set executing and e not in set dom outcomes
   post executing = executing~ union {e};
 
-  -- REQ-90
+  -- REQ-91
   -- An executing write settles exactly once with its outcome.
   settleWrite(e : EffectId, o : Outcome)
   ext wr executing, outcomes
