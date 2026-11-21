@@ -1,0 +1,135 @@
+-- Seat Bridge 这个盒子：席位交接与上报结算、规范印记有效性、未决上报集合以及兜底专属的不可实现门禁。
+-- 只写每个端口在数据上的前后条件；不停机拦截、席位退出、评审与规范裁决交错以及兜底仲裁的先后由 design/behavior 持有。
+-- 精度停在“交接与可受理上报才放行退出、运维裁决保留印记而规范裁决令旧印记失效、底层工程故障一律拒作不可实现依据”：
+-- 具体提示词、工具清单、git 差异与 GitHub 字段都不在这个盒子里展开。
+module dispatch_coordinator_bridge
+exports
+  types
+    SeatId; TicketId; ContractId;
+    struct Cause; struct ResolutionKind; struct GateReply
+  operations
+    registerTicket : TicketId * ContractId ==> ();
+    acceptWorkHandoff : SeatId * TicketId ==> ();
+    recordJudgeApproval : SeatId * TicketId * ContractId ==> GateReply;
+    submitEscalation : SeatId * TicketId * Cause ==> GateReply;
+    raiseEffectEscalation : TicketId ==> ();
+    resolveTicket : TicketId * ResolutionKind * ContractId ==> ();
+    authorizeMerge : TicketId ==> GateReply;
+    declareUnimplemented : TicketId * Cause * bool ==> GateReply
+definitions
+types
+  SeatId = token;
+  TicketId = token;
+  ContractId = token;
+  -- 故障归类：底层工程故障（CI 故障、测试抖动、上游代码缺陷、冲突或环境工具错误）与外部或架构级不可行原因。
+  Cause = <InfraFault> | <ContractOrExternal>;
+  -- 兜底裁决类型：不改规范契约的运维裁决，或改写规范契约与验收口径的规范裁决。
+  ResolutionKind = <Operational> | <Normative>;
+  -- 门禁对一次流转、评审或终判请求的答复。
+  GateReply = <Accepted> | <Rejected>;
+
+-- 工单当前规范契约、评审通过所锚定的规范契约、已完成有效交接的席位、待兜底仲裁的未决上报以及已终判不可实现的工单。
+state BridgeFacts of
+  contractOf       : map TicketId to ContractId
+  approvedContract : map TicketId to ContractId
+  handedOffSeats   : set of SeatId
+  openEscalations  : set of TicketId
+  unimplemented    : set of TicketId
+inv mk_BridgeFacts(co, ac, -, oe, un) ==
+  dom ac subset dom co and
+  oe subset dom co and
+  un subset dom co and
+  un inter oe = {} and
+  un inter dom ac = {} and
+  (forall t in set dom ac & ac(t) = co(t))
+init s == s = mk_BridgeFacts({|->}, {|->}, {}, {}, {})
+end
+
+operations
+  -- REQ-121
+  -- 为工单登记初始规范契约；同一工单至多登记一次。
+  registerTicket(t : TicketId, c : ContractId)
+  ext wr contractOf
+  pre t not in set dom contractOf
+  post contractOf = contractOf~ munion {t |-> c};
+
+  -- REQ-120
+  -- 受理工作席位的有效交接，记入已完成交接的席位集合以放行其退出。
+  acceptWorkHandoff(s : SeatId, t : TicketId)
+  ext rd contractOf, unimplemented
+      wr handedOffSeats
+  pre t in set dom contractOf and t not in set unimplemented and s not in set handedOffSeats
+  post handedOffSeats = handedOffSeats~ union {s};
+
+  -- REQ-120, REQ-121, REQ-123
+  -- 评审席位提交锚定在规范契约 c 上的通过结论：仅当 c 与工单当前规范契约一致时接纳并记录印记，过期契约一律拒绝。
+  recordJudgeApproval(s : SeatId, t : TicketId, c : ContractId) reply : GateReply
+  ext rd contractOf, unimplemented
+      wr approvedContract, handedOffSeats
+  pre t in set dom contractOf and t not in set unimplemented and s not in set handedOffSeats
+  post (t in set dom contractOf and contractOf(t) = c and reply = <Accepted> and
+        approvedContract = approvedContract~ ++ {t |-> c} and
+        handedOffSeats = handedOffSeats~ union {s}) or
+       (t in set dom contractOf and contractOf(t) <> c and reply = <Rejected> and
+        approvedContract = approvedContract~ and
+        handedOffSeats = handedOffSeats~);
+
+  -- REQ-120, REQ-122, REQ-123
+  -- 席位提交上报：底层工程故障一律拒绝且不放行退出；契约或外部原因予以受理并记入未决上报集合。
+  submitEscalation(s : SeatId, t : TicketId, cause : Cause) reply : GateReply
+  ext rd contractOf, unimplemented
+      wr handedOffSeats, openEscalations
+  pre t in set dom contractOf and t not in set unimplemented and s not in set handedOffSeats
+  post (cause = <ContractOrExternal> and reply = <Accepted> and
+        handedOffSeats = handedOffSeats~ union {s} and
+        openEscalations = openEscalations~ union {t}) or
+       (cause = <InfraFault> and reply = <Rejected> and
+        handedOffSeats = handedOffSeats~ and
+        openEscalations = openEscalations~);
+
+  -- REQ-121, REQ-123
+  -- 外部写入在重试后仍失败时，控制器将工单记入待兜底仲裁的未决上报，不清除既有评审印记。
+  raiseEffectEscalation(t : TicketId)
+  ext rd contractOf, unimplemented
+      wr openEscalations
+  pre t in set dom contractOf and t not in set unimplemented and t not in set openEscalations
+  post openEscalations = openEscalations~ union {t};
+
+  -- REQ-121, REQ-123
+  -- 兜底代理结算一次未决上报：运维裁决保持当前规范契约与已有评审印记不变；规范裁决更新规范契约并清除旧契约上的评审印记。
+  resolveTicket(t : TicketId, kind : ResolutionKind, nextContract : ContractId)
+  ext rd unimplemented
+      wr contractOf, approvedContract, openEscalations
+  pre t in set dom contractOf and t in set openEscalations and t not in set unimplemented and
+      ((kind = <Operational> and nextContract = contractOf(t)) or
+       (kind = <Normative> and nextContract <> contractOf(t)))
+  post openEscalations = openEscalations~ \ {t} and
+       ((kind = <Operational> and contractOf = contractOf~ and approvedContract = approvedContract~) or
+        (kind = <Normative> and contractOf = contractOf~ ++ {t |-> nextContract} and approvedContract = {t} <-: approvedContract~));
+
+  -- REQ-121
+  -- 合并门禁仅在工单持有当前规范契约上的评审通过印记、且既无未决上报也未终判不可实现时放行。
+  authorizeMerge(t : TicketId) reply : GateReply
+  ext rd contractOf, approvedContract, openEscalations, unimplemented
+  pre t in set dom contractOf
+  post (t in set dom contractOf and t in set dom approvedContract and approvedContract(t) = contractOf(t) and
+        t not in set openEscalations and t not in set unimplemented and reply = <Accepted>) or
+       ((t not in set dom contractOf or t not in set dom approvedContract or approvedContract(t) <> contractOf(t) or
+         t in set openEscalations or t in set unimplemented) and reply = <Rejected>);
+
+  -- REQ-122, REQ-123
+  -- 兜底代理专属的不可实现终判门禁：底层工程故障或尚未穷尽替代方案时一律拒绝；仅外部或架构级不可行且穷尽替代方案后方予接纳。
+  declareUnimplemented(t : TicketId, cause : Cause, alternativesExhausted : bool) reply : GateReply
+  ext rd contractOf
+      wr approvedContract, openEscalations, unimplemented
+  pre t in set openEscalations and t not in set unimplemented
+  post (cause = <ContractOrExternal> and alternativesExhausted and reply = <Accepted> and
+        openEscalations = openEscalations~ \ {t} and
+        approvedContract = {t} <-: approvedContract~ and
+        unimplemented = unimplemented~ union {t}) or
+       ((cause = <InfraFault> or not alternativesExhausted) and reply = <Rejected> and
+        openEscalations = openEscalations~ and
+        approvedContract = approvedContract~ and
+        unimplemented = unimplemented~);
+
+end dispatch_coordinator_bridge

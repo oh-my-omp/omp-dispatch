@@ -2,11 +2,7 @@ specification {
   element actor
   element system
   element container
-  element store {
-    style {
-      shape storage
-    }
-  }
+  element store
   element component
 
   tag external
@@ -18,126 +14,178 @@ specification {
 
 model {
   operator = actor 'Operator' {
-    description '在 GitHub 上写 issue 树、发起并指挥其交付的人'
+    description '在 GitHub 上编写 issue 树、发起交付并在必要时引导兜底裁决的人'
   }
 
   dispatch = system 'omp-dispatch' {
-    description '把一棵带依赖的 GitHub issue 树交付成已合并的 PR 与已关闭的 issue'
+    description '通过确定性工作流状态机、隔离席位与按需兜底仲裁将 GitHub issue 图交付为已合并的 PR 与已关闭的 issue'
 
     launcher = container 'Launcher' {
       technology '本机 HTTP 服务'
-      description '供协调者之外的调用方使用的本机 HTTP 入口；经终端前端启动协调者'
+      description '受理手动启动链接、带标签门控的 GitHub App 事件与配置校验，并经终端前端打开交付面板'
     }
 
     coordinator = container 'Coordinator' {
-      technology 'omp 进程'
-      description '运行一棵 issue 树的交付，借助 agent 会话让每个 issue 走完工作流'
+      technology 'Tern TSP 交付进程'
+      description '以程序化状态机编排一棵 issue 树的交付，管理停靠的席位窗格并在异常时唤醒兜底代理'
 
-      main = component 'Main' {
-        description '协调者的主会话：召集议程，决定每张工单何时发起，裁决上报'
+      surface = component 'Dispatch Surface' {
+        description '在 Tern 中渲染交付概览界面、管理停靠席位窗格并转交操作员对兜底代理的指示'
+        metadata {
+          group '控制面'
+        }
       }
       controller = component 'Workflow Controller' {
-        description '推动每个 issue、随后推动父 issue 走完工作流'
+        description '编译议程依赖图、自动推进工作流状态迁移并监测并行席位的工作区碰撞'
+        metadata {
+          group '控制面'
+        }
       }
-      seatHost = component 'Seat Host' {
-        description '在各自的检出里运行一次性的工作与评审会话，并收下它们的结果'
+      bridge = component 'Seat Bridge' {
+        #contract
+        description '向席位暴露按角色裁剪的流转工具桥，执行不停机退出拦截、立场隔离与规范印记门禁'
+        metadata {
+          group '控制面'
+        }
+      }
+      fallback = component 'Fallback Arbiter' {
+        description '作为星型拓扑唯一中枢按需处理建图修复、运维或规范裁决、修复工单注入与不可实现终判'
+        metadata {
+          group '控制面'
+        }
+      }
+      ompHost = component 'OMP Seat Host' {
+        description '以原生顶层 omp 进程在隔离工作区中运行席位，并按流转场景调度七种分叉模式'
+        metadata {
+          group '席位宿主'
+        }
+      }
+      oarHost = component 'OAR Seat Host' {
+        description '经 Open Agent Runtime 适配外部代理运行时的延后席位宿主'
+        metadata {
+          group '席位宿主'
+        }
       }
       sourceReader = component 'Source Reader' {
-        description '为工作流条件读取 GitHub 上的 issue、PR、检查与看板事实，以及 Meerkat 配置'
+        description '读取 GitHub 上的 issue、子议题、PR、检查与看板事实，以及 Meerkat 配置'
+        metadata {
+          group '外部端口'
+        }
       }
       effects = component 'Effect Executor' {
-        description '执行对 GitHub 与 Meerkat 的外部写入，并记录每次的结局'
+        description '执行对 GitHub 与 Meerkat 的外部写入并记录每次写入的来源确认结局'
+        metadata {
+          group '外部端口'
+        }
       }
     }
 
     agendaStore = store 'Agenda State' {
       #contract
       technology '本机状态文件'
-      description '交付进度与每次外部写入的权威记录'
+      description '交付议程、依赖图代次与每次外部写入的权威记录'
     }
 
     repoCache = store 'Repository Cache' {
       technology '本机 git 仓库'
-      description '每个仓库的本机克隆，以及由它派生的各会话检出'
+      description '每个仓库的本机裸克隆，以及由它派生的各席位独立工作区'
     }
 
     sessionStore = store 'Session Files' {
       technology 'omp 会话文件'
-      description 'agent 会话记录，同一 issue 的后续会话从这里接续'
+      description '原生席位会话记录与上下文快照，供同角色返工与分叉接续'
     }
   }
 
   github = system 'GitHub' {
     #external
-    description '托管 issue、PR、检查与项目看板，并投递 issue 事件的代码平台'
+    description '托管 issue 图、PR、检查与项目看板，并投递 issue 事件的代码平台'
   }
 
   tern = system 'Tern' {
     #external
-    description '在标签页里运行 omp-dispatch 交付进程的终端前端'
+    description '承载交付面板并管理停靠席位窗格的终端前端'
   }
 
   modelProvider = system 'Model Provider' {
     #external
-    description '为 omp-dispatch 生成回复的大模型服务'
+    description '为席位与兜底代理生成推理回复的大模型服务'
   }
 
   meerkat = system 'Meerkat' {
     #external
-    description '提供配置、并回答交付中提出的问题的外部协作系统'
+    description '提供配置并回答交付中提出的问题的外部协作系统'
+  }
+
+  oar = system 'OAR Runtimes' {
+    #external
+    description '经 Open Agent Runtime (botiverse/oar) 适配的外部 agent 运行时（延后实现）'
   }
 
   // 顶层
-  operator -> github '编写 issue 树'
-  operator -> tern '查看交付标签页'
-  operator -> dispatch '发起并指挥交付'
+  operator -> github '编写 issue 树与隐藏参数'
+  operator -> tern '查看交付面板并展开席位窗格'
+  operator -> dispatch '发起交付并引导兜底裁决'
   github -> dispatch '投递 issue 事件'
   meerkat -> dispatch '请求校验配置改动'
-  dispatch -> tern '打开交付标签页'
-  tern -> dispatch '运行交付进程'
-  dispatch -> github '读写 issue 与代码'
-  dispatch -> modelProvider '请求回复'
+  dispatch -> tern '打开交付面板并管理席位窗格'
+  tern -> dispatch '运行交付面板进程'
+  dispatch -> github '读写 issue、PR 与代码'
+  dispatch -> modelProvider '请求模型回复'
   dispatch -> meerkat '读取配置并提出问题'
+  dispatch -> oar '委派外部运行时席位'
 
   // dispatch 容器层
   operator -> dispatch.launcher '点击启动链接'
-  operator -> dispatch.coordinator '查看状态并指挥交付'
+  operator -> dispatch.coordinator '通过交付面板查看状态并下达兜底指示'
   github -> dispatch.launcher '投递 issue 事件'
   meerkat -> dispatch.launcher '请求校验配置改动'
-  dispatch.launcher -> tern '打开或聚焦协调者标签页'
-  tern -> dispatch.coordinator '运行协调者进程'
-  dispatch.coordinator -> github '读写 issue 与代码'
-  dispatch.coordinator -> modelProvider '请求回复'
+  dispatch.launcher -> tern '打开或聚焦交付面板'
+  tern -> dispatch.coordinator '运行交付面板进程'
+  dispatch.coordinator -> tern '渲染交付界面并管理停靠席位窗格'
+  dispatch.coordinator -> github '读写 issue、PR 与代码'
+  dispatch.coordinator -> modelProvider '请求模型回复'
   dispatch.coordinator -> meerkat '读取配置并提出问题'
+  dispatch.coordinator -> oar '委派外部运行时席位'
   dispatch.coordinator -> dispatch.agendaStore '持久化交付进度与外部写入'
   dispatch.coordinator -> dispatch.repoCache '更新克隆并检出工作区'
-  dispatch.coordinator -> dispatch.sessionStore '新建并接续会话'
+  dispatch.coordinator -> dispatch.sessionStore '新建并分叉席位会话'
 
   // coordinator 组件层
-  operator -> dispatch.coordinator.main '查看状态并下达指示'
-  tern -> dispatch.coordinator.main '运行主会话'
-  dispatch.coordinator.main -> modelProvider '请求主会话回复'
-  dispatch.coordinator.main -> dispatch.coordinator.controller '指挥议程与 issue 的发起'
-  dispatch.coordinator.controller -> dispatch.coordinator.main '为待决事项唤醒 Main'
-  dispatch.coordinator.controller -> dispatch.coordinator.seatHost '启动工作与评审会话'
-  dispatch.coordinator.seatHost -> dispatch.coordinator.controller '提交工作成果、评审结论与上报'
-  dispatch.coordinator.controller -> dispatch.coordinator.sourceReader '读取来源事实'
+  operator -> dispatch.coordinator.surface '查看进度并输入兜底指示'
+  tern -> dispatch.coordinator.surface '承载交付面板与交互事件'
+  dispatch.coordinator.surface -> tern '渲染面板并控制停靠席位窗格'
+  dispatch.coordinator.surface -> dispatch.coordinator.controller '读取议程与席位实时状态'
+  dispatch.coordinator.surface -> dispatch.coordinator.fallback '转交操作员对兜底代理的指示'
+  dispatch.coordinator.controller -> dispatch.coordinator.sourceReader '读取来源事实与子议题图'
   dispatch.coordinator.controller -> dispatch.coordinator.effects '请求外部写入'
-  dispatch.coordinator.controller -> dispatch.agendaStore '持久化交付进度'
+  dispatch.coordinator.controller -> dispatch.coordinator.bridge '校验流转门槛、印记与未决上报'
+  dispatch.coordinator.controller -> dispatch.coordinator.fallback '为建图缺陷、碰撞或未决上报唤醒兜底代理'
+  dispatch.coordinator.controller -> dispatch.coordinator.ompHost '启停原生 omp 席位'
+  dispatch.coordinator.controller -> dispatch.coordinator.oarHost '启停外部运行时席位'
+  dispatch.coordinator.controller -> dispatch.agendaStore '持久化议程与工作流进度'
+  dispatch.coordinator.ompHost -> dispatch.coordinator.bridge '通过受限工具桥提交交接、评审或上报'
+  dispatch.coordinator.oarHost -> dispatch.coordinator.bridge '通过受限工具桥提交交接、评审或上报'
+  dispatch.coordinator.fallback -> dispatch.coordinator.bridge '提交运维或规范裁决及不可实现终判'
+  dispatch.coordinator.bridge -> dispatch.coordinator.controller '交付已校验的流转与裁决'
+  dispatch.coordinator.fallback -> modelProvider '请求兜底推理回复'
+  dispatch.coordinator.ompHost -> dispatch.repoCache '更新克隆并检出工作区'
+  dispatch.coordinator.ompHost -> dispatch.sessionStore '新建并分叉席位会话'
+  dispatch.coordinator.ompHost -> modelProvider '请求席位模型回复'
+  dispatch.coordinator.ompHost -> github '拉取并推送代码分支'
+  dispatch.coordinator.ompHost -> tern '在停靠区创建或关闭席位窗格'
+  dispatch.coordinator.oarHost -> dispatch.repoCache '检出外部席位工作区'
+  dispatch.coordinator.oarHost -> oar '创建并驱动外部运行时会话'
+  dispatch.coordinator.sourceReader -> github '读取 issue、PR、检查与看板'
+  dispatch.coordinator.sourceReader -> meerkat '读取配置'
   dispatch.coordinator.effects -> dispatch.agendaStore '记录外部写入及其结局'
   dispatch.coordinator.effects -> github '写入 issue、PR 与看板'
   dispatch.coordinator.effects -> meerkat '发送提问请求'
-  dispatch.coordinator.sourceReader -> github '读取 issue、PR、检查与看板'
-  dispatch.coordinator.sourceReader -> meerkat '读取配置'
-  dispatch.coordinator.seatHost -> dispatch.repoCache '更新克隆并检出工作区'
-  dispatch.coordinator.seatHost -> dispatch.sessionStore '新建并接续会话'
-  dispatch.coordinator.seatHost -> modelProvider '请求会话回复'
-  dispatch.coordinator.seatHost -> github '拉取并推送代码'
 }
 
 deployment {
   host workstation '操作员本机' {
-    description '操作员的本机：运行启动器、协调者、终端前端、Meerkat 与全部本机状态'
+    description '操作员的本机：运行启动器、交付面板进程、终端前端、Meerkat、外部本地运行时与全部本机状态'
     instanceOf dispatch.launcher
     instanceOf dispatch.coordinator
     instanceOf dispatch.agendaStore
@@ -145,6 +193,7 @@ deployment {
     instanceOf dispatch.sessionStore
     instanceOf tern
     instanceOf meerkat
+    instanceOf oar
   }
   host internet '互联网服务' {
     #untrusted
@@ -169,7 +218,7 @@ views {
 
   view coordinatorView of dispatch.coordinator {
     title 'Coordinator 组件图'
-    description 'Coordinator 由哪些功能块组成，它们彼此以及与外部怎样调用'
+    description 'Coordinator 内部由哪些功能块组成，它们之间以及与外部怎样调用'
     include *
   }
 

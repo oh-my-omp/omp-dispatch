@@ -36,11 +36,14 @@
       "kind": "container",
       "parent": "dispatch",
       "children": [
+        "dispatch.coordinator.bridge",
         "dispatch.coordinator.controller",
         "dispatch.coordinator.effects",
-        "dispatch.coordinator.main",
-        "dispatch.coordinator.seatHost",
-        "dispatch.coordinator.sourceReader"
+        "dispatch.coordinator.fallback",
+        "dispatch.coordinator.oarHost",
+        "dispatch.coordinator.ompHost",
+        "dispatch.coordinator.sourceReader",
+        "dispatch.coordinator.surface"
       ],
       "tags": [],
       "group": null,
@@ -48,12 +51,26 @@
       "contract": null
     },
     {
+      "fqn": "dispatch.coordinator.bridge",
+      "kind": "component",
+      "parent": "dispatch.coordinator",
+      "children": [],
+      "tags": [
+        "contract"
+      ],
+      "group": "控制面",
+      "business": false,
+      "contract": {
+        "module": "dispatch_coordinator_bridge"
+      }
+    },
+    {
       "fqn": "dispatch.coordinator.controller",
       "kind": "component",
       "parent": "dispatch.coordinator",
       "children": [],
       "tags": [],
-      "group": null,
+      "group": "控制面",
       "business": false,
       "contract": null
     },
@@ -63,27 +80,37 @@
       "parent": "dispatch.coordinator",
       "children": [],
       "tags": [],
-      "group": null,
+      "group": "外部端口",
       "business": false,
       "contract": null
     },
     {
-      "fqn": "dispatch.coordinator.main",
+      "fqn": "dispatch.coordinator.fallback",
       "kind": "component",
       "parent": "dispatch.coordinator",
       "children": [],
       "tags": [],
-      "group": null,
+      "group": "控制面",
       "business": false,
       "contract": null
     },
     {
-      "fqn": "dispatch.coordinator.seatHost",
+      "fqn": "dispatch.coordinator.oarHost",
       "kind": "component",
       "parent": "dispatch.coordinator",
       "children": [],
       "tags": [],
-      "group": null,
+      "group": "席位宿主",
+      "business": false,
+      "contract": null
+    },
+    {
+      "fqn": "dispatch.coordinator.ompHost",
+      "kind": "component",
+      "parent": "dispatch.coordinator",
+      "children": [],
+      "tags": [],
+      "group": "席位宿主",
       "business": false,
       "contract": null
     },
@@ -93,7 +120,17 @@
       "parent": "dispatch.coordinator",
       "children": [],
       "tags": [],
-      "group": null,
+      "group": "外部端口",
+      "business": false,
+      "contract": null
+    },
+    {
+      "fqn": "dispatch.coordinator.surface",
+      "kind": "component",
+      "parent": "dispatch.coordinator",
+      "children": [],
+      "tags": [],
+      "group": "控制面",
       "business": false,
       "contract": null
     },
@@ -164,6 +201,18 @@
       "contract": null
     },
     {
+      "fqn": "oar",
+      "kind": "system",
+      "parent": null,
+      "children": [],
+      "tags": [
+        "external"
+      ],
+      "group": null,
+      "business": false,
+      "contract": null
+    },
+    {
       "fqn": "operator",
       "kind": "actor",
       "parent": null,
@@ -190,7 +239,7 @@
     {
       "source": "dispatch",
       "target": "github",
-      "title": "读写 issue 与代码"
+      "title": "读写 issue、PR 与代码"
     },
     {
       "source": "dispatch",
@@ -200,12 +249,17 @@
     {
       "source": "dispatch",
       "target": "modelProvider",
-      "title": "请求回复"
+      "title": "请求模型回复"
+    },
+    {
+      "source": "dispatch",
+      "target": "oar",
+      "title": "委派外部运行时席位"
     },
     {
       "source": "dispatch",
       "target": "tern",
-      "title": "打开交付标签页"
+      "title": "打开交付面板并管理席位窗格"
     },
     {
       "source": "dispatch.coordinator",
@@ -220,12 +274,12 @@
     {
       "source": "dispatch.coordinator",
       "target": "dispatch.sessionStore",
-      "title": "新建并接续会话"
+      "title": "新建并分叉席位会话"
     },
     {
       "source": "dispatch.coordinator",
       "target": "github",
-      "title": "读写 issue 与代码"
+      "title": "读写 issue、PR 与代码"
     },
     {
       "source": "dispatch.coordinator",
@@ -235,12 +289,32 @@
     {
       "source": "dispatch.coordinator",
       "target": "modelProvider",
-      "title": "请求回复"
+      "title": "请求模型回复"
+    },
+    {
+      "source": "dispatch.coordinator",
+      "target": "oar",
+      "title": "委派外部运行时席位"
+    },
+    {
+      "source": "dispatch.coordinator",
+      "target": "tern",
+      "title": "渲染交付界面并管理停靠席位窗格"
+    },
+    {
+      "source": "dispatch.coordinator.bridge",
+      "target": "dispatch.coordinator.controller",
+      "title": "交付已校验的流转与裁决"
     },
     {
       "source": "dispatch.coordinator.controller",
       "target": "dispatch.agendaStore",
-      "title": "持久化交付进度"
+      "title": "持久化议程与工作流进度"
+    },
+    {
+      "source": "dispatch.coordinator.controller",
+      "target": "dispatch.coordinator.bridge",
+      "title": "校验流转门槛、印记与未决上报"
     },
     {
       "source": "dispatch.coordinator.controller",
@@ -249,18 +323,23 @@
     },
     {
       "source": "dispatch.coordinator.controller",
-      "target": "dispatch.coordinator.main",
-      "title": "为待决事项唤醒 Main"
+      "target": "dispatch.coordinator.fallback",
+      "title": "为建图缺陷、碰撞或未决上报唤醒兜底代理"
     },
     {
       "source": "dispatch.coordinator.controller",
-      "target": "dispatch.coordinator.seatHost",
-      "title": "启动工作与评审会话"
+      "target": "dispatch.coordinator.oarHost",
+      "title": "启停外部运行时席位"
+    },
+    {
+      "source": "dispatch.coordinator.controller",
+      "target": "dispatch.coordinator.ompHost",
+      "title": "启停原生 omp 席位"
     },
     {
       "source": "dispatch.coordinator.controller",
       "target": "dispatch.coordinator.sourceReader",
-      "title": "读取来源事实"
+      "title": "读取来源事实与子议题图"
     },
     {
       "source": "dispatch.coordinator.effects",
@@ -278,39 +357,59 @@
       "title": "发送提问请求"
     },
     {
-      "source": "dispatch.coordinator.main",
-      "target": "dispatch.coordinator.controller",
-      "title": "指挥议程与 issue 的发起"
+      "source": "dispatch.coordinator.fallback",
+      "target": "dispatch.coordinator.bridge",
+      "title": "提交运维或规范裁决及不可实现终判"
     },
     {
-      "source": "dispatch.coordinator.main",
+      "source": "dispatch.coordinator.fallback",
       "target": "modelProvider",
-      "title": "请求主会话回复"
+      "title": "请求兜底推理回复"
     },
     {
-      "source": "dispatch.coordinator.seatHost",
-      "target": "dispatch.coordinator.controller",
-      "title": "提交工作成果、评审结论与上报"
+      "source": "dispatch.coordinator.oarHost",
+      "target": "dispatch.coordinator.bridge",
+      "title": "通过受限工具桥提交交接、评审或上报"
     },
     {
-      "source": "dispatch.coordinator.seatHost",
+      "source": "dispatch.coordinator.oarHost",
+      "target": "dispatch.repoCache",
+      "title": "检出外部席位工作区"
+    },
+    {
+      "source": "dispatch.coordinator.oarHost",
+      "target": "oar",
+      "title": "创建并驱动外部运行时会话"
+    },
+    {
+      "source": "dispatch.coordinator.ompHost",
+      "target": "dispatch.coordinator.bridge",
+      "title": "通过受限工具桥提交交接、评审或上报"
+    },
+    {
+      "source": "dispatch.coordinator.ompHost",
       "target": "dispatch.repoCache",
       "title": "更新克隆并检出工作区"
     },
     {
-      "source": "dispatch.coordinator.seatHost",
+      "source": "dispatch.coordinator.ompHost",
       "target": "dispatch.sessionStore",
-      "title": "新建并接续会话"
+      "title": "新建并分叉席位会话"
     },
     {
-      "source": "dispatch.coordinator.seatHost",
+      "source": "dispatch.coordinator.ompHost",
       "target": "github",
-      "title": "拉取并推送代码"
+      "title": "拉取并推送代码分支"
     },
     {
-      "source": "dispatch.coordinator.seatHost",
+      "source": "dispatch.coordinator.ompHost",
       "target": "modelProvider",
-      "title": "请求会话回复"
+      "title": "请求席位模型回复"
+    },
+    {
+      "source": "dispatch.coordinator.ompHost",
+      "target": "tern",
+      "title": "在停靠区创建或关闭席位窗格"
     },
     {
       "source": "dispatch.coordinator.sourceReader",
@@ -323,9 +422,24 @@
       "title": "读取配置"
     },
     {
+      "source": "dispatch.coordinator.surface",
+      "target": "dispatch.coordinator.controller",
+      "title": "读取议程与席位实时状态"
+    },
+    {
+      "source": "dispatch.coordinator.surface",
+      "target": "dispatch.coordinator.fallback",
+      "title": "转交操作员对兜底代理的指示"
+    },
+    {
+      "source": "dispatch.coordinator.surface",
+      "target": "tern",
+      "title": "渲染面板并控制停靠席位窗格"
+    },
+    {
       "source": "dispatch.launcher",
       "target": "tern",
-      "title": "打开或聚焦协调者标签页"
+      "title": "打开或聚焦交付面板"
     },
     {
       "source": "github",
@@ -350,17 +464,17 @@
     {
       "source": "operator",
       "target": "dispatch",
-      "title": "发起并指挥交付"
+      "title": "发起交付并引导兜底裁决"
     },
     {
       "source": "operator",
       "target": "dispatch.coordinator",
-      "title": "查看状态并指挥交付"
+      "title": "通过交付面板查看状态并下达兜底指示"
     },
     {
       "source": "operator",
-      "target": "dispatch.coordinator.main",
-      "title": "查看状态并下达指示"
+      "target": "dispatch.coordinator.surface",
+      "title": "查看进度并输入兜底指示"
     },
     {
       "source": "operator",
@@ -370,27 +484,27 @@
     {
       "source": "operator",
       "target": "github",
-      "title": "编写 issue 树"
+      "title": "编写 issue 树与隐藏参数"
     },
     {
       "source": "operator",
       "target": "tern",
-      "title": "查看交付标签页"
+      "title": "查看交付面板并展开席位窗格"
     },
     {
       "source": "tern",
       "target": "dispatch",
-      "title": "运行交付进程"
+      "title": "运行交付面板进程"
     },
     {
       "source": "tern",
       "target": "dispatch.coordinator",
-      "title": "运行协调者进程"
+      "title": "运行交付面板进程"
     },
     {
       "source": "tern",
-      "target": "dispatch.coordinator.main",
-      "title": "运行主会话"
+      "target": "dispatch.coordinator.surface",
+      "title": "承载交付面板与交互事件"
     }
   ],
   "views": [
@@ -400,16 +514,20 @@
       "nodes": [
         "dispatch.agendaStore",
         "dispatch.coordinator",
+        "dispatch.coordinator.bridge",
         "dispatch.coordinator.controller",
         "dispatch.coordinator.effects",
-        "dispatch.coordinator.main",
-        "dispatch.coordinator.seatHost",
+        "dispatch.coordinator.fallback",
+        "dispatch.coordinator.oarHost",
+        "dispatch.coordinator.ompHost",
         "dispatch.coordinator.sourceReader",
+        "dispatch.coordinator.surface",
         "dispatch.repoCache",
         "dispatch.sessionStore",
         "github",
         "meerkat",
         "modelProvider",
+        "oar",
         "operator",
         "tern"
       ]
@@ -427,6 +545,7 @@
         "github",
         "meerkat",
         "modelProvider",
+        "oar",
         "operator",
         "tern"
       ]
@@ -439,6 +558,7 @@
         "github",
         "meerkat",
         "modelProvider",
+        "oar",
         "operator",
         "tern"
       ]
