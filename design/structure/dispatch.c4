@@ -26,21 +26,21 @@ model {
 
     launcher = container 'Launcher' {
       technology 'Local HTTP service'
-      description 'Local HTTP entry for callers outside any coordinator: starts coordinators on launch-link clicks and issue-event deliveries, and validates Meerkat configuration edits'
+      description 'Local HTTP entry for callers outside any coordinator; starts coordinators through the terminal frontend'
     }
 
     coordinator = container 'Coordinator' {
-      technology 'omp process with the dispatch extension'
-      description 'Runs the delivery of one issue tree, moving every ticket through its workflow with agent sessions'
+      technology 'omp process'
+      description 'Runs the delivery of one issue tree, moving each issue through its workflow with agent sessions'
 
       main = component 'Main' {
         description 'Coordinator main session that convenes the agenda, decides when each ticket launches, and rules on escalations'
       }
       controller = component 'Workflow Controller' {
-        description 'Advances tickets and the parent closure through the workflow and wakes Main for open decisions'
+        description 'Advances each issue, and then the parent issue, through the workflow'
       }
       seatHost = component 'Seat Host' {
-        description 'Runs one-shot work and judge seat sessions in their own checkouts and accepts their handoffs'
+        description 'Runs one-shot work and review sessions in their own checkouts and accepts their results'
       }
       sourceReader = component 'Source Reader' {
         description 'Reads issue, PR, check, and Project facts from GitHub and Meerkat configuration for workflow conditions'
@@ -63,7 +63,7 @@ model {
 
     sessionStore = store 'Session Files' {
       technology 'omp session files'
-      description 'Agent session transcripts that later sessions for the same ticket continue from'
+      description 'Agent session transcripts that later sessions for the same issue continue from'
     }
   }
 
@@ -79,12 +79,12 @@ model {
 
   modelProvider = system 'Model Provider' {
     #external
-    description 'Large language model service answering the agent sessions omp-dispatch runs'
+    description 'Large language model service that answers omp-dispatch'
   }
 
   meerkat = system 'Meerkat' {
     #external
-    description 'External collaboration system that supplies configuration and settles owner questions'
+    description 'External collaboration system that supplies configuration and answers questions raised during delivery'
   }
 
   // context
@@ -117,9 +117,9 @@ model {
   operator -> dispatch.coordinator.main 'reviews status and gives directions'
   tern -> dispatch.coordinator.main 'runs the main session'
   dispatch.coordinator.main -> modelProvider 'requests main-session replies'
-  dispatch.coordinator.main -> dispatch.coordinator.controller 'directs the agenda and ticket launches'
+  dispatch.coordinator.main -> dispatch.coordinator.controller 'directs the agenda and issue launches'
   dispatch.coordinator.controller -> dispatch.coordinator.main 'wakes Main for open decisions'
-  dispatch.coordinator.controller -> dispatch.coordinator.seatHost 'seats work and judge roles'
+  dispatch.coordinator.controller -> dispatch.coordinator.seatHost 'starts work and review sessions'
   dispatch.coordinator.seatHost -> dispatch.coordinator.controller 'submits work, verdicts, and escalations'
   dispatch.coordinator.controller -> dispatch.coordinator.sourceReader 'reads source facts'
   dispatch.coordinator.controller -> dispatch.coordinator.effects 'requests external writes'
@@ -129,9 +129,9 @@ model {
   dispatch.coordinator.effects -> meerkat 'sends question requests'
   dispatch.coordinator.sourceReader -> github 'reads issues, PRs, checks, and Projects'
   dispatch.coordinator.sourceReader -> meerkat 'reads configuration'
-  dispatch.coordinator.seatHost -> dispatch.repoCache 'updates clones and checks out seat workspaces'
-  dispatch.coordinator.seatHost -> dispatch.sessionStore 'creates and continues seat sessions'
-  dispatch.coordinator.seatHost -> modelProvider 'requests seat replies'
+  dispatch.coordinator.seatHost -> dispatch.repoCache 'updates clones and checks out workspaces'
+  dispatch.coordinator.seatHost -> dispatch.sessionStore 'creates and continues sessions'
+  dispatch.coordinator.seatHost -> modelProvider 'requests session replies'
   dispatch.coordinator.seatHost -> github 'fetches and pushes code'
 }
 

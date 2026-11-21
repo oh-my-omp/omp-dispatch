@@ -255,7 +255,7 @@
     {
       "source": "dispatch.coordinator.controller",
       "target": "dispatch.coordinator.seatHost",
-      "title": "seats work and judge roles"
+      "title": "starts work and review sessions"
     },
     {
       "source": "dispatch.coordinator.controller",
@@ -280,7 +280,7 @@
     {
       "source": "dispatch.coordinator.main",
       "target": "dispatch.coordinator.controller",
-      "title": "directs the agenda and ticket launches"
+      "title": "directs the agenda and issue launches"
     },
     {
       "source": "dispatch.coordinator.main",
@@ -295,12 +295,12 @@
     {
       "source": "dispatch.coordinator.seatHost",
       "target": "dispatch.repoCache",
-      "title": "updates clones and checks out seat workspaces"
+      "title": "updates clones and checks out workspaces"
     },
     {
       "source": "dispatch.coordinator.seatHost",
       "target": "dispatch.sessionStore",
-      "title": "creates and continues seat sessions"
+      "title": "creates and continues sessions"
     },
     {
       "source": "dispatch.coordinator.seatHost",
@@ -310,7 +310,7 @@
     {
       "source": "dispatch.coordinator.seatHost",
       "target": "modelProvider",
-      "title": "requests seat replies"
+      "title": "requests session replies"
     },
     {
       "source": "dispatch.coordinator.sourceReader",
