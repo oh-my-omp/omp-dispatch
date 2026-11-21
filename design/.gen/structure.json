@@ -1,0 +1,438 @@
+{
+  "generatedBy": "ssot gen",
+  "elements": [
+    {
+      "fqn": "dispatch",
+      "kind": "system",
+      "parent": null,
+      "children": [
+        "dispatch.agendaStore",
+        "dispatch.coordinator",
+        "dispatch.launcher",
+        "dispatch.repoCache",
+        "dispatch.sessionStore"
+      ],
+      "tags": [],
+      "group": null,
+      "business": false,
+      "contract": null
+    },
+    {
+      "fqn": "dispatch.agendaStore",
+      "kind": "store",
+      "parent": "dispatch",
+      "children": [],
+      "tags": [],
+      "group": null,
+      "business": false,
+      "contract": null
+    },
+    {
+      "fqn": "dispatch.coordinator",
+      "kind": "container",
+      "parent": "dispatch",
+      "children": [
+        "dispatch.coordinator.controller",
+        "dispatch.coordinator.effects",
+        "dispatch.coordinator.main",
+        "dispatch.coordinator.seatHost",
+        "dispatch.coordinator.sourceReader"
+      ],
+      "tags": [],
+      "group": null,
+      "business": false,
+      "contract": null
+    },
+    {
+      "fqn": "dispatch.coordinator.controller",
+      "kind": "component",
+      "parent": "dispatch.coordinator",
+      "children": [],
+      "tags": [],
+      "group": null,
+      "business": false,
+      "contract": null
+    },
+    {
+      "fqn": "dispatch.coordinator.effects",
+      "kind": "component",
+      "parent": "dispatch.coordinator",
+      "children": [],
+      "tags": [],
+      "group": null,
+      "business": false,
+      "contract": null
+    },
+    {
+      "fqn": "dispatch.coordinator.main",
+      "kind": "component",
+      "parent": "dispatch.coordinator",
+      "children": [],
+      "tags": [],
+      "group": null,
+      "business": false,
+      "contract": null
+    },
+    {
+      "fqn": "dispatch.coordinator.seatHost",
+      "kind": "component",
+      "parent": "dispatch.coordinator",
+      "children": [],
+      "tags": [],
+      "group": null,
+      "business": false,
+      "contract": null
+    },
+    {
+      "fqn": "dispatch.coordinator.sourceReader",
+      "kind": "component",
+      "parent": "dispatch.coordinator",
+      "children": [],
+      "tags": [],
+      "group": null,
+      "business": false,
+      "contract": null
+    },
+    {
+      "fqn": "dispatch.launcher",
+      "kind": "container",
+      "parent": "dispatch",
+      "children": [],
+      "tags": [],
+      "group": null,
+      "business": false,
+      "contract": null
+    },
+    {
+      "fqn": "dispatch.repoCache",
+      "kind": "store",
+      "parent": "dispatch",
+      "children": [],
+      "tags": [],
+      "group": null,
+      "business": false,
+      "contract": null
+    },
+    {
+      "fqn": "dispatch.sessionStore",
+      "kind": "store",
+      "parent": "dispatch",
+      "children": [],
+      "tags": [],
+      "group": null,
+      "business": false,
+      "contract": null
+    },
+    {
+      "fqn": "github",
+      "kind": "system",
+      "parent": null,
+      "children": [],
+      "tags": [
+        "external"
+      ],
+      "group": null,
+      "business": false,
+      "contract": null
+    },
+    {
+      "fqn": "meerkat",
+      "kind": "system",
+      "parent": null,
+      "children": [],
+      "tags": [
+        "external"
+      ],
+      "group": null,
+      "business": false,
+      "contract": null
+    },
+    {
+      "fqn": "modelProvider",
+      "kind": "system",
+      "parent": null,
+      "children": [],
+      "tags": [
+        "external"
+      ],
+      "group": null,
+      "business": false,
+      "contract": null
+    },
+    {
+      "fqn": "operator",
+      "kind": "actor",
+      "parent": null,
+      "children": [],
+      "tags": [],
+      "group": null,
+      "business": false,
+      "contract": null
+    },
+    {
+      "fqn": "tern",
+      "kind": "system",
+      "parent": null,
+      "children": [],
+      "tags": [
+        "external"
+      ],
+      "group": null,
+      "business": false,
+      "contract": null
+    }
+  ],
+  "relations": [
+    {
+      "source": "dispatch",
+      "target": "github",
+      "title": "reads and writes issues, PRs, and Projects, and syncs code"
+    },
+    {
+      "source": "dispatch",
+      "target": "meerkat",
+      "title": "reads configuration and submits questions"
+    },
+    {
+      "source": "dispatch",
+      "target": "modelProvider",
+      "title": "requests model replies"
+    },
+    {
+      "source": "dispatch",
+      "target": "tern",
+      "title": "opens or focuses a coordinator tab"
+    },
+    {
+      "source": "dispatch.coordinator",
+      "target": "dispatch.agendaStore",
+      "title": "persists agendas and effect intents"
+    },
+    {
+      "source": "dispatch.coordinator",
+      "target": "dispatch.repoCache",
+      "title": "updates clones and checks out seat workspaces"
+    },
+    {
+      "source": "dispatch.coordinator",
+      "target": "dispatch.sessionStore",
+      "title": "creates and forks seat sessions"
+    },
+    {
+      "source": "dispatch.coordinator",
+      "target": "github",
+      "title": "reads and writes issues, PRs, and Projects, and syncs code"
+    },
+    {
+      "source": "dispatch.coordinator",
+      "target": "meerkat",
+      "title": "reads configuration and submits questions"
+    },
+    {
+      "source": "dispatch.coordinator",
+      "target": "modelProvider",
+      "title": "requests model replies"
+    },
+    {
+      "source": "dispatch.coordinator.controller",
+      "target": "dispatch.agendaStore",
+      "title": "persists agendas and state transitions"
+    },
+    {
+      "source": "dispatch.coordinator.controller",
+      "target": "dispatch.coordinator.effects",
+      "title": "requests external writes"
+    },
+    {
+      "source": "dispatch.coordinator.controller",
+      "target": "dispatch.coordinator.main",
+      "title": "wakes it for open decisions"
+    },
+    {
+      "source": "dispatch.coordinator.controller",
+      "target": "dispatch.coordinator.seatHost",
+      "title": "seats work and judge roles"
+    },
+    {
+      "source": "dispatch.coordinator.controller",
+      "target": "dispatch.coordinator.sourceReader",
+      "title": "reads source facts"
+    },
+    {
+      "source": "dispatch.coordinator.controller",
+      "target": "meerkat",
+      "title": "reads Meerkat configuration"
+    },
+    {
+      "source": "dispatch.coordinator.effects",
+      "target": "dispatch.agendaStore",
+      "title": "records effect intents and outcomes"
+    },
+    {
+      "source": "dispatch.coordinator.effects",
+      "target": "dispatch.coordinator.sourceReader",
+      "title": "confirms writes with fresh reads"
+    },
+    {
+      "source": "dispatch.coordinator.effects",
+      "target": "github",
+      "title": "writes issues, PRs, and Projects"
+    },
+    {
+      "source": "dispatch.coordinator.effects",
+      "target": "meerkat",
+      "title": "sends question requests"
+    },
+    {
+      "source": "dispatch.coordinator.main",
+      "target": "dispatch.coordinator.controller",
+      "title": "convenes, launches, resolves, and finishes"
+    },
+    {
+      "source": "dispatch.coordinator.main",
+      "target": "modelProvider",
+      "title": "requests main-session replies"
+    },
+    {
+      "source": "dispatch.coordinator.seatHost",
+      "target": "dispatch.coordinator.controller",
+      "title": "hands back submissions, verdicts, and escalations"
+    },
+    {
+      "source": "dispatch.coordinator.seatHost",
+      "target": "dispatch.repoCache",
+      "title": "updates clones and checks out seat workspaces"
+    },
+    {
+      "source": "dispatch.coordinator.seatHost",
+      "target": "dispatch.sessionStore",
+      "title": "creates and forks seat sessions"
+    },
+    {
+      "source": "dispatch.coordinator.seatHost",
+      "target": "github",
+      "title": "fetches code and pushes branches"
+    },
+    {
+      "source": "dispatch.coordinator.seatHost",
+      "target": "modelProvider",
+      "title": "requests seat replies"
+    },
+    {
+      "source": "dispatch.coordinator.sourceReader",
+      "target": "github",
+      "title": "reads issues, PRs, checks, and Projects"
+    },
+    {
+      "source": "dispatch.launcher",
+      "target": "tern",
+      "title": "opens or focuses a coordinator tab"
+    },
+    {
+      "source": "github",
+      "target": "dispatch",
+      "title": "delivers issue events"
+    },
+    {
+      "source": "github",
+      "target": "dispatch.launcher",
+      "title": "delivers issue events"
+    },
+    {
+      "source": "meerkat",
+      "target": "dispatch",
+      "title": "checks candidate configuration"
+    },
+    {
+      "source": "meerkat",
+      "target": "dispatch.launcher",
+      "title": "checks candidate configuration"
+    },
+    {
+      "source": "operator",
+      "target": "dispatch",
+      "title": "clicks launch links and directs delivery"
+    },
+    {
+      "source": "operator",
+      "target": "dispatch.coordinator",
+      "title": "reviews status and directs Main"
+    },
+    {
+      "source": "operator",
+      "target": "dispatch.coordinator.main",
+      "title": "reviews status and gives directions"
+    },
+    {
+      "source": "operator",
+      "target": "dispatch.launcher",
+      "title": "clicks a launch link"
+    },
+    {
+      "source": "tern",
+      "target": "dispatch",
+      "title": "runs the coordinator process"
+    },
+    {
+      "source": "tern",
+      "target": "dispatch.coordinator",
+      "title": "runs the coordinator process"
+    },
+    {
+      "source": "tern",
+      "target": "dispatch.coordinator.main",
+      "title": "runs the main session"
+    }
+  ],
+  "views": [
+    {
+      "id": "coordinatorView",
+      "of": "dispatch.coordinator",
+      "nodes": [
+        "dispatch.agendaStore",
+        "dispatch.coordinator",
+        "dispatch.coordinator.controller",
+        "dispatch.coordinator.effects",
+        "dispatch.coordinator.main",
+        "dispatch.coordinator.seatHost",
+        "dispatch.coordinator.sourceReader",
+        "dispatch.repoCache",
+        "dispatch.sessionStore",
+        "github",
+        "meerkat",
+        "modelProvider",
+        "operator",
+        "tern"
+      ]
+    },
+    {
+      "id": "dispatchView",
+      "of": "dispatch",
+      "nodes": [
+        "dispatch",
+        "dispatch.agendaStore",
+        "dispatch.coordinator",
+        "dispatch.launcher",
+        "dispatch.repoCache",
+        "dispatch.sessionStore",
+        "github",
+        "meerkat",
+        "modelProvider",
+        "operator",
+        "tern"
+      ]
+    },
+    {
+      "id": "index",
+      "of": null,
+      "nodes": [
+        "dispatch",
+        "github",
+        "meerkat",
+        "modelProvider",
+        "operator",
+        "tern"
+      ]
+    }
+  ]
+}
