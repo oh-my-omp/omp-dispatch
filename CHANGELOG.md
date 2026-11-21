@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-11-22
+
 ### Fixed
 
 - Updated seat session contract recording to call `getMountedToolCommandNames()` for omp 19.1.0 compatibility
