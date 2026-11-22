@@ -2,12 +2,13 @@ import { randomUUID } from "node:crypto";
 import { access, mkdir, readdir, rm } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { z } from "@oh-my-pi/omptype/zod";
+// Compiled omp 19.1.0 exposes createAgentSession via the root shim, not a virtual @oh-my-pi/pi-coding-agent/sdk entry.
+import { createAgentSession } from "@oh-my-pi/pi-coding-agent";
 import { resolveAgentModelSelection } from "@oh-my-pi/pi-coding-agent/config/model-resolver";
 import type { ToolDefinition } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/types";
 import { MCPManager } from "@oh-my-pi/pi-coding-agent/mcp/manager";
 import { initializeExtensions } from "@oh-my-pi/pi-coding-agent/modes/runtime-init";
 import { AgentRegistry, MAIN_AGENT_ID } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
-import { createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { isLocalAgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session-handle";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
