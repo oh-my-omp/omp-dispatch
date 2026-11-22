@@ -1,12 +1,14 @@
 import { randomUUID } from "node:crypto";
 import { access, mkdir, readdir, rm } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
-import { type AgentSession, createAgentSession, z } from "@oh-my-pi/pi-coding-agent";
+import { z } from "@oh-my-pi/omptype/zod";
 import { resolveAgentModelSelection } from "@oh-my-pi/pi-coding-agent/config/model-resolver";
 import type { ToolDefinition } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/types";
 import { MCPManager } from "@oh-my-pi/pi-coding-agent/mcp/manager";
 import { initializeExtensions } from "@oh-my-pi/pi-coding-agent/modes/runtime-init";
 import { AgentRegistry, MAIN_AGENT_ID } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
+import { createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
+import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { isLocalAgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session-handle";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { discoverAgents, getAgent } from "@oh-my-pi/pi-coding-agent/task/discovery";
@@ -14,8 +16,8 @@ import { followMCPTools, type MCPToolFollower } from "@oh-my-pi/pi-coding-agent/
 import { cfgTaskAgentModelOverrides, cfgTaskDisabledAgents } from "@oh-my-pi/pi-coding-agent/task/settings";
 import { USER_TODO_EDIT_CUSTOM_TYPE } from "@oh-my-pi/pi-coding-agent/tools/todo";
 import { tr } from "../../omomp-shared/i18n.ts";
-import type { Caller, PortInput, Result } from "../domain/model.ts";
-import { parseSeatToolParameters } from "../domain/parse.ts";
+import type { Caller, ParseError, PortInput, Result } from "../domain/model.ts";
+import { parseSeatEscalateParameters, parseSeatSubmitParameters, parseSeatVerdictParameters } from "../domain/parse.ts";
 import { buildPublicGrammar } from "../domain/public-grammar.ts";
 import { ASKING } from "../domain/workflow.ts";
 import type { ControllerOutput, RuntimeError } from "../runtime/controller.ts";
@@ -92,6 +94,55 @@ export function createHostPort(options: HostOptions): HostPort {
 					role: seat.input.role,
 				},
 			};
+		},
+		resolveCaller(context) {
+			const sessionId = context?.sessionId ?? context?.session?.getSessionId?.();
+			const sessionFile = context?.sessionFile ?? context?.session?.getSessionFile?.() ?? undefined;
+			if (!sessionId && !sessionFile) return { ok: false, error: { kind: "precondition", message: "Caller session identity is missing" } };
+			try {
+				const root = main();
+				const mainId = root.sessionManager.getSessionId();
+				const mainFile = root.sessionManager.getSessionFile() ?? null;
+				if ((sessionId && sessionId === mainId) || (sessionFile && mainFile && sessionFile === mainFile)) {
+					return {
+						ok: true,
+						value: {
+							kind: "main",
+							caller: { kind: "main", agentId: MAIN_AGENT_ID, sessionId: mainId, sessionFile: mainFile },
+						},
+					};
+				}
+			} catch {
+				// Fall through to check live seat sessions.
+			}
+			for (const [agentId, live] of seats) {
+				const liveSession = live.session;
+				if (!liveSession) continue;
+				const liveId = liveSession.sessionManager.getSessionId();
+				const liveFile = liveSession.sessionManager.getSessionFile();
+				if (!liveFile) continue;
+				if ((sessionId && sessionId === liveId) || (sessionFile && sessionFile === liveFile)) {
+					return {
+						ok: true,
+						value: {
+							kind: "seat",
+							seat: {
+								caller: {
+									kind: "seat",
+									agentId,
+									sessionId: liveId,
+									sessionFile: liveFile,
+									ticketId: live.input.ticketId,
+									revision: live.input.revision,
+									role: live.input.role,
+								},
+								brief: live.input.prompt,
+							},
+						},
+					};
+				}
+			}
+			return { ok: false, error: { kind: "precondition", message: "Caller is not a Dispatch coordinator or bound ticket seat" } };
 		},
 		async agents(cwd, names) {
 			try {
@@ -170,40 +221,78 @@ export function createHostPort(options: HostOptions): HostPort {
 					role: input.role,
 				};
 				const nativeManager = manager;
-				const tool: ToolDefinition = {
-					name: "dispatch",
-					label: tr("Dispatch", "调度"),
-					description: "Read or hand off only your bound ticket. A successful submit/verdict/escalate ends this seat.",
-					loadMode: "essential",
-					parameters: buildPublicGrammar(z).seatToolParametersSchema,
-					async execute(_id, params) {
-						if (handedOff) return { content: [{ type: "text", text: "This seat has already handed off." }], details: null, isError: true };
-						const current = registry.get(id);
-						if (!current?.session || current.session !== seat.session)
-							return { content: [{ type: "text", text: "Native seat identity changed." }], details: null, isError: true };
-						const parsed = parseSeatToolParameters(params);
-						if (!parsed.ok) return { content: [{ type: "text", text: JSON.stringify(parsed.error) }], details: null, isError: true };
-						const response = await options.execute(caller, parsed.value.input);
-						if (response.ok && ["submit", "verdict", "escalate"].includes(parsed.value.input.op)) {
-							handedOff = true;
-							if (input.seat === "work" && "ticket" in response.value && "sessions" in response.value.ticket) {
-								nativeManager.appendCustomEntry("dispatch-handoff", {
-									ticketId: input.ticketId,
-									notes: response.value.ticket.notes.length,
-									rulings: response.value.ticket.rulings.length,
-								});
-								asked = response.value.ticket.state === ASKING;
-							}
+				const grammar = buildPublicGrammar(z);
+				const runHandoff = async (parsed: Result<PortInput, ParseError>) => {
+					if (handedOff)
+						return { content: [{ type: "text" as const, text: "This seat has already handed off." }], details: null, isError: true };
+					const current = registry.get(id);
+					if (!current?.session || current.session !== seat.session)
+						return { content: [{ type: "text" as const, text: "Native seat identity changed." }], details: null, isError: true };
+					if (!parsed.ok) return { content: [{ type: "text" as const, text: JSON.stringify(parsed.error) }], details: null, isError: true };
+					const response = await options.execute(caller, parsed.value);
+					if (response.ok) {
+						handedOff = true;
+						if (input.seat === "work" && "ticket" in response.value && "sessions" in response.value.ticket) {
+							nativeManager.appendCustomEntry("dispatch-handoff", {
+								ticketId: input.ticketId,
+								notes: response.value.ticket.notes.length,
+								rulings: response.value.ticket.rulings.length,
+							});
+							asked = response.value.ticket.state === ASKING;
 						}
-						return { content: [{ type: "text", text: JSON.stringify(response) }], details: response, isError: !response.ok };
+					}
+					return { content: [{ type: "text" as const, text: JSON.stringify(response) }], details: response, isError: !response.ok };
+				};
+				const escalateTool: ToolDefinition = {
+					name: "dispatch_escalate",
+					label: tr("Dispatch Escalate", "调度升级"),
+					description:
+						"Escalate a question, blocker, proposed split, or no-code finding for your bound ticket (use read dispatch://seat for context). A successful call ends this seat.",
+					loadMode: "essential",
+					parameters: grammar.seatEscalateParametersSchema,
+					async execute(_id, params) {
+						return runHandoff(parseSeatEscalateParameters(params, { ticketId: input.ticketId, revision: input.revision }));
 					},
 				};
+				const seatTools: ToolDefinition[] =
+					input.seat === "work"
+						? [
+								{
+									name: "dispatch_submit",
+									label: tr("Dispatch Submit", "调度提交"),
+									description:
+										"Hand off your pushed branch for the bound ticket (use read dispatch://seat for context). A successful submit ends this seat.",
+									loadMode: "essential",
+									parameters: grammar.seatSubmitParametersSchema,
+									async execute(_id, params) {
+										return runHandoff(parseSeatSubmitParameters(params, { ticketId: input.ticketId, revision: input.revision }));
+									},
+								},
+								escalateTool,
+							]
+						: [
+								{
+									name: "dispatch_verdict",
+									label: tr("Dispatch Verdict", "调度裁决"),
+									description:
+										"Hand off your independent gate verdict for the bound ticket or closure (use read dispatch://seat for context). A successful verdict ends this seat.",
+									loadMode: "essential",
+									parameters: grammar.seatVerdictParametersSchema,
+									async execute(_id, params) {
+										return runHandoff(
+											parseSeatVerdictParameters(params, { ticketId: input.ticketId, revision: input.revision, role: input.role }),
+										);
+									},
+								},
+								escalateTool,
+							];
+				const seatToolNames = seatTools.map((tool) => tool.name);
 				const settings = (await parent.settings.cloneForCwd(workspace)).overlay({
 					"tools.approvalMode": "yolo",
 					"compaction.midTurnEnabled": true,
 				});
 				const spawns = agent.spawns === undefined || agent.spawns === "*" ? "*" : agent.spawns.join(",");
-				const agentTools = agent.tools && [...new Set([...agent.tools, "task", "wait", "dispatch"])];
+				const agentTools = agent.tools && [...new Set([...agent.tools, "task", "wait", ...seatToolNames])];
 				const override = cfgTaskAgentModelOverrides.get(settings)[input.agent];
 				const modelPattern = parent.model ? `${parent.model.provider}/${parent.model.id}` : undefined;
 				const modelSelection = resolveAgentModelSelection({
@@ -214,7 +303,7 @@ export function createHostPort(options: HostOptions): HostPort {
 				});
 				const cacheKey = manager.getHeader()?.providerPromptCacheKey ?? manager.getHeader()?.id;
 				const mcpManager = MCPManager.instance();
-				mcpFollower = mcpManager ? followMCPTools(mcpManager, { scope: manager.getSessionId() }, new Set(["dispatch"])) : undefined;
+				mcpFollower = mcpManager ? followMCPTools(mcpManager, { scope: manager.getSessionId() }, new Set(seatToolNames)) : undefined;
 				const mcpTools = mcpFollower?.proxyTools() ?? [];
 				const created = await createAgentSession({
 					cwd: workspace,
@@ -232,7 +321,7 @@ export function createHostPort(options: HostOptions): HostPort {
 								mountedToolNames: savedContract.data.mountedTools,
 							}
 						: { appendSystemPrompt: agent.systemPrompt, ...(agentTools ? { toolNames: agentTools } : {}) }),
-					customTools: [tool],
+					customTools: seatTools,
 					enableMCP: true,
 					...(mcpManager ? { mcpManager, ...(mcpTools.length ? { mcpTools } : {}) } : {}),
 					...(mcpFollower ? { mcpToolScope: mcpFollower.scope } : {}),
@@ -270,7 +359,7 @@ export function createHostPort(options: HostOptions): HostPort {
 				});
 				while (extensionSends.length) await Promise.all(extensionSends.splice(0));
 				const tools = created.session.getEnabledToolNames();
-				if (!tools.includes("dispatch")) throw new Error("Seat session did not enable its dispatch tool");
+				for (const name of seatToolNames) if (!tools.includes(name)) throw new Error(`Seat session did not enable its ${name} tool`);
 				if (fork) {
 					// Like a native fork, the rework seat must not inherit its predecessor's finished todo list.
 					created.session.setTodoPhases([]);
@@ -292,7 +381,7 @@ export function createHostPort(options: HostOptions): HostPort {
 				}
 				const opening =
 					fork && handoff?.success
-						? `Continue ticket ${input.ticketId} at revision ${input.revision}. Only the incremental handoff follows. Call dispatch read if the current contract or PR is needed.\n${JSON.stringify({ notes: input.ticket.notes.slice(handoff.data.notes), rulings: input.ticket.rulings.slice(handoff.data.rulings) })}`
+						? `Continue ticket ${input.ticketId} at revision ${input.revision}. Only the incremental handoff follows. Use read dispatch://seat if the current contract or PR is needed.\n${JSON.stringify({ notes: input.ticket.notes.slice(handoff.data.notes), rulings: input.ticket.rulings.slice(handoff.data.rulings) })}`
 						: input.prompt;
 				const prompt = input.resume === null ? opening : `${input.resume}\n\n${opening}`;
 				const session = created.session,

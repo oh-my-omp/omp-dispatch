@@ -22,8 +22,11 @@ export const {
 	conveneSchema,
 	actionSchema,
 	portInputSchema,
-	toolParametersSchema,
-	seatToolParametersSchema,
+	dispatchTicketParametersSchema,
+	dispatchStepParametersSchema,
+	seatSubmitParametersSchema,
+	seatVerdictParametersSchema,
+	seatEscalateParametersSchema,
 } = buildPublicGrammar(z);
 const object = <const S extends Readonly<Record<string, ZodLikeSchema<unknown>>>>(shape: S) => z.object(shape).strict();
 export type Result<T, E> = { ok: true; value: T } | { ok: false; error: E };
@@ -42,7 +45,6 @@ export type Target = z.infer<typeof targetSchema>;
 export type Entry = z.infer<typeof entrySchema>;
 export type ConveneInput = z.infer<typeof conveneSchema>;
 export type PortInput = z.infer<typeof portInputSchema>;
-export type ToolParameters = { input: PortInput };
 export type Role = z.infer<typeof roleSchema>;
 export type Tier = z.infer<typeof tierSchema>;
 

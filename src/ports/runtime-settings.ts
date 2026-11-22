@@ -1,6 +1,6 @@
 import { join, resolve } from "node:path";
-import { getAgentDir } from "@oh-my-pi/pi-coding-agent";
 import { getPluginSettings } from "@oh-my-pi/pi-coding-agent/extensibility/plugins/loader";
+import { getAgentDir } from "@oh-my-pi/pi-utils";
 import type { Result } from "../domain/model.ts";
 
 export type RuntimeSettings = { dataDir: string; intervalSeconds: number; meerkat: string | null };

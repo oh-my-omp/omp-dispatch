@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { type ZodLikeSchema, z } from "@oh-my-pi/omptype/zod";
-import { logger } from "@oh-my-pi/pi-coding-agent";
+import { logger } from "@oh-my-pi/pi-utils";
 import * as m from "../domain/model.ts";
 import { parseMarker } from "../meerkat/markers.ts";
 import type { GitHubPort, MeerkatProjectSource, PrWrite } from "./contracts.ts";

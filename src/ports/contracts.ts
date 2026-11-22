@@ -1,4 +1,5 @@
 import type { ExtensionContext } from "@oh-my-pi/pi-coding-agent";
+import type { ResolveContext } from "@oh-my-pi/pi-coding-agent/internal-urls";
 import type {
 	Agenda,
 	AgendaId,
@@ -80,8 +81,11 @@ export type SeatLaunch = {
 };
 export type SeatHandle = { agentId: string; sessionId: string; sessionFile: string; jobId: string };
 export type SeatExit = { ticketId: string; role: Role; revision: number };
+export type BoundSeatInfo = { caller: Extract<Caller, { kind: "seat" }>; brief: string };
+export type ResolvedUrlCaller = { kind: "main"; caller: Extract<Caller, { kind: "main" }> } | { kind: "seat"; seat: BoundSeatInfo };
 export interface HostPort {
 	bind(ctx: ExtensionContext): Result<Caller, PortError>;
+	resolveCaller?(context?: ResolveContext): Result<ResolvedUrlCaller, PortError>;
 	launch(input: SeatLaunch): Promise<Result<SeatHandle, PortError>>;
 	agents(cwd: string, names: readonly string[]): Promise<Result<null, PortError>>;
 	active(ticketId: string, role: Role): boolean;

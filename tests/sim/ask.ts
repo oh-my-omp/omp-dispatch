@@ -75,10 +75,7 @@ const blockSchema = z
 	.object({
 		type: z.string(),
 		name: z.string().optional(),
-		arguments: z
-			.object({ input: z.object({ op: z.string() }).passthrough() })
-			.passthrough()
-			.optional(),
+		arguments: z.record(z.string(), z.unknown()).optional(),
 	})
 	.passthrough();
 
@@ -93,7 +90,7 @@ function abortProblem(session: SeatSession): string | null {
 			Array.isArray(message.content) &&
 			message.content.some((block) => {
 				const parsed = blockSchema.safeParse(block);
-				return parsed.success && parsed.data.name === "dispatch" && parsed.data.arguments?.input.op === "escalate";
+				return parsed.success && parsed.data.name === "dispatch_escalate";
 			}),
 	);
 	if (asked < 0) return "the Owner transcript has no escalate call";
@@ -392,7 +389,7 @@ export function askCases(sim: SimApi): Case[] {
 						.modelLog(run)
 						.some(
 							(entry) =>
-								entry.kind === "main" && entry.step.name === "dispatch" && JSON.stringify(entry.step.args).includes('"op":"resume"'),
+								entry.kind === "main" && entry.step.name === "dispatch_ticket" && JSON.stringify(entry.step.args).includes('"resume"'),
 						)
 				)
 					failures.push("Main did not resume the saved agenda");
@@ -467,7 +464,7 @@ export function askCases(sim: SimApi): Case[] {
 						.modelLog(run)
 						.some(
 							(entry) =>
-								entry.kind === "main" && entry.step.name === "dispatch" && JSON.stringify(entry.step.args).includes('"op":"finish"'),
+								entry.kind === "main" && entry.step.name === "dispatch_ticket" && JSON.stringify(entry.step.args).includes('"finish"'),
 						)
 				)
 					failures.push("Main did not call finish");

@@ -1,10 +1,12 @@
 import type { ZodLikeSchema, z } from "@oh-my-pi/omptype/zod";
-import { parseIssueReference, parseRepoReference, parseTargetReference, sameRef } from "./identity.ts";
+import { sameRef } from "./identity.ts";
 import {
 	type Action,
 	type Agenda,
 	actionSchema,
 	agendaSchema,
+	dispatchStepParametersSchema,
+	dispatchTicketParametersSchema,
 	type Entry,
 	type IssueRef,
 	type ParseError,
@@ -12,18 +14,21 @@ import {
 	portInputSchema,
 	type Repo,
 	type Result,
-	seatToolParametersSchema,
+	type Role,
+	seatEscalateParametersSchema,
+	seatSubmitParametersSchema,
+	seatVerdictParametersSchema,
 	type Target,
-	type ToolParameters,
-	toolParametersSchema,
 } from "./model.ts";
 import { ASKING, ESCALATED, encodeWorkflow, parseWorkflow, REPLACED, verdictsMatch } from "./workflow.ts";
 
-type MainInput = z.infer<typeof toolParametersSchema>["input"];
-type SeatInput = z.infer<typeof seatToolParametersSchema>["input"];
-type WireEntry = MainInput["tickets"] extends readonly (infer Item)[] | undefined ? Item : never;
-type WireAction = NonNullable<MainInput["actions"]>[number];
-type ActionKind = Action["kind"];
+type TicketParams = z.infer<typeof dispatchTicketParametersSchema>;
+type StepParams = z.infer<typeof dispatchStepParametersSchema>;
+type WireEntry = NonNullable<TicketParams["convene"]>["tickets"][number];
+type WireGitHubAction = NonNullable<NonNullable<StepParams["resolve"]>["githubActions"]>[number];
+type WireRepo = NonNullable<WireGitHubAction["createIssue"]>["repo"];
+type WireIssueRef = WireEntry["issue"];
+type WireTarget = WireEntry["target"];
 
 function parse<T>(schema: ZodLikeSchema<T>, value: unknown, path = ""): Result<T, ParseError> {
 	const parsed = schema.safeParse(value);
@@ -36,363 +41,292 @@ function parse<T>(schema: ZodLikeSchema<T>, value: unknown, path = ""): Result<T
 function failure<T>(path: string, reason: string): Result<T, ParseError> {
 	return { ok: false, error: { path, reason } };
 }
+
 function compact(fields: Record<string, unknown>): Record<string, unknown> {
 	return Object.fromEntries(Object.entries(fields).filter(([, value]) => value !== undefined));
 }
 
-function issueRef(value: string | undefined, field: string): Result<IssueRef, ParseError> {
-	if (value === undefined) return failure(field, `${field} is required`);
-	const parsed = parseIssueReference(value);
-	return parsed.ok ? { ok: true, value: parsed.value } : failure(field, parsed.error);
-}
-function repoRef(value: string | undefined, field: string): Result<Repo, ParseError> {
-	if (value === undefined) return failure(field, `${field} is required`);
-	const parsed = parseRepoReference(value);
-	return parsed.ok ? { ok: true, value: parsed.value } : failure(field, parsed.error);
-}
-function targetRef(value: string | undefined, field: string): Result<Target, ParseError> {
-	if (value === undefined) return failure(field, `${field} is required`);
-	const parsed = parseTargetReference(value);
-	return parsed.ok ? { ok: true, value: parsed.value } : failure(field, parsed.error);
+function toRepo(value: WireRepo): Repo {
+	return { owner: value.owner, name: value.repo };
 }
 
-const MAIN_FIELDS: {
-	convene: readonly string[];
-	resume: readonly string[];
-	tickets: readonly string[];
-	status: readonly string[];
-	read: readonly string[];
-	launch: readonly string[];
-	resolve: readonly string[];
-	finish: readonly string[];
-} = {
-	convene: ["parent", "tickets"],
-	resume: ["agenda"],
-	tickets: [],
-	status: [],
-	read: ["ticketId"],
-	launch: ["ticketId", "role"],
-	resolve: [
-		"ticketId",
-		"revision",
-		"ruling",
-		"to",
-		"dependsOn",
-		"target",
-		"adoptPr",
-		"clearAdoptPr",
-		"noCode",
-		"add",
-		"remove",
-		"effects",
-		"actions",
-	],
-	finish: ["summary"],
-};
-const SEAT_FIELDS: { read: readonly string[]; submit: readonly string[]; verdict: readonly string[]; escalate: readonly string[] } = {
-	read: ["ticketId"],
-	submit: ["ticketId", "revision", "branch", "head", "title", "body"],
-	verdict: ["ticketId", "revision", "role", "ok", "note"],
-	escalate: ["ticketId", "revision", "kind", "reason", "tier"],
-};
-const ACTION_FIELDS: Record<ActionKind, readonly string[]> = {
-	publishPr: ["issue", "headRepo", "branch", "head", "target", "pr", "expectedBodyHash", "title", "body"],
-	merge: ["issue", "pr", "head", "target", "stampHash"],
-	setIssueState: ["issue", "open", "bodyHash", "afterEvent"],
-	replaceBody: ["issue", "expectedHash", "body"],
-	createIssue: ["repo", "title", "body"],
-	attachChild: ["parent", "child"],
-	rerunChecks: ["pr", "repo", "workflowRunId", "previousAttempt", "head"],
-	comment: ["issue", "body", "markerKind", "markerKey"],
-	setProjectField: ["issue", "field", "option"],
-	requestAnswer: ["issue", "comment", "question", "tier"],
-};
-
-function foreignField(value: Record<string, unknown>, allowed: readonly string[], path: string): ParseError | null {
-	for (const key of Object.keys(value))
-		if (key !== "op" && key !== "kind" && !allowed.includes(key))
-			return {
-				path: [path, key].filter((part) => part.length > 0).join("."),
-				reason: `${key} does not belong to ${String(value.op ?? value.kind)}`,
-			};
-	return null;
+function toIssueRef(value: WireIssueRef): IssueRef {
+	return { repo: { owner: value.owner, name: value.repo }, number: value.number };
 }
 
-function entry(value: WireEntry, path: string): Result<Entry, ParseError> {
-	const issue = issueRef(value.issue, `${path}.issue`);
-	if (!issue.ok) return issue;
-	const target = targetRef(value.target, `${path}.target`);
-	if (!target.ok) return target;
-	const adoptPr = value.adoptPr === undefined ? null : issueRef(value.adoptPr, `${path}.adoptPr`);
-	if (adoptPr !== null && !adoptPr.ok) return adoptPr;
+function toTarget(value: WireTarget): Target {
+	return { repo: { owner: value.owner, name: value.repo }, base: value.branch };
+}
+
+function toEntry(value: WireEntry): Entry {
 	return {
-		ok: true,
-		value: {
-			id: value.id,
-			issue: issue.value,
-			target: target.value,
-			dependsOn: value.dependsOn,
-			adoptPr: adoptPr === null ? null : adoptPr.value,
-		},
+		id: value.id,
+		issue: toIssueRef(value.issue),
+		target: toTarget(value.target),
+		dependsOn: value.dependsOn,
+		adoptPr: value.adoptPr === undefined ? null : toIssueRef(value.adoptPr),
 	};
 }
-function entries(values: readonly WireEntry[], path: string): Result<Entry[], ParseError> {
-	const collected: Entry[] = [];
-	for (let index = 0; index < values.length; index++) {
-		const item = entry(values[index]!, `${path}.${index}`);
-		if (!item.ok) return item;
-		collected.push(item.value);
+
+function toAction(value: WireGitHubAction, path: string): Result<Action, ParseError> {
+	const defined = Object.entries(value).filter(([, item]) => item !== undefined);
+	if (defined.length !== 1) return failure(path, "Specify exactly one GitHub action property per item");
+	if (value.publishPr) {
+		const a = value.publishPr;
+		return parse(
+			actionSchema,
+			{
+				kind: "publishPr",
+				issue: toIssueRef(a.issue),
+				headRepo: toRepo(a.headRepo),
+				branch: a.branch,
+				head: a.head,
+				target: toTarget(a.target),
+				pr: a.pr === undefined ? null : toIssueRef(a.pr),
+				expectedBodyHash: a.expectedBodyHash ?? null,
+				title: a.title,
+				body: a.body,
+			},
+			`${path}.publishPr`,
+		);
 	}
-	return { ok: true, value: collected };
+	if (value.merge) {
+		const a = value.merge;
+		return parse(
+			actionSchema,
+			{
+				kind: "merge",
+				issue: toIssueRef(a.issue),
+				pr: toIssueRef(a.pr),
+				head: a.head,
+				target: toTarget(a.target),
+				stampHash: a.stampHash,
+			},
+			`${path}.merge`,
+		);
+	}
+	if (value.setIssueState) {
+		const a = value.setIssueState;
+		return parse(
+			actionSchema,
+			{
+				kind: "setIssueState",
+				issue: toIssueRef(a.issue),
+				open: a.open,
+				bodyHash: a.bodyHash,
+				afterEvent: a.afterEvent ?? null,
+			},
+			`${path}.setIssueState`,
+		);
+	}
+	if (value.replaceBody) {
+		const a = value.replaceBody;
+		return parse(
+			actionSchema,
+			{
+				kind: "replaceBody",
+				issue: toIssueRef(a.issue),
+				expectedHash: a.expectedHash,
+				body: a.body,
+			},
+			`${path}.replaceBody`,
+		);
+	}
+	if (value.createIssue) {
+		const a = value.createIssue;
+		return parse(
+			actionSchema,
+			{
+				kind: "createIssue",
+				repo: toRepo(a.repo),
+				title: a.title,
+				body: a.body,
+			},
+			`${path}.createIssue`,
+		);
+	}
+	if (value.attachChild) {
+		const a = value.attachChild;
+		return parse(
+			actionSchema,
+			{
+				kind: "attachChild",
+				parent: toIssueRef(a.parent),
+				child: toIssueRef(a.child),
+			},
+			`${path}.attachChild`,
+		);
+	}
+	if (value.rerunChecks) {
+		const a = value.rerunChecks;
+		return parse(
+			actionSchema,
+			{
+				kind: "rerunChecks",
+				pr: toIssueRef(a.pr),
+				repo: toRepo(a.repo),
+				workflowRunId: a.workflowRunId,
+				previousAttempt: a.previousAttempt,
+				head: a.head,
+			},
+			`${path}.rerunChecks`,
+		);
+	}
+	if (value.comment) {
+		const a = value.comment;
+		return parse(
+			actionSchema,
+			{
+				kind: "comment",
+				issue: toIssueRef(a.issue),
+				body: a.body,
+				marker: a.marker,
+			},
+			`${path}.comment`,
+		);
+	}
+	if (value.setProjectField) {
+		const a = value.setProjectField;
+		return parse(
+			actionSchema,
+			{
+				kind: "setProjectField",
+				issue: toIssueRef(a.issue),
+				field: a.field,
+				option: a.option,
+			},
+			`${path}.setProjectField`,
+		);
+	}
+	if (value.requestAnswer) {
+		const a = value.requestAnswer;
+		return parse(
+			actionSchema,
+			{
+				kind: "requestAnswer",
+				issue: toIssueRef(a.issue),
+				comment: a.comment,
+				question: a.question,
+				tier: a.tier,
+			},
+			`${path}.requestAnswer`,
+		);
+	}
+	return failure(path, "Specify exactly one GitHub action property per item");
 }
 
-function action(value: WireAction, path: string): Result<Action, ParseError> {
-	const foreign = foreignField(value as unknown as Record<string, unknown>, ACTION_FIELDS[value.kind], path);
-	if (foreign) return { ok: false, error: foreign };
-	const at = (field: string) => `${path}.${field}`;
-	switch (value.kind) {
-		case "publishPr": {
-			const issue = issueRef(value.issue, at("issue"));
-			if (!issue.ok) return issue;
-			const headRepo = repoRef(value.headRepo, at("headRepo"));
-			if (!headRepo.ok) return headRepo;
-			const target = targetRef(value.target, at("target"));
-			if (!target.ok) return target;
-			const pr = value.pr === undefined ? null : issueRef(value.pr, at("pr"));
-			if (pr !== null && !pr.ok) return pr;
-			return parse(
-				actionSchema,
-				compact({
-					kind: "publishPr",
-					issue: issue.value,
-					headRepo: headRepo.value,
-					branch: value.branch,
-					head: value.head,
-					target: target.value,
-					pr: pr === null ? null : pr.value,
-					expectedBodyHash: value.expectedBodyHash ?? null,
-					title: value.title,
-					body: value.body,
-				}),
-				path,
-			);
-		}
-		case "merge": {
-			const issue = issueRef(value.issue, at("issue"));
-			if (!issue.ok) return issue;
-			const pr = issueRef(value.pr, at("pr"));
-			if (!pr.ok) return pr;
-			const target = targetRef(value.target, at("target"));
-			if (!target.ok) return target;
-			return parse(
-				actionSchema,
-				compact({ kind: "merge", issue: issue.value, pr: pr.value, head: value.head, target: target.value, stampHash: value.stampHash }),
-				path,
-			);
-		}
-		case "setIssueState": {
-			const issue = issueRef(value.issue, at("issue"));
-			if (!issue.ok) return issue;
-			return parse(
-				actionSchema,
-				compact({
-					kind: "setIssueState",
-					issue: issue.value,
-					open: value.open,
-					bodyHash: value.bodyHash,
-					afterEvent: value.afterEvent ?? null,
-				}),
-				path,
-			);
-		}
-		case "replaceBody": {
-			const issue = issueRef(value.issue, at("issue"));
-			if (!issue.ok) return issue;
-			return parse(
-				actionSchema,
-				compact({ kind: "replaceBody", issue: issue.value, expectedHash: value.expectedHash, body: value.body }),
-				path,
-			);
-		}
-		case "createIssue": {
-			const repo = repoRef(value.repo, at("repo"));
-			if (!repo.ok) return repo;
-			return parse(actionSchema, compact({ kind: "createIssue", repo: repo.value, title: value.title, body: value.body }), path);
-		}
-		case "attachChild": {
-			const parent = issueRef(value.parent, at("parent"));
-			if (!parent.ok) return parent;
-			const child = issueRef(value.child, at("child"));
-			if (!child.ok) return child;
-			return parse(actionSchema, { kind: "attachChild", parent: parent.value, child: child.value }, path);
-		}
-		case "rerunChecks": {
-			const pr = issueRef(value.pr, at("pr"));
-			if (!pr.ok) return pr;
-			const repo = repoRef(value.repo, at("repo"));
-			if (!repo.ok) return repo;
-			return parse(
-				actionSchema,
-				compact({
-					kind: "rerunChecks",
-					pr: pr.value,
-					repo: repo.value,
-					workflowRunId: value.workflowRunId,
-					previousAttempt: value.previousAttempt,
-					head: value.head,
-				}),
-				path,
-			);
-		}
-		case "comment": {
-			const issue = issueRef(value.issue, at("issue"));
-			if (!issue.ok) return issue;
-			return parse(
-				actionSchema,
-				compact({ kind: "comment", issue: issue.value, body: value.body, marker: { kind: value.markerKind, key: value.markerKey } }),
-				path,
-			);
-		}
-		case "setProjectField": {
-			const issue = issueRef(value.issue, at("issue"));
-			if (!issue.ok) return issue;
-			return parse(actionSchema, compact({ kind: "setProjectField", issue: issue.value, field: value.field, option: value.option }), path);
-		}
-		case "requestAnswer": {
-			const issue = issueRef(value.issue, at("issue"));
-			if (!issue.ok) return issue;
-			return parse(
-				actionSchema,
-				compact({ kind: "requestAnswer", issue: issue.value, comment: value.comment, question: value.question, tier: value.tier }),
-				path,
-			);
-		}
-	}
-}
-function actions(values: readonly WireAction[], path: string): Result<Action[], ParseError> {
+function toActions(values: readonly WireGitHubAction[], path: string): Result<Action[], ParseError> {
 	const collected: Action[] = [];
 	for (let index = 0; index < values.length; index++) {
-		const item = action(values[index]!, `${path}.${index}`);
+		const item = toAction(values[index]!, `${path}.${index}`);
 		if (!item.ok) return item;
 		collected.push(item.value);
 	}
 	return { ok: true, value: collected };
 }
 
-function mainInput(value: MainInput): Result<PortInput, ParseError> {
-	const foreign = foreignField(value as unknown as Record<string, unknown>, MAIN_FIELDS[value.op], "");
-	if (foreign) return { ok: false, error: foreign };
-	switch (value.op) {
-		case "convene": {
-			const parent = value.parent === undefined ? null : issueRef(value.parent, "parent");
-			if (parent !== null && !parent.ok) return parent;
-			const tickets = value.tickets === undefined ? undefined : entries(value.tickets, "tickets");
-			if (tickets !== undefined && !tickets.ok) return tickets;
-			return parse(portInputSchema, compact({ op: "convene", parent: parent === null ? null : parent.value, tickets: tickets?.value }), "");
-		}
-		case "resume":
-			return parse(portInputSchema, compact({ op: "resume", agenda: value.agenda }), "");
-		case "tickets":
-		case "status":
-			return parse(portInputSchema, { op: value.op }, "");
-		case "read":
-			return parse(portInputSchema, compact({ op: "read", ticketId: value.ticketId }), "");
-		case "launch":
-			return parse(portInputSchema, compact({ op: "launch", ticketId: value.ticketId, role: value.role }), "");
-		case "finish":
-			return parse(portInputSchema, compact({ op: "finish", summary: value.summary }), "");
-		case "resolve": {
-			const target = value.target === undefined ? undefined : targetRef(value.target, "target");
-			if (target !== undefined && !target.ok) return target;
-			const adoptPr =
-				value.clearAdoptPr === true
-					? value.adoptPr === undefined
-						? { ok: true as const, value: null }
-						: failure<IssueRef | null>("adoptPr", "adoptPr and clearAdoptPr cannot be combined")
-					: value.adoptPr === undefined
-						? undefined
-						: issueRef(value.adoptPr, "adoptPr");
-			if (adoptPr !== undefined && !adoptPr.ok) return adoptPr;
-			const add = value.add === undefined ? undefined : entries(value.add, "add");
-			if (add !== undefined && !add.ok) return add;
-			const enqueued = value.actions === undefined ? undefined : actions(value.actions, "actions");
-			if (enqueued !== undefined && !enqueued.ok) return enqueued;
-			return parse(
-				portInputSchema,
-				compact({
-					op: "resolve",
-					ticketId: value.ticketId,
-					revision: value.revision,
-					ruling: value.ruling,
-					to: value.to,
-					dependsOn: value.dependsOn,
-					target: target?.value,
-					adoptPr: adoptPr?.value,
-					noCode: value.noCode,
-					add: add?.value,
-					remove: value.remove,
-					effects: value.effects,
-					actions: enqueued?.value,
-				}),
-				"",
-			);
-		}
+export function parseDispatchTicketParameters(value: unknown): Result<PortInput, ParseError> {
+	const wire = parse(dispatchTicketParametersSchema, value);
+	if (!wire.ok) return wire;
+	const { convene, resume, finish } = wire.value;
+	const chosen = [convene !== undefined, resume !== undefined, finish !== undefined].filter(Boolean).length;
+	if (chosen !== 1) return failure("", "Specify exactly one of convene, resume, or finish");
+	if (convene) {
+		return parse(portInputSchema, {
+			op: "convene",
+			parent: convene.parent === undefined ? null : toIssueRef(convene.parent),
+			tickets: convene.tickets.map(toEntry),
+		});
 	}
+	if (resume) {
+		return parse(portInputSchema, { op: "resume", agenda: resume.agenda });
+	}
+	return parse(portInputSchema, { op: "finish", summary: finish!.summary });
 }
 
-function seatInput(value: SeatInput): Result<PortInput, ParseError> {
-	const foreign = foreignField(value as unknown as Record<string, unknown>, SEAT_FIELDS[value.op], "");
-	if (foreign) return { ok: false, error: foreign };
-	switch (value.op) {
-		case "read":
-			return parse(portInputSchema, compact({ op: "read", ticketId: value.ticketId }), "");
-		case "submit":
-			return parse(
-				portInputSchema,
-				compact({
-					op: "submit",
-					ticketId: value.ticketId,
-					revision: value.revision,
-					branch: value.branch,
-					head: value.head,
-					title: value.title,
-					body: value.body,
-				}),
-				"",
-			);
-		case "verdict":
-			return parse(
-				portInputSchema,
-				compact({ op: "verdict", ticketId: value.ticketId, revision: value.revision, role: value.role, ok: value.ok, note: value.note }),
-				"",
-			);
-		case "escalate":
-			return parse(
-				portInputSchema,
-				compact({
-					op: "escalate",
-					ticketId: value.ticketId,
-					revision: value.revision,
-					kind: value.kind,
-					reason: value.reason,
-					tier: value.tier,
-				}),
-				"",
-			);
+export function parseDispatchStepParameters(value: unknown): Result<PortInput, ParseError> {
+	const wire = parse(dispatchStepParametersSchema, value);
+	if (!wire.ok) return wire;
+	const { ticketId, launch, resolve } = wire.value;
+	const chosen = [launch !== undefined, resolve !== undefined].filter(Boolean).length;
+	if (chosen !== 1) return failure("", "Specify exactly one of launch or resolve");
+	if (launch) {
+		return parse(portInputSchema, compact({ op: "launch", ticketId, role: launch.role }));
 	}
+	const r = resolve!;
+	if (r.clearAdoptPr === true && r.adoptPr !== undefined) {
+		return failure("resolve.adoptPr", "adoptPr and clearAdoptPr cannot be combined");
+	}
+	const adoptPr = r.clearAdoptPr === true ? null : r.adoptPr === undefined ? undefined : toIssueRef(r.adoptPr);
+	const enqueued = r.githubActions === undefined ? undefined : toActions(r.githubActions, "resolve.githubActions");
+	if (enqueued !== undefined && !enqueued.ok) return enqueued;
+	return parse(
+		portInputSchema,
+		compact({
+			op: "resolve",
+			ticketId,
+			revision: r.revision,
+			ruling: r.ruling,
+			to: r.to,
+			dependsOn: r.dependsOn,
+			target: r.target === undefined ? undefined : toTarget(r.target),
+			adoptPr,
+			noCode: r.noCode,
+			add: r.add === undefined ? undefined : r.add.map(toEntry),
+			remove: r.remove,
+			effects: r.effects,
+			actions: enqueued?.value,
+		}),
+	);
 }
 
-export function parseToolParameters(value: unknown): Result<ToolParameters, ParseError> {
-	const wire = parse(toolParametersSchema, value);
+export function parseSeatSubmitParameters(value: unknown, bound: { ticketId: string; revision: number }): Result<PortInput, ParseError> {
+	const wire = parse(seatSubmitParametersSchema, value);
 	if (!wire.ok) return wire;
-	const input = mainInput(wire.value.input);
-	return input.ok ? { ok: true, value: { input: input.value } } : input;
+	return parse(portInputSchema, {
+		op: "submit",
+		ticketId: bound.ticketId,
+		revision: wire.value.revision ?? bound.revision,
+		branch: wire.value.branch,
+		head: wire.value.head,
+		title: wire.value.title,
+		body: wire.value.body,
+	});
 }
-export function parseSeatToolParameters(value: unknown): Result<ToolParameters, ParseError> {
-	const wire = parse(seatToolParametersSchema, value);
+
+export function parseSeatVerdictParameters(
+	value: unknown,
+	bound: { ticketId: string; revision: number; role: Role },
+): Result<PortInput, ParseError> {
+	const wire = parse(seatVerdictParametersSchema, value);
 	if (!wire.ok) return wire;
-	const input = seatInput(wire.value.input);
-	return input.ok ? { ok: true, value: { input: input.value } } : input;
+	return parse(portInputSchema, {
+		op: "verdict",
+		ticketId: bound.ticketId,
+		revision: wire.value.revision ?? bound.revision,
+		role: bound.role,
+		ok: wire.value.ok,
+		note: wire.value.note,
+	});
+}
+
+export function parseSeatEscalateParameters(value: unknown, bound: { ticketId: string; revision: number }): Result<PortInput, ParseError> {
+	const wire = parse(seatEscalateParametersSchema, value);
+	if (!wire.ok) return wire;
+	if (wire.value.kind !== "question" && wire.value.tier !== undefined) {
+		return failure("tier", "tier is only allowed when kind is question");
+	}
+	return parse(
+		portInputSchema,
+		compact({
+			op: "escalate",
+			ticketId: bound.ticketId,
+			revision: wire.value.revision ?? bound.revision,
+			kind: wire.value.kind,
+			reason: wire.value.reason,
+			tier: wire.value.tier,
+		}),
+	);
 }
 
 export function validateTopology(state: Pick<Agenda, "tickets">): string | null {

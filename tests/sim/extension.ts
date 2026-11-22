@@ -20,10 +20,10 @@ let callCounter = 0;
 
 type Message = Context["messages"][number];
 type Step = { call: { name: string; args: Record<string, unknown> } } | { text: string } | { fail: string };
-type Played = { op: string | null; result: string };
+type Played = { name: string; result: string };
 const replySchema = z
 	.object({
-		ok: z.boolean(),
+		ok: z.boolean().optional(),
 		value: z
 			.object({
 				launchable: z.array(z.string()).optional(),
@@ -31,6 +31,7 @@ const replySchema = z
 			})
 			.passthrough()
 			.optional(),
+		ticket: z.object({ state: z.string(), revision: z.number(), rulings: z.array(z.unknown()) }).optional(),
 		error: z
 			.object({ kind: z.string(), error: z.object({ kind: z.string() }).passthrough().optional() })
 			.passthrough()
@@ -55,9 +56,7 @@ function played(messages: Message[], from: number, tool: string | null): Played[
 		for (const block of message.content) {
 			if (block.type !== "toolCall" || (tool !== null && block.name !== tool)) continue;
 			const result = messages.slice(index + 1).find((item) => item.role === "toolResult" && item.toolCallId === block.id);
-			const input = block.arguments.input;
-			const op = typeof input === "object" && input !== null && "op" in input && typeof input.op === "string" ? input.op : null;
-			out.push({ op, result: result ? text(result) : "" });
+			out.push({ name: block.name, result: result ? text(result) : "" });
 		}
 	}
 	return out;
@@ -72,59 +71,72 @@ function lastUser(messages: Message[], marker?: RegExp): number {
 }
 
 function parseReply(result: string): Reply {
+	const trimmed = result.trim();
+	const jsonStart = trimmed.indexOf("{");
+	if (jsonStart < 0) return { ok: false };
 	try {
-		const parsed = replySchema.safeParse(JSON.parse(result));
+		const parsed = replySchema.safeParse(JSON.parse(trimmed.slice(jsonStart)));
 		return parsed.success ? parsed.data : { ok: false };
 	} catch {
 		return { ok: false };
 	}
 }
 
-type Ask = { input: Record<string, unknown> } | { shell: string };
+type Ask = { call: { name: string; args: Record<string, unknown> } } | { shell: string };
 type MainPlan = Generator<Ask, void, Reply>;
 
 function* startPlan(trigger: string): MainPlan {
-	if (scenario.resumeFirst) yield { input: { op: "resume", agenda: scenario.resumeFirst } };
+	if (scenario.resumeFirst) yield { call: { name: "dispatch_ticket", args: { resume: { agenda: scenario.resumeFirst } } } };
 	const saved = /Saved agendas: active: ([0-9a-f-]{36})/.exec(trigger);
-	const reference = (issue: number) => `${repo.owner}/${repo.name}#${issue}`;
-	const target = `${repo.owner}/${repo.name}@main`;
+	const issueRef = (number: number) => ({ owner: repo.owner, repo: repo.name, number });
+	const target = { owner: repo.owner, repo: repo.name, branch: "main" };
 	const opened = saved
-		? yield { input: { op: "resume", agenda: saved[1] } }
+		? yield { call: { name: "dispatch_ticket", args: { resume: { agenda: saved[1] } } } }
 		: yield {
-				input: {
-					op: "convene",
-					...(scenario.parent === null ? {} : { parent: reference(scenario.parent) }),
-					tickets: scenario.tickets.map((ticket) => ({
-						id: ticket.id,
-						issue: reference(ticket.issue),
-						target,
-						dependsOn: ticket.dependsOn,
-					})),
+				call: {
+					name: "dispatch_ticket",
+					args: {
+						convene: {
+							...(scenario.parent === null ? {} : { parent: issueRef(scenario.parent) }),
+							tickets: scenario.tickets.map((ticket) => ({
+								id: ticket.id,
+								issue: issueRef(ticket.issue),
+								target,
+								dependsOn: ticket.dependsOn,
+							})),
+						},
+					},
 				},
 			};
-	for (const id of opened.value?.launchable ?? []) yield { input: { op: "launch", ticketId: id } };
+	for (const id of opened.value?.launchable ?? []) yield { call: { name: "dispatch_step", args: { ticketId: id, launch: {} } } };
 }
 
 function* attentionPlan(trigger: string): MainPlan {
 	const keys = /Dispatch needs Main: (.*?)\. launch:/.exec(trigger)?.[1]?.split(", ") ?? [];
-	const finish = { input: { op: "finish", summary: `Simulation ${scenario.name} delivered every ticket.` } };
+	const finish: Ask = {
+		call: { name: "dispatch_ticket", args: { finish: { summary: `Simulation ${scenario.name} delivered every ticket.` } } },
+	};
 	for (const key of keys) {
 		const [kind = "", id = "", effect = ""] = key.split(":");
-		if (kind === "launch") yield { input: { op: "launch", ticketId: id } };
+		if (kind === "launch") yield { call: { name: "dispatch_step", args: { ticketId: id, launch: {} } } };
 		else if (kind === "finish") yield finish;
 		else if (kind === "escalated") {
-			const read = yield { input: { op: "read", ticketId: id } };
-			const ticket = read.value?.ticket;
+			const read = yield { call: { name: "read", args: { path: `dispatch://${id}:raw` } } };
+			const ticket = read.ticket ?? read.value?.ticket;
 			const ruling = scenario.tickets.find((item) => item.id === id)?.rulings?.[ticket?.rulings.length ?? 0];
 			if (ticket?.state === "Escalated" && ruling)
 				yield {
-					input: {
-						op: "resolve",
-						ticketId: id,
-						revision: ticket.revision,
-						ruling: ruling.ruling,
-						to: ruling.to,
-						...(ruling.noCode ? { noCode: ruling.noCode } : {}),
+					call: {
+						name: "dispatch_step",
+						args: {
+							ticketId: id,
+							resolve: {
+								revision: ticket.revision,
+								ruling: ruling.ruling,
+								to: ruling.to,
+								...(ruling.noCode ? { noCode: ruling.noCode } : {}),
+							},
+						},
 					},
 				};
 		} else if (kind === "failed" && scenario.retryFailed) {
@@ -135,17 +147,21 @@ function* attentionPlan(trigger: string): MainPlan {
 				finished = yield finish;
 			}
 			if (finished.ok) return;
-			const read = yield { input: { op: "read", ticketId: id } };
-			const ticket = read.value?.ticket;
+			const read = yield { call: { name: "read", args: { path: `dispatch://${id}:raw` } } };
+			const ticket = read.ticket ?? read.value?.ticket;
 			if (ticket)
 				yield {
-					input: {
-						op: "resolve",
-						ticketId: id,
-						revision: ticket.revision,
-						ruling: `Retry the failed Meerkat record ${effect}.`,
-						to: ticket.state,
-						effects: [{ effectId: effect, disposition: "retry" }],
+					call: {
+						name: "dispatch_step",
+						args: {
+							ticketId: id,
+							resolve: {
+								revision: ticket.revision,
+								ruling: `Retry the failed Meerkat record ${effect}.`,
+								to: ticket.state,
+								effects: [{ effectId: effect, disposition: "retry" }],
+							},
+						},
 					},
 				};
 		}
@@ -167,7 +183,7 @@ function mainStep(messages: Message[]): { step: Step; note: string } {
 	if (next.done) return { step: { text: "Waiting for the next dispatch decision." }, note };
 	const ask = next.value;
 	return {
-		step: { call: "input" in ask ? { name: "dispatch", args: ask } : { name: "bash", args: { command: ask.shell, timeout: 0 } } },
+		step: { call: "call" in ask ? ask.call : { name: "bash", args: { command: ask.shell, timeout: 0 } } },
 		note,
 	};
 }
@@ -221,8 +237,8 @@ function ownerStep(messages: Message[], spec: TicketSpec, brief: string): { step
 	const continued = /Continue ticket \S+ at revision (\d+)/.exec(prompt);
 	const ticket = ticketOf(brief);
 	const revision = continued ? Number(continued[1]) : ticket.revision;
-	const handoffs = played(messages.slice(0, latest), 0, "dispatch").filter(
-		(item) => (item.op === "submit" || item.op === "escalate") && parseReply(item.result).ok,
+	const handoffs = played(messages.slice(0, latest), 0, null).filter(
+		(item) => (item.name === "dispatch_submit" || item.name === "dispatch_escalate") && parseReply(item.result).ok === true,
 	).length;
 	const abandoned = continued ? 0 : (ticket.notes ?? []).filter((note) => JSON.stringify(note).includes("ended without a handoff")).length;
 	const round = handoffs + abandoned;
@@ -236,16 +252,12 @@ function ownerStep(messages: Message[], spec: TicketSpec, brief: string): { step
 				step === 0
 					? {
 							call: {
-								name: "dispatch",
+								name: "dispatch_escalate",
 								args: {
-									input: {
-										op: "escalate",
-										ticketId: spec.id,
-										revision,
-										kind: owner.escalation,
-										reason: owner.reason,
-										...(owner.tier ? { tier: owner.tier } : {}),
-									},
+									revision,
+									kind: owner.escalation,
+									reason: owner.reason,
+									...(owner.tier ? { tier: owner.tier } : {}),
 								},
 							},
 						}
@@ -273,17 +285,13 @@ function ownerStep(messages: Message[], spec: TicketSpec, brief: string): { step
 		return {
 			step: {
 				call: {
-					name: "dispatch",
+					name: "dispatch_submit",
 					args: {
-						input: {
-							op: "submit",
-							ticketId: spec.id,
-							revision,
-							branch: `sim-${spec.id}`,
-							head,
-							title: `Sim ${spec.id}`,
-							body: `Closes #${spec.issue}`,
-						},
+						revision,
+						branch: `sim-${spec.id}`,
+						head,
+						title: `Sim ${spec.id}`,
+						body: `Closes #${spec.issue}`,
 					},
 				},
 			},
@@ -333,8 +341,8 @@ function gateStep(messages: Message[], role: string, ticketId: string, brief: st
 		return {
 			step: {
 				call: {
-					name: "dispatch",
-					args: { input: { op: "verdict", ticketId, revision: ticket.revision, role, ok: judged.ok, note: judged.note } },
+					name: "dispatch_verdict",
+					args: { revision: ticket.revision, ok: judged.ok, note: judged.note },
 				},
 			},
 			note: judged.note,

@@ -6,7 +6,7 @@ import { YAML } from "bun";
 import { applyOperation, createAgenda } from "../src/domain/engine.ts";
 import { bodyHash } from "../src/domain/identity.ts";
 import type { Agenda, Caller, Facts, MeerkatContext, PortError, Result } from "../src/domain/model.ts";
-import { encodeAgenda, parseAgenda, parseSeatToolParameters } from "../src/domain/parse.ts";
+import { encodeAgenda, parseAgenda, parseSeatEscalateParameters } from "../src/domain/parse.ts";
 import { parseWorkflow } from "../src/domain/workflow.ts";
 import { parseMarker } from "../src/meerkat/markers.ts";
 import type { AskRequest, GitHubPort, GuardiansPort, HostPort, SeatLaunch } from "../src/ports/contracts.ts";
@@ -108,12 +108,12 @@ function applied(result: Result<Agenda, { message: string }>): Agenda {
 }
 
 test("only a question carries a tier", () => {
-	const escalate = { op: "escalate", ticketId: "one", revision: 1, reason: "Which?" };
-	expect(parseSeatToolParameters({ input: { ...escalate, kind: "question", tier: "complex" } }).ok).toBe(true);
-	expect(parseSeatToolParameters({ input: { ...escalate, kind: "question" } }).ok).toBe(true);
-	expect(parseSeatToolParameters({ input: { ...escalate, kind: "question", tier: "urgent" } }).ok).toBe(false);
+	const bound = { ticketId: "one", revision: 1 };
+	expect(parseSeatEscalateParameters({ kind: "question", reason: "Which?", tier: "complex" }, bound).ok).toBe(true);
+	expect(parseSeatEscalateParameters({ kind: "question", reason: "Which?" }, bound).ok).toBe(true);
+	expect(parseSeatEscalateParameters({ kind: "question", reason: "Which?", tier: "urgent" }, bound).ok).toBe(false);
 	for (const kind of ["blocked", "split", "noCode"])
-		expect(parseSeatToolParameters({ input: { ...escalate, kind, tier: "simple" } }).ok).toBe(false);
+		expect(parseSeatEscalateParameters({ kind, reason: "Which?", tier: "simple" }, bound).ok).toBe(false);
 });
 
 test("under Meerkat an Owner question waits in Asking with an ask comment; Meerkat off and other kinds still reach Main", () => {

@@ -1,4 +1,4 @@
-import { logger } from "@oh-my-pi/pi-coding-agent";
+import { logger } from "@oh-my-pi/pi-utils";
 import type { ReadonlyAgenda } from "../domain/model.ts";
 
 export class RuntimeExit {

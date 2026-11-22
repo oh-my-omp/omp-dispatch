@@ -12,6 +12,7 @@ export function buildPublicGrammar(z: PublicZ) {
 	const hashSchema = z.string().regex(/^[a-f0-9]{64}$/);
 	const idSchema = text;
 	const agendaIdSchema = z.string().regex(/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
+	const nameSegment = z.string().regex(/^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$/);
 	const repoSchema = object({ owner: text, name: text });
 	const issueRefSchema = object({ repo: repoSchema, number: revision });
 	const prRefSchema = issueRefSchema;
@@ -108,180 +109,218 @@ export function buildPublicGrammar(z: PublicZ) {
 		object({ op: z.literal("finish"), summary: text }),
 	]);
 
-	const ticketIdField = text.optional().describe("The ticket id, exactly as returned by dispatch status or dispatch tickets.");
-	const revisionField = revision
-		.optional()
-		.describe(
-			"The ticket revision this call acts on: the revision returned by dispatch read or dispatch status. A stale revision is refused.",
-		);
-	const tierField = tierSchema
-		.optional()
-		.describe("How hard the decision item is: simple for one implementation detail, complex for a decision across modules or contracts.");
-	const wireEntry = object({
+	// Structured wire coordinates (no "<owner>/<repo>#<number>" or "<owner>/<repo>@<branch>" string DSLs)
+	const wireRepoSchema = object({
+		owner: nameSegment.describe("GitHub repository owner (user or organization)."),
+		repo: nameSegment.describe("GitHub repository name."),
+	}).describe("GitHub repository coordinate.");
+	const wireIssueRefSchema = object({
+		owner: nameSegment.describe("GitHub repository owner."),
+		repo: nameSegment.describe("GitHub repository name."),
+		number: revision.describe("GitHub issue or pull request number."),
+	}).describe("GitHub issue or pull request coordinate.");
+	const wireTargetSchema = object({
+		owner: nameSegment.describe("Target GitHub repository owner."),
+		repo: nameSegment.describe("Target GitHub repository name."),
+		branch: text.describe("Target base branch name, for example main."),
+	}).describe("Target repository and base branch.");
+	const wireEntrySchema = object({
 		id: text.describe("The ticket id, unique within the agenda; resolve dependsOn and remove refer to it."),
-		issue: text.describe("The issue this ticket delivers, as <owner>/<repo>#<number>, for example oh-my-omp/omp-dispatch#236."),
-		target: text.describe(
-			"The repository and base branch this ticket delivers to, as <owner>/<repo>@<branch>, for example oh-my-omp/omp-dispatch@main.",
-		),
+		issue: wireIssueRefSchema.describe("The GitHub issue this ticket delivers."),
+		target: wireTargetSchema.describe("The repository and base branch this ticket delivers to."),
 		dependsOn: z.array(text).describe("Ticket ids that must be delivered before this ticket may launch; [] for an independent ticket."),
-		adoptPr: text.optional().describe("An existing pull request to adopt, as <owner>/<repo>#<number>. Omit when there is none."),
-	}).describe("One ticket entry supplied to convene or resolve add.");
-	const wireEffects = z
+		adoptPr: wireIssueRefSchema.optional().describe("An existing pull request to adopt. Omit when there is none."),
+	}).describe("One ticket entry supplied to convene or resolve.add.");
+	const wireEffectsSchema = z
 		.array(
 			object({
-				effectId: text.describe("The id of a failed or uncertain effect, as shown by dispatch read."),
+				effectId: text.describe("The id of a failed or uncertain effect, as shown by read dispatch://<ticketId>."),
 				disposition: z
 					.enum(["retry", "adopt", "cancel"])
 					.describe("retry re-requests the effect, adopt accepts the result the source already shows, cancel abandons it."),
 			}).describe("One effect disposition."),
 		)
 		.describe("Dispositions for failed or uncertain effects; omit to leave them alone.");
-	const wireActions = z
-		.array(
-			object({
-				kind: z
-					.enum([
-						"publishPr",
-						"merge",
-						"setIssueState",
-						"replaceBody",
-						"createIssue",
-						"attachChild",
-						"rerunChecks",
-						"comment",
-						"setProjectField",
-						"requestAnswer",
-					])
-					.describe("The GitHub write kind; it selects which of the remaining action fields apply."),
-				issue: text
-					.optional()
-					.describe(
-						"The subject issue, as <owner>/<repo>#<number>. Used by publishPr, merge, setIssueState, replaceBody, comment, setProjectField and requestAnswer.",
-					),
-				pr: text
-					.optional()
-					.describe(
-						"A pull request, as <owner>/<repo>#<number>. merge and rerunChecks require it; publishPr names an open PR to update and omits it to create one.",
-					),
-				repo: text.optional().describe("A repository, as <owner>/<repo>. Used by createIssue and rerunChecks."),
-				headRepo: text
-					.optional()
-					.describe("publishPr: the repository holding the head branch, as <owner>/<repo>; usually the subject repository."),
-				branch: text.optional().describe("publishPr: the head branch name holding the commits to publish."),
-				head: text
-					.optional()
-					.describe("publishPr, merge and rerunChecks: the full 40-64 character lowercase hex commit sha the action expects."),
-				target: text.optional().describe("publishPr and merge: the base repository and branch, as <owner>/<repo>@<branch>."),
-				expectedBodyHash: text
-					.optional()
-					.describe("publishPr: the 64 character hex body hash expected when updating an existing PR; omit when creating one."),
-				title: text.optional().describe("publishPr and createIssue: the title."),
-				body: z
-					.string()
-					.optional()
-					.describe(
-						"publishPr and createIssue: the body; replaceBody: the new issue body; comment: the whole comment ending with its marker line.",
-					),
-				stampHash: text
-					.optional()
-					.describe("merge: the 64 character hex gate stamp hash this merge is authorized by, as returned by dispatch read."),
-				open: z.boolean().optional().describe("setIssueState: true reopens the issue, false closes it."),
-				bodyHash: text.optional().describe("setIssueState: the 64 character hex issue body hash the state change is based on."),
-				afterEvent: text.optional().describe("setIssueState: the lifecycle event the change follows; omit when it follows none."),
-				expectedHash: text.optional().describe("replaceBody: the 64 character hex issue body hash expected before the edit."),
-				parent: text.optional().describe("attachChild: the parent issue, as <owner>/<repo>#<number>."),
-				child: text.optional().describe("attachChild: the child issue to attach, as <owner>/<repo>#<number>."),
-				workflowRunId: revision.optional().describe("rerunChecks: the numeric id of the failing workflow run to rerun."),
-				previousAttempt: revision.optional().describe("rerunChecks: the numeric attempt being superseded, as counted by the workflow."),
-				markerKind: z.enum(["impl", "ask"]).optional().describe("comment: the marker kind whose key identifies the comment at source."),
-				markerKey: text.optional().describe("comment: the marker key identifying the comment at source."),
-				field: z.literal("status").optional().describe("setProjectField: the Project field to set; only status is supported."),
-				option: text.optional().describe("setProjectField: the configured Status option name to set."),
-				comment: revision.optional().describe("requestAnswer: the id of the ask comment holding the decision item."),
-				question: text.optional().describe("requestAnswer: the decision item text handed to the intent guardians."),
-				tier: tierSchema
-					.optional()
-					.describe("requestAnswer: how hard the decision item is; simple for one detail, complex across modules or contracts."),
-			}).describe("One GitHub write resolve actions performs."),
-		)
-		.describe("GitHub writes to enqueue after the ruling; the state machine performs and confirms them. Omit for none.");
-	const toolParametersSchema = object({
-		input: object({
-			op: z
-				.enum(["convene", "resume", "tickets", "status", "read", "launch", "resolve", "finish"])
-				.describe(
-					"The operation: convene starts an agenda, resume takes over a saved one, tickets and status list state, read returns one ticket, launch seats a ticket, resolve records a ruling and may edit topology or enqueue GitHub writes, finish completes the agenda.",
-				),
-			agenda: agendaIdSchema.optional().describe("resume: the id of the saved agenda, as listed in the startup message."),
-			ticketId: ticketIdField,
-			role: text.optional().describe("launch: an optional seat role to start; only a role the ticket state offers is accepted."),
-			summary: text.optional().describe("finish: the final summary of what the agenda delivered."),
-			parent: text.optional().describe("convene: the parent issue, as <owner>/<repo>#<number>; omit for an agenda with no parent."),
+	const wireGitHubActionSchema = object({
+		publishPr: object({
+			issue: wireIssueRefSchema.describe("The subject issue."),
+			headRepo: wireRepoSchema.describe("Repository holding the head branch; usually the subject repository."),
+			branch: text.describe("Head branch name holding the commits to publish."),
+			head: shaSchema.describe("Full 40-64 character lowercase hex commit sha."),
+			target: wireTargetSchema.describe("Base repository and branch."),
+			pr: wireIssueRefSchema.optional().describe("Open PR to update; omit to create one."),
+			expectedBodyHash: hashSchema
+				.optional()
+				.describe("64-character hex body hash expected when updating an existing PR; omit when creating one."),
+			title: text.describe("Pull request title."),
+			body: text.describe("Pull request body."),
+		})
+			.optional()
+			.describe("Create or update a pull request."),
+		merge: object({
+			issue: wireIssueRefSchema.describe("The subject issue."),
+			pr: wireIssueRefSchema.describe("The pull request to merge."),
+			head: shaSchema.describe("Full 40-64 character lowercase hex commit sha."),
+			target: wireTargetSchema.describe("Base repository and branch."),
+			stampHash: hashSchema.describe("64-character hex gate stamp hash authorizing this merge."),
+		})
+			.optional()
+			.describe("Merge an approved pull request."),
+		setIssueState: object({
+			issue: wireIssueRefSchema.describe("The subject issue."),
+			open: z.boolean().describe("true reopens the issue, false closes it."),
+			bodyHash: hashSchema.describe("64-character hex issue body hash the state change is based on."),
+			afterEvent: text.optional().describe("Lifecycle event the change follows; omit when none."),
+		})
+			.optional()
+			.describe("Open or close an issue."),
+		replaceBody: object({
+			issue: wireIssueRefSchema.describe("The subject issue."),
+			expectedHash: hashSchema.describe("64-character hex issue body hash expected before the edit."),
+			body: z.string().describe("New issue body (may be empty)."),
+		})
+			.optional()
+			.describe("Replace an issue body."),
+		createIssue: object({
+			repo: wireRepoSchema.describe("Repository where the issue is created."),
+			title: text.describe("Issue title."),
+			body: text.describe("Issue body."),
+		})
+			.optional()
+			.describe("Create a new issue."),
+		attachChild: object({
+			parent: wireIssueRefSchema.describe("Parent issue."),
+			child: wireIssueRefSchema.describe("Child issue to attach."),
+		})
+			.optional()
+			.describe("Attach a child sub-issue to a parent issue."),
+		rerunChecks: object({
+			pr: wireIssueRefSchema.describe("Pull request whose checks are rerun."),
+			repo: wireRepoSchema.describe("Repository owning the workflow run."),
+			workflowRunId: revision.describe("Numeric id of the failing workflow run to rerun."),
+			previousAttempt: revision.describe("Numeric attempt being superseded."),
+			head: shaSchema.describe("Full 40-64 character lowercase hex commit sha."),
+		})
+			.optional()
+			.describe("Rerun a failing GitHub Actions workflow run."),
+		comment: object({
+			issue: wireIssueRefSchema.describe("Issue to comment on."),
+			body: text.describe("Complete comment body ending with its marker line."),
+			marker: object({
+				kind: z.enum(["impl", "ask"]).describe("Marker kind identifying the comment at source."),
+				key: text.describe("Marker key identifying the comment at source."),
+			}).describe("Source comment marker."),
+		})
+			.optional()
+			.describe("Post a marked comment on an issue."),
+		setProjectField: object({
+			issue: wireIssueRefSchema.describe("Subject issue."),
+			field: z.literal("status").describe("Project field to set (only status is supported)."),
+			option: text.describe("Configured Status option name to set."),
+		})
+			.optional()
+			.describe("Set a GitHub Project status field."),
+		requestAnswer: object({
+			issue: wireIssueRefSchema.describe("Subject issue."),
+			comment: revision.describe("Id of the ask comment holding the decision item."),
+			question: text.describe("Decision item text handed to the intent guardians."),
+			tier: tierSchema.describe("Decision difficulty: simple for one detail, complex across modules or contracts."),
+		})
+			.optional()
+			.describe("Request an answer from the intent guardians."),
+	}).describe("One GitHub write action: set exactly one action property.");
+
+	const tierField = tierSchema
+		.optional()
+		.describe("Only for kind='question': simple for one implementation detail, complex for a decision across modules or contracts.");
+
+	const dispatchTicketParametersSchema = object({
+		convene: object({
+			parent: wireIssueRefSchema.optional().describe("Parent GitHub issue; omit for an agenda with no parent."),
 			tickets: z
-				.array(wireEntry)
+				.array(wireEntrySchema)
+				.min(1)
+				.describe("Every ticket the agenda contains (at least one; every current parent sub-issue must have one)."),
+		})
+			.optional()
+			.describe("Start a new agenda with its ticket graph."),
+		resume: object({
+			agenda: agendaIdSchema.describe("The UUID of the saved active agenda listed in the startup message."),
+		})
+			.optional()
+			.describe("Take over a saved active agenda."),
+		finish: object({
+			summary: text.describe("The final summary of what the agenda delivered."),
+		})
+			.optional()
+			.describe("Complete the agenda after every ticket and the parent closure rest in final states."),
+	});
+
+	const dispatchStepParametersSchema = object({
+		ticketId: text.describe("The ticket id (or closure id), as returned by read dispatch://status or read dispatch://tickets."),
+		launch: object({
+			role: roleSchema.optional().describe("Optional seat role to start; omit to launch the ticket's currently executable seats."),
+		})
+			.optional()
+			.describe("Launch this ticket once so Dispatch relays its seats along the workflow."),
+		resolve: object({
+			revision: revision.describe(
+				"The ticket revision returned by read dispatch://<ticketId> or read dispatch://status. A stale revision is refused.",
+			),
+			ruling: text.describe("The ruling sentence recorded in the ticket history and carried by its seats."),
+			to: z
+				.string()
+				.regex(/^[A-Za-z][A-Za-z0-9_-]*$/)
+				.describe("Workflow state to continue in, by name (use a state from the ticket workflow, or the parent workflow for the closure)."),
+			dependsOn: z.array(text).optional().describe("Replaces the ticket dependency ids; [] makes it independent."),
+			target: wireTargetSchema.optional().describe("Replaces the ticket target repository and base branch."),
+			adoptPr: wireIssueRefSchema
 				.optional()
-				.describe("convene: every ticket the agenda contains, at least one; every current parent sub-issue must have one."),
-			revision: revisionField,
-			ruling: text.optional().describe("resolve: the ruling sentence recorded in the ticket history and carried by its seats."),
-			to: text
-				.optional()
-				.describe(
-					"resolve: the workflow state to continue in, by name; use a state from the ticket workflow, or the parent workflow for the closure.",
-				),
-			dependsOn: z.array(text).optional().describe("resolve: replaces the ticket dependency ids; [] makes it independent."),
-			target: text.optional().describe("resolve: replaces the ticket target, as <owner>/<repo>@<branch>."),
-			adoptPr: text
-				.optional()
-				.describe(
-					"resolve: adopts an existing pull request, as <owner>/<repo>#<number>, that closes this ticket issue at its target. Omit to leave the associated PR alone.",
-				),
+				.describe("Adopts an existing pull request closing this ticket issue at its target. Omit to leave the associated PR alone."),
 			clearAdoptPr: z
 				.boolean()
 				.optional()
-				.describe(
-					"resolve: true removes the associated pull request and merge terminal; omit or false keeps it. Do not combine with adoptPr.",
-				),
+				.describe("true removes the associated pull request and merge terminal; omit or false keeps it. Do not combine with adoptPr."),
 			noCode: text
 				.optional()
-				.describe(
-					"resolve: the reason the issue needs no code change; only accepted when to leads to a closeIssue action or a final state.",
-				),
-			add: z.array(wireEntry).optional().describe("resolve: ticket entries to add to the agenda."),
-			remove: z.array(text).optional().describe("resolve: ticket ids to remove; a ticket with unsettled effects cannot be removed."),
-			effects: wireEffects.optional(),
-			actions: wireActions.optional(),
-		}).describe("The Dispatch operation Main is performing."),
+				.describe("Reason the issue needs no code change; only accepted when to leads to a closeIssue action or a final state."),
+			add: z.array(wireEntrySchema).optional().describe("Ticket entries to add to the agenda."),
+			remove: z.array(text).optional().describe("Ticket ids to remove; a ticket with unsettled effects cannot be removed."),
+			effects: wireEffectsSchema.optional(),
+			githubActions: z
+				.array(wireGitHubActionSchema)
+				.optional()
+				.describe("GitHub writes to enqueue after the ruling; the state machine performs and confirms them. Omit for none."),
+		})
+			.optional()
+			.describe("Record a ruling, edit topology, settle effects, or enqueue GitHub writes."),
 	});
-	const seatToolParametersSchema = object({
-		input: object({
-			op: z
-				.enum(["read", "submit", "verdict", "escalate"])
-				.describe(
-					"The operation: read returns the bound ticket, submit hands off your branch, verdict hands off your gate judgment, escalate hands a blocker or question to Main.",
-				),
-			ticketId: ticketIdField,
-			revision: revisionField,
-			branch: text.optional().describe("submit: the pushed branch holding the delivered work."),
-			head: shaSchema.optional().describe("submit: the full 40-64 character lowercase hex commit sha at the head of branch."),
-			title: text.optional().describe("submit: the pull request title."),
-			body: text
-				.optional()
-				.describe("submit: the complete pull request body, which must contain exactly one closing keyword for the bound issue."),
-			role: text.optional().describe("verdict: the judge role this verdict belongs to; it must be your bound role."),
-			ok: z.boolean().optional().describe("verdict: true passes the gate, false rejects it with note as the findings."),
-			note: text.optional().describe("verdict: the concrete evidence note for the pass or rejection."),
-			kind: z
-				.enum(["question", "blocked", "split", "noCode"])
-				.optional()
-				.describe(
-					"escalate: question asks the intent guardians or Main; blocked, split and noCode report why this ticket cannot be delivered as scoped.",
-				),
-			reason: text
-				.optional()
-				.describe("escalate: the blocker, question, split or no-code reason, with the evidence and the decision needed."),
-			tier: tierField,
-		}).describe("The Dispatch operation the seat is performing."),
+
+	const seatSubmitParametersSchema = object({
+		branch: text.describe("The pushed branch holding the delivered work."),
+		head: shaSchema.describe("The full 40-64 character lowercase hex commit sha at the head of branch."),
+		title: text.describe("The pull request title."),
+		body: text.describe("The complete pull request body, which must contain exactly one closing keyword for the bound issue."),
+		revision: revision.optional().describe("Optional ticket revision guard; defaults to this seat's bound revision."),
 	});
+
+	const seatVerdictParametersSchema = object({
+		ok: z.boolean().describe("true passes the gate, false rejects it with note as the findings."),
+		note: text.describe("The concrete evidence note for the pass or rejection."),
+		revision: revision.optional().describe("Optional ticket revision guard; defaults to this seat's bound revision."),
+	});
+
+	const seatEscalateParametersSchema = object({
+		kind: z
+			.enum(["question", "blocked", "split", "noCode"])
+			.describe(
+				"question asks the intent guardians or Main; blocked, split, and noCode report why this ticket cannot be delivered as scoped.",
+			),
+		reason: text.describe("The blocker, question, split, or no-code reason, with the evidence and the decision needed."),
+		tier: tierField,
+		revision: revision.optional().describe("Optional ticket revision guard; defaults to this seat's bound revision."),
+	});
+
 	return {
 		text,
 		ordinal,
@@ -302,7 +341,15 @@ export function buildPublicGrammar(z: PublicZ) {
 		conveneSchema,
 		actionSchema,
 		portInputSchema,
-		toolParametersSchema,
-		seatToolParametersSchema,
+		wireRepoSchema,
+		wireIssueRefSchema,
+		wireTargetSchema,
+		wireEntrySchema,
+		wireGitHubActionSchema,
+		dispatchTicketParametersSchema,
+		dispatchStepParametersSchema,
+		seatSubmitParametersSchema,
+		seatVerdictParametersSchema,
+		seatEscalateParametersSchema,
 	};
 }

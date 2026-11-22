@@ -6,7 +6,7 @@ import { YAML } from "bun";
 import { belongsTo, createAgenda } from "../src/domain/engine.ts";
 import { bodyHash } from "../src/domain/identity.ts";
 import type { Agenda, Caller, Facts, IssueRef, PortError, Result } from "../src/domain/model.ts";
-import { parseToolParameters } from "../src/domain/parse.ts";
+import { parseDispatchTicketParameters } from "../src/domain/parse.ts";
 import { parseWorkflow } from "../src/domain/workflow.ts";
 import type { GitHubPort, HostPort } from "../src/ports/contracts.ts";
 import { createAgendaFiles } from "../src/ports/state.ts";
@@ -562,10 +562,10 @@ test("a coordinator that shuts down detaches its agenda, and resume then needs n
 	}
 });
 
-test("resume input carries only op and agenda; any other field is refused", () => {
+test("resume input carries only agenda; any other field is refused", () => {
 	const agenda = "aaaabbbb-1111-4111-8111-111111111111";
-	expect(parseToolParameters({ input: { op: "resume", agenda } }).ok).toBe(true);
-	expect(parseToolParameters({ input: { op: "resume", agenda, confirmed: true } }).ok).toBe(false);
+	expect(parseDispatchTicketParameters({ resume: { agenda } }).ok).toBe(true);
+	expect(parseDispatchTicketParameters({ resume: { agenda, confirmed: true } }).ok).toBe(false);
 });
 
 const otherIssue = { repo: repository, number: 2 };
@@ -681,12 +681,12 @@ test("the coordinator of the leftover agenda's own issue is still offered it", a
 test("the startup message asks for resume only when the launch issue has a saved active agenda", () => {
 	const none = coordinatorBriefing({ reference: "test/dispatch#1", saved: { kind: "listed", active: [] } });
 	expect(none).toContain("Saved agendas: no saved active agenda.");
-	expect(none).toContain('"op":"convene"');
-	expect(none).not.toContain('"op":"resume"');
+	expect(none).toContain('{"convene":');
+	expect(none).not.toContain('{"resume":');
 	const saved = coordinatorBriefing({
 		reference: "test/dispatch#1",
 		saved: { kind: "listed", active: ["9c825bdb-049d-4098-8836-0559bfd96760"] },
 	});
 	expect(saved).toContain("Saved agendas: active: 9c825bdb-049d-4098-8836-0559bfd96760.");
-	expect(saved).toContain('"op":"resume"');
+	expect(saved).toContain('{"resume":');
 });

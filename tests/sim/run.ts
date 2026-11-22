@@ -297,20 +297,47 @@ const logSchema = z.object({
 	step: z.object({ name: z.string().optional(), args: z.record(z.string(), z.unknown()).optional(), text: z.string().optional() }),
 });
 export type LogEntry = z.infer<typeof logSchema>;
-const inputSchema = z
-	.object({
-		input: z
-			.object({
-				op: z.string(),
-				ticketId: z.string().optional(),
-				role: z.string().optional(),
-				ok: z.boolean().optional(),
-				note: z.string().optional(),
-				revision: z.number().optional(),
-			})
-			.passthrough(),
-	})
-	.passthrough();
+type NormalizedDispatchAction = {
+	op: string;
+	ticketId?: string;
+	role?: string;
+	revision?: number;
+	agenda?: string;
+	effects?: unknown;
+};
+
+function normalizeDispatchCall(name: string | undefined, args: Record<string, unknown> | undefined): NormalizedDispatchAction | null {
+	if (!args) return null;
+	if (name === "dispatch_ticket") {
+		if (typeof args.convene === "object" && args.convene !== null) return { op: "convene" };
+		if (typeof args.resume === "object" && args.resume !== null) {
+			const agenda = (args.resume as { agenda?: unknown }).agenda;
+			return { op: "resume", ...(typeof agenda === "string" ? { agenda } : {}) };
+		}
+		if (typeof args.finish === "object" && args.finish !== null) return { op: "finish" };
+	}
+	if (name === "dispatch_step") {
+		const ticketId = typeof args.ticketId === "string" ? args.ticketId : undefined;
+		if (typeof args.launch === "object" && args.launch !== null) {
+			const role = (args.launch as { role?: unknown }).role;
+			return {
+				op: "launch",
+				...(ticketId !== undefined ? { ticketId } : {}),
+				...(typeof role === "string" ? { role } : {}),
+			};
+		}
+		if (typeof args.resolve === "object" && args.resolve !== null) {
+			const resolve = args.resolve as { revision?: unknown; effects?: unknown };
+			return {
+				op: "resolve",
+				...(ticketId !== undefined ? { ticketId } : {}),
+				...(typeof resolve.revision === "number" ? { revision: resolve.revision } : {}),
+				...(resolve.effects !== undefined ? { effects: resolve.effects } : {}),
+			};
+		}
+	}
+	return null;
+}
 
 function modelLog(run: Run): LogEntry[] {
 	return readFileSync(run.scenario.log, "utf8")
@@ -319,10 +346,8 @@ function modelLog(run: Run): LogEntry[] {
 		.map((line) => logSchema.parse(JSON.parse(line)));
 }
 
-function dispatchInput(entry: LogEntry): z.infer<typeof inputSchema>["input"] | null {
-	if (entry.step.name !== "dispatch") return null;
-	const parsed = inputSchema.safeParse(entry.step.args);
-	return parsed.success ? parsed.data.input : null;
+function dispatchInput(entry: LogEntry): NormalizedDispatchAction | null {
+	return normalizeDispatchCall(entry.step.name, entry.step.args);
 }
 
 const sessionLineSchema = z.object({ type: z.string() }).passthrough();
@@ -365,7 +390,7 @@ const callSchema = z
 		type: z.literal("toolCall"),
 		id: z.string(),
 		name: z.string(),
-		arguments: z.object({ input: z.object({ op: z.string(), note: z.string().optional() }).passthrough() }).passthrough(),
+		arguments: z.record(z.string(), z.unknown()),
 	})
 	.passthrough();
 const messageLineSchema = z
@@ -383,10 +408,11 @@ function acceptedVerdicts(sessions: SeatSession[]): { ticket: string; role: stri
 			if (message.role !== "assistant" || !Array.isArray(message.content)) continue;
 			for (const block of message.content) {
 				const call = callSchema.safeParse(block);
-				if (!call.success || call.data.name !== "dispatch" || call.data.arguments.input.op !== "verdict") continue;
+				if (!call.success || call.data.name !== "dispatch_verdict") continue;
 				const result = messages.find((item) => item.role === "toolResult" && item.toolCallId === call.data.id);
+				const note = typeof call.data.arguments.note === "string" ? call.data.arguments.note : "";
 				if (result && JSON.stringify(result.content).includes('\\"ok\\":true'))
-					out.push({ ticket: session.ticket, role: session.role, note: call.data.arguments.input.note ?? "" });
+					out.push({ ticket: session.ticket, role: session.role, note });
 			}
 		}
 	}
@@ -403,7 +429,7 @@ const dispatchReplySchema = z
 			.optional(),
 	})
 	.passthrough();
-type MainCall = { input: z.infer<typeof callSchema>["arguments"]["input"]; reply: z.infer<typeof dispatchReplySchema> | null };
+type MainCall = { input: NormalizedDispatchAction; reply: z.infer<typeof dispatchReplySchema> | null };
 
 function mainCalls(run: Run): MainCall[] {
 	const replyOf = (content: unknown): MainCall["reply"] => {
@@ -432,10 +458,12 @@ function mainCalls(run: Run): MainCall[] {
 					? []
 					: message.content.flatMap((block) => {
 							const call = callSchema.safeParse(block);
-							if (!call.success || call.data.name !== "dispatch") return [];
+							if (!call.success) return [];
+							const normalized = normalizeDispatchCall(call.data.name, call.data.arguments);
+							if (!normalized) return [];
 							return [
 								{
-									input: call.data.arguments.input,
+									input: normalized,
 									reply: replyOf(messages.find((item) => item.role === "toolResult" && item.toolCallId === call.data.id)?.content),
 								},
 							];
@@ -767,7 +795,9 @@ const cases: Case[] = [
 			for (const session of sessions) {
 				const init = session.lines.find((line) => line.type === "session_init");
 				const tools = Array.isArray(init?.tools) ? init.tools : [];
-				for (const name of ["task", "dispatch"])
+				const expectedTools =
+					session.role === "owner" ? ["task", "dispatch_submit", "dispatch_escalate"] : ["task", "dispatch_verdict", "dispatch_escalate"];
+				for (const name of expectedTools)
 					if (!tools.includes(name)) failures.push(`${session.ticket} ${session.role} seat lacks ${name}: ${JSON.stringify(tools)}`);
 				if (init?.spawns !== "*") failures.push(`${session.ticket} ${session.role} seat spawns ${JSON.stringify(init?.spawns)}, not "*"`);
 			}
@@ -1360,11 +1390,12 @@ const cases: Case[] = [
 					failures.push(`${session.ticket} ${session.role} first request lacks mcp__fx_load: ${JSON.stringify(first?.tools)}`);
 				const contract = session.lines.find((line) => line.type === "custom" && line.customType === "dispatch-session-contract");
 				const tools = z.object({ data: z.object({ tools: z.array(z.string()) }) }).safeParse(contract);
-				const count = tools.success ? tools.data.data.tools.filter((name) => name === "dispatch").length : 0;
+				const seatTool = session.role === "owner" ? "dispatch_submit" : "dispatch_verdict";
+				const count = tools.success ? tools.data.data.tools.filter((name) => name === seatTool).length : 0;
 				console.log(
-					`  ${run.name}: seat ${session.ticket} ${session.role} first request presents mcp__fx_load ${first?.tools.includes("mcp__fx_load")}; contract tools list dispatch ${count} times`,
+					`  ${run.name}: seat ${session.ticket} ${session.role} first request presents mcp__fx_load ${first?.tools.includes("mcp__fx_load")}; contract tools list ${seatTool} ${count} times`,
 				);
-				if (count !== 1) failures.push(`${session.ticket} ${session.role} contract lists dispatch ${count} times`);
+				if (count !== 1) failures.push(`${session.ticket} ${session.role} contract lists ${seatTool} ${count} times`);
 			}
 			return failures;
 		},

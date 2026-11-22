@@ -1,9 +1,14 @@
 import { hostname } from "node:os";
-import { type ExtensionAPI, type ExtensionContext, logger, z } from "@oh-my-pi/pi-coding-agent";
+import { z } from "@oh-my-pi/omptype/zod";
+import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
+import { InternalUrlRouter } from "@oh-my-pi/pi-coding-agent/internal-urls";
 import { AgentRegistry, MAIN_AGENT_ID } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
+import { logger } from "@oh-my-pi/pi-utils";
 import { applyActiveTools } from "./omomp-shared/active-tools.ts";
 import { tr } from "./omomp-shared/i18n.ts";
-import { parseToolParameters } from "./src/domain/parse.ts";
+import { registerInternalScheme } from "./omomp-shared/internal-url.ts";
+import type { ParseError, PortInput, Result } from "./src/domain/model.ts";
+import { parseDispatchStepParameters, parseDispatchTicketParameters } from "./src/domain/parse.ts";
 import { buildPublicGrammar } from "./src/domain/public-grammar.ts";
 import { launcherCommand } from "./src/launcher/commands.ts";
 import { loadMeerkatConfig, type MeerkatConfig } from "./src/meerkat/config.ts";
@@ -18,6 +23,7 @@ import { configuredWorkflow } from "./src/ports/workflow-settings.ts";
 import { Attention } from "./src/runtime/attention.ts";
 import { DispatchController, type RuntimeError } from "./src/runtime/controller.ts";
 import { type CoordinatorIdentity, coordinatorBriefing, parseCoordinatorFlag } from "./src/runtime/coordinator.ts";
+import { createDispatchProtocolHandler, type DispatchUrlRuntime } from "./src/runtime/dispatch-url.ts";
 import { runtimeErrorText } from "./src/runtime/error-text.ts";
 import { RuntimeExit } from "./src/runtime/exit.ts";
 
@@ -29,6 +35,7 @@ class ProcessRuntime {
 	private binding: { pi: ExtensionAPI; ctx: ExtensionContext } | null = null;
 	private controller: DispatchController | null = null;
 	private host: HostPort | null = null;
+	private meerkatProjectRef: { owner: string; number: number } | null = null;
 	private readonly attention = new Attention();
 	private readonly exit = new RuntimeExit();
 	private started = false;
@@ -65,13 +72,24 @@ class ProcessRuntime {
 			{
 				customType: "dispatch-attention",
 				display: true,
-				content: `Dispatch needs Main: ${fresh.join(", ")}. launch:<ticket> may be launched; escalated:<ticket>:<revision> awaits read and resolve; failed:<ticket>:<effect> is a failed Meerkat effect (a record write, or the request asking the intent guardians to settle a worker question) that blocks finish until resolve settles it with retry, adopt or cancel, and a failed guardians request is sent again by resolve to Asking with retry on it; finish means every ticket and the closure are Done. Call dispatch status for the source-confirmed agenda; this notification is not a ticket snapshot.`,
+				content: `Dispatch needs Main: ${fresh.join(", ")}. launch:<ticket> may be launched with dispatch_step; escalated:<ticket>:<revision> awaits read dispatch://<ticket> and dispatch_step resolve; failed:<ticket>:<effect> is a failed Meerkat effect (a record write, or the request asking the intent guardians to settle a worker question) that blocks finish until dispatch_step resolve settles it with retry, adopt or cancel, and a failed guardians request is sent again by resolve to Asking with retry on it; finish means every ticket and the closure are Done (call dispatch_ticket finish). Use read dispatch://status for the source-confirmed agenda; this notification is not a ticket snapshot.`,
 			},
 			{ triggerTurn: true, deliverAs: "nextTurn" },
 		);
 	}
 	mainTurnEnded(ctx: ExtensionContext): void {
 		if (this.deferred && this.binding?.ctx.sessionManager === ctx.sessionManager) this.changed(true);
+	}
+	urlRuntime(): DispatchUrlRuntime | null {
+		const host = this.host,
+			controller = this.controller;
+		if (!host || !controller || !host.resolveCaller) return null;
+		const resolveCaller = host.resolveCaller.bind(host);
+		return {
+			resolveCaller,
+			execute: (caller, operation) => controller.execute(caller, operation),
+			meerkatProject: () => this.meerkatProjectRef,
+		};
 	}
 	async start(pi: ExtensionAPI, ctx: ExtensionContext, identity: CoordinatorIdentity): Promise<void> {
 		if (this.started) return;
@@ -98,6 +116,7 @@ class ProcessRuntime {
 			}
 			meerkat = loaded.value;
 		}
+		this.meerkatProjectRef = meerkat ? { owner: meerkat.repos.agenda.project.owner, number: meerkat.repos.agenda.project.number } : null;
 		this.host = createHostPort({
 			dataDir: directory,
 			ticketRevision: (ticketId) => this.controller?.ticketRevision(ticketId) ?? null,
@@ -156,7 +175,7 @@ class ProcessRuntime {
 		const caller = this.host.bind(ctx);
 		if (!caller.ok || caller.value.kind !== "main") throw new Error("Cannot bind Main to the coordinator");
 		this.controller.setMain(caller.value);
-		await applyActiveTools(pi, [...pi.getActiveTools(), "dispatch"]);
+		await applyActiveTools(pi, [...pi.getActiveTools(), "dispatch_ticket", "dispatch_step"]);
 		const saved = await this.controller.startup(caller.value);
 		if (!saved.ok) this.report(saved.error);
 		pi.sendMessage(
@@ -171,14 +190,13 @@ class ProcessRuntime {
 			{ triggerTurn: true, deliverAs: "nextTurn" },
 		);
 	}
-	async execute(ctx: ExtensionContext, params: unknown) {
-		const parsed = parseToolParameters(params);
+	async execute(ctx: ExtensionContext, parsed: Result<PortInput, ParseError>) {
 		if (!parsed.ok) return { ok: false, error: { kind: "parse", error: parsed.error } };
 		if (!this.host || !this.controller)
 			return { ok: false, error: { kind: "inactive", message: "This process is not a Dispatch coordinator" } };
 		const caller = this.host.bind(ctx);
 		if (!caller.ok) return { ok: false, error: { kind: "host", error: caller.error } };
-		const result = await this.controller.execute(caller.value, parsed.value.input);
+		const result = await this.controller.execute(caller.value, parsed.value);
 		this.changed();
 		return result;
 	}
@@ -191,20 +209,42 @@ const slots = globalThis as typeof globalThis & { [SLOT]?: ProcessRuntime };
 export default function dispatch(pi: ExtensionAPI): void {
 	if (!slots[SLOT]) slots[SLOT] = new ProcessRuntime();
 	const runtime = slots[SLOT];
+	const grammar = buildPublicGrammar(z);
+	const schemeResult = registerInternalScheme(
+		InternalUrlRouter.instance(),
+		"omp-dispatch",
+		createDispatchProtocolHandler(() => runtime.urlRuntime()),
+	);
+	if (schemeResult.kind !== "registered") {
+		pi.logger.warn(`omp-dispatch: dispatch:// registration skipped: ${schemeResult.reason}`);
+	}
 	pi.registerFlag("dispatch", {
 		description: tr("Start Main as coordinator for <owner>/<repo>#<number>", "将 Main 启动为 <owner>/<repo>#<number> 的协调者"),
 		type: "string",
 	});
 	pi.registerTool({
-		name: "dispatch",
-		label: tr("Dispatch", "调度"),
+		name: "dispatch_ticket",
+		label: tr("Dispatch Ticket", "调度工单"),
 		description:
-			"Main coordinates a durable ticket graph and launches each ticket once; Dispatch then relays its seats until Done, Escalated, or Asking (a work seat's question with the intent guardians, which resumes the worker on a reply or ends the ticket Replaced). Seats read one ticket and hand off with submit/verdict/escalate. GitHub writes are performed and freshly confirmed by the state machine.",
+			"Manage Dispatch agenda lifecycle (convene a new ticket graph, resume a saved active agenda, or finish a completed agenda). Read live state via read dispatch://status, dispatch://tickets, or dispatch://<ticketId>.",
 		loadMode: "essential",
-		parameters: buildPublicGrammar(z).toolParametersSchema,
+		parameters: grammar.dispatchTicketParametersSchema,
 		defaultInactive: true,
 		async execute(_id, params, _signal, _update, ctx) {
-			const response = await runtime.execute(ctx, params);
+			const response = await runtime.execute(ctx, parseDispatchTicketParameters(params));
+			return { content: [{ type: "text", text: JSON.stringify(response) }], details: response, isError: !response.ok };
+		},
+	});
+	pi.registerTool({
+		name: "dispatch_step",
+		label: tr("Dispatch Step", "调度步骤"),
+		description:
+			"Launch a Dispatch ticket once (Dispatch relays its seats automatically) or resolve a ticket/closure with an exceptional ruling, topology edit, effect disposition, or GitHub write actions. Read state via read dispatch://status or dispatch://<ticketId>.",
+		loadMode: "essential",
+		parameters: grammar.dispatchStepParametersSchema,
+		defaultInactive: true,
+		async execute(_id, params, _signal, _update, ctx) {
+			const response = await runtime.execute(ctx, parseDispatchStepParameters(params));
 			return { content: [{ type: "text", text: JSON.stringify(response) }], details: response, isError: !response.ok };
 		},
 	});
