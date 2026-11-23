@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-24
+
 ### Breaking Changes
 
 - The `dispatch` tool is replaced by `dispatch_ticket` (`convene`, `resume`, `finish`) and `dispatch_step` (`launch`, `resolve`), and Main reads live state through the `dispatch://` URL instead of the tool's `status`, `tickets` and `read` operations
