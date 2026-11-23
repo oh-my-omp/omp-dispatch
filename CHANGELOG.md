@@ -2,6 +2,22 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- The `dispatch` tool is replaced by `dispatch_ticket` (`convene`, `resume`, `finish`) and `dispatch_step` (`launch`, `resolve`), and Main reads live state through the `dispatch://` URL instead of the tool's `status`, `tickets` and `read` operations
+- Seats call `dispatch_submit`, `dispatch_verdict` and `dispatch_escalate` instead of one `dispatch` tool with an `op`: the ticket id and role are bound to the seat, so `submit` no longer takes `ticketId` and `verdict` no longer takes `role`, and each tool's optional `revision` defaults to the seat's bound revision
+- Issue, repository and target coordinates are structured objects (`owner`, `repo` and `number`, or `branch`) instead of `<owner>/<repo>#<number>` and `<owner>/<repo>@<branch>` strings
+- `resolve` takes `githubActions`, where each entry sets exactly one named action property (`publishPr`, `merge`, `setIssueState`, …), instead of `actions` entries with a `kind` field
+- `dispatch_step` `resolve` requires `revision`, `ruling` and `to` in the same call, where each used to be optional
+
+### Added
+
+- Added the read-only `dispatch://` internal URL scheme: `read dispatch://status` returns the agenda, `read dispatch://tickets?repo=<owner>/<repo>&project=<owner>/<number>&limit=<n>` returns its tickets with optional filters, `read dispatch://<ticketId>` returns one ticket, and `read dispatch://seat` returns a seat's bound context and ticket, each as JSON and only to the caller allowed to read it
+
+### Changed
+
+- `@oh-my-pi/omptype`, `@oh-my-pi/pi-tui` and `@oh-my-pi/pi-utils` are now peer dependencies, and `@oh-my-pi/omptype` is no longer a regular dependency
+
 ## [0.2.3] - 2026-11-22
 
 ### Fixed
