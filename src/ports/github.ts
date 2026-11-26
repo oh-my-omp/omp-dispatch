@@ -113,7 +113,7 @@ const issueRead = z.object({
 const sourceComment = z.object({ databaseId: positive, body: z.string() });
 const sourceProjectItem = z.object({
 	id: z.string().min(1),
-	project: z.object({ number: positive, owner: z.object({ login: z.string().min(1) }) }),
+	content: z.object({ __typename: z.string().min(1), number: positive.optional(), repository: repositoryName.optional() }).nullable(),
 	fieldValueByName: z.object({ __typename: z.literal("ProjectV2ItemFieldSingleSelectValue"), name: z.string().min(1) }).nullable(),
 });
 const graphEnvelope = z.object({
@@ -194,8 +194,11 @@ const issueFields = `${referenceFields} body updatedAt state ${subIssuesPage(nul
  ${closedByPage(null)}`;
 const commentsPage = (cursor: string | null) =>
 	`comments(first:50${afterClause(cursor)}) { pageInfo { hasNextPage endCursor } nodes { databaseId body } }`;
-const projectItemsPage = (status: string, cursor: string | null) =>
-	`projectItems(first:20${afterClause(cursor)}) { pageInfo { hasNextPage endCursor } nodes { id project { number owner { __typename ... on Organization { login } ... on User { login } } } fieldValueByName(name:${quote(status)}) { __typename ... on ProjectV2ItemFieldSingleSelectValue { name } } } }`;
+const projectQuery = (repository: m.Repo, number: number) => `repo:${repository.owner}/${repository.name} #${number}`;
+function projectItemsRoot(project: MeerkatProjectSource, repository: m.Repo, number: number, cursor: string | null): string {
+	const fields = `projectV2(number:${project.number}) { items(first:20,query:${quote(projectQuery(repository, number))}${afterClause(cursor)}) { pageInfo { hasNextPage endCursor } nodes { id content { __typename ... on Issue { ${referenceFields} } } fieldValueByName(name:${quote(project.statusField)}) { __typename ... on ProjectV2ItemFieldSingleSelectValue { name } } } } }`;
+	return `repositoryOwner(login:${quote(project.owner)}) { __typename ... on Organization { ${fields} } ... on User { ${fields} } }`;
+}
 function issueSnapshot(source: z.infer<typeof issueRead>, meerkat: m.IssueMeerkat | null): m.IssueSnapshot {
 	const closed = source.lastClose.nodes[0],
 		reopened = source.lastReopen.nodes[0];
@@ -319,7 +322,7 @@ export function createGitHubPort(options: { actor?: string; meerkat: MeerkatProj
 		}
 	};
 	const meerkat = options.meerkat;
-	const issueSelection = meerkat ? `${issueFields} ${commentsPage(null)} ${projectItemsPage(meerkat.statusField, null)}` : issueFields;
+	const issueSelection = meerkat ? `${issueFields} ${commentsPage(null)}` : issueFields;
 	async function result<T>(action: () => Promise<T>): Promise<m.Result<T, m.PortError>> {
 		try {
 			return { ok: true, value: await action() };
@@ -516,35 +519,43 @@ export function createGitHubPort(options: { actor?: string; meerkat: MeerkatProj
 			source.closedByPullRequestsReferences = { ...source.closedByPullRequestsReferences, nodes };
 		}
 	}
-	async function projectItem(raw: unknown, project: MeerkatProjectSource, cause: string): Promise<m.IssueMeerkat["item"]> {
-		const source = decode(z.object({ ...sourceRefFields, projectItems: connection(sourceProjectItem) }), raw, "issue project items");
-		const repository = repo(source.repository),
-			anchor = `${repoKey(repository)}#${source.number}`;
+	async function projectItem(
+		first: unknown,
+		repository: m.Repo,
+		number: number,
+		project: MeerkatProjectSource,
+		cause: string,
+	): Promise<m.IssueMeerkat["item"]> {
+		const anchor = `${project.owner.toLowerCase()}#${project.number} ${repoKey(repository)}#${number}`;
+		const ownerSchema = z.object({ projectV2: z.object({ items: connection(sourceProjectItem) }).nullable() }).nullable();
+		const pageSchema = z.object({ repositoryOwner: ownerSchema });
+		const owner = decode(ownerSchema, first, "Meerkat project items");
+		if (!owner) return fail("precondition", `Project owner ${project.owner} does not exist`);
+		if (!owner.projectV2) return fail("precondition", `Project ${project.owner}#${project.number} does not exist`);
 		const items = await drain({
 			label: `${anchor} project items`,
 			cause,
-			first: source.projectItems,
+			first: owner.projectV2.items,
 			anchor,
-			next: (after) =>
-				selection(
-					repository,
-					`issue(number:${source.number}) { number repository { nameWithOwner } ${projectItemsPage(project.statusField, after)} }`,
-				),
+			next: (after) => projectItemsRoot(project, repository, number, after),
 			read: (data) => {
-				const issue = decode(
-					z.object({ repository: z.object({ issue: z.object({ ...sourceRefFields, projectItems: connection(sourceProjectItem) }) }) }),
-					data,
-					"project items page",
-				).repository.issue;
-				return { anchor: `${repoKey(repo(issue.repository))}#${issue.number}`, connection: issue.projectItems };
+				const page = decode(pageSchema, data, "project items page").repositoryOwner?.projectV2?.items;
+				if (!page) return fail("invalidResponse", `${anchor} project items: project disappeared during pagination`);
+				return { anchor, connection: page };
 			},
 		});
-		const item = items.find(
-			(node) => node.project.number === project.number && node.project.owner.login.toLowerCase() === project.owner.toLowerCase(),
-		);
+		const item = items.find((node) => {
+			const content = node.content;
+			return (
+				content?.__typename === "Issue" &&
+				content.number === number &&
+				content.repository !== undefined &&
+				repoKey(repo(content.repository)) === repoKey(repository)
+			);
+		});
 		return item ? { id: item.id, status: item.fieldValueByName?.name ?? null } : null;
 	}
-	async function issueMeerkat(raw: unknown, project: MeerkatProjectSource, cause: string): Promise<m.IssueMeerkat> {
+	async function issueMeerkat(raw: unknown, cause: string, item: m.IssueMeerkat["item"]): Promise<m.IssueMeerkat> {
 		const source = decode(z.object({ ...sourceRefFields, comments: connection(sourceComment) }), raw, "issue comments");
 		const repository = repo(source.repository),
 			anchor = `${repoKey(repository)}#${source.number}`;
@@ -570,7 +581,7 @@ export function createGitHubPort(options: { actor?: string; meerkat: MeerkatProj
 			if (read.kind === "marker") markers.push(read.fact);
 			else if (read.kind === "invalid") logger.warn("Dispatch ignored an invalid Meerkat marker", { issue: anchor, reason: read.reason });
 		}
-		return { markers, item: await projectItem(raw, project, cause) };
+		return { markers, item };
 	}
 	async function completePrConnections(source: SourcePr, cause: string): Promise<void> {
 		const repository = repo(source.repository);
@@ -737,7 +748,15 @@ export function createGitHubPort(options: { actor?: string; meerkat: MeerkatProj
 				},
 			});
 		}
-		for (const wanted of scope.issues)
+		for (const wanted of scope.issues) {
+			const projectItemSlot: { item: m.IssueMeerkat["item"] } = { item: null };
+			if (meerkat)
+				tasks.push({
+					query: projectItemsRoot(meerkat, wanted.repo, wanted.number, null),
+					consume: async (value) => {
+						projectItemSlot.item = await projectItem(value, wanted.repo, wanted.number, meerkat, cause);
+					},
+				});
 			tasks.push({
 				query: selection(wanted.repo, `issue(number:${wanted.number}) { ${issueSelection} }`),
 				consume: async (value) => {
@@ -745,7 +764,7 @@ export function createGitHubPort(options: { actor?: string; meerkat: MeerkatProj
 					const item = decode(issueRead, raw, "issue");
 					if (refKey(ref(item)) !== refKey(wanted)) fail("invalidResponse", "Issue identity mismatch");
 					await completeIssueConnections(item, cause);
-					issues.push(issueSnapshot(item, meerkat ? await issueMeerkat(raw, meerkat, cause) : null));
+					issues.push(issueSnapshot(item, meerkat ? await issueMeerkat(raw, cause, projectItemSlot.item) : null));
 					for (const linked of item.closedByPullRequestsReferences.nodes) {
 						const pr = ref(linked);
 						wantedPrs.set(refKey(pr), pr);
@@ -753,6 +772,7 @@ export function createGitHubPort(options: { actor?: string; meerkat: MeerkatProj
 					}
 				},
 			});
+		}
 		for (const wanted of scope.branches)
 			tasks.push({
 				query: selection(wanted.repo, `ref(qualifiedName:${quote(`refs/heads/${wanted.name}`)}) { ${branchFields} }`),
@@ -1066,12 +1086,20 @@ export function createGitHubPort(options: { actor?: string; meerkat: MeerkatProj
 		return value;
 	}
 	async function singleIssue(reference: m.IssueRef, cause: string): Promise<m.IssueSnapshot> {
-		const data = await graph(`query { ${selection(reference.repo, `issue(number:${reference.number}) { ${issueSelection} }`)} }`, cause);
+		const data = await graph(
+			`query { ${selection(reference.repo, `issue(number:${reference.number}) { ${issueSelection} }`)}${meerkat ? ` ${projectItemsRoot(meerkat, reference.repo, reference.number, null)}` : ""} }`,
+			cause,
+		);
 		const raw = decode(z.object({ repository: z.object({ issue: z.unknown() }) }), data, "issue").repository.issue;
 		const source = decode(issueRead, raw, "issue");
 		if (refKey(ref(source)) !== refKey(reference)) fail("invalidResponse", "Issue identity mismatch");
 		await completeIssueConnections(source, cause);
-		return issueSnapshot(source, meerkat ? await issueMeerkat(raw, meerkat, cause) : null);
+		return issueSnapshot(
+			source,
+			meerkat
+				? await issueMeerkat(raw, cause, await projectItem(data.repositoryOwner, reference.repo, reference.number, meerkat, cause))
+				: null,
+		);
 	}
 	async function preflightPr(input: PrWrite): Promise<void> {
 		const value = await branch(input.headRepo, input.branch, "publishPreflight");
@@ -1135,13 +1163,13 @@ export function createGitHubPort(options: { actor?: string; meerkat: MeerkatProj
 		const optionId = ids.options.get(option);
 		if (!optionId) return fail("precondition", `Project field ${meerkat.statusField} has no option ${option}`);
 		const data = await graph(
-			`query { ${selection(issue.repo, `issue(number:${issue.number}) { id ${referenceFields} ${projectItemsPage(meerkat.statusField, null)} }`)} }`,
+			`query { ${selection(issue.repo, `issue(number:${issue.number}) { id ${referenceFields} }`)} ${projectItemsRoot(meerkat, issue.repo, issue.number, null)} }`,
 			"setProjectField",
 		);
 		const raw = decode(z.object({ repository: z.object({ issue: z.unknown() }) }), data, "issue").repository.issue;
 		const content = decode(z.object({ id: z.string().min(1), ...sourceRefFields }), raw, "issue");
 		if (refKey(ref(content)) !== refKey(issue)) fail("invalidResponse", "Issue identity mismatch");
-		let itemId = (await projectItem(raw, meerkat, "setProjectField"))?.id;
+		let itemId = (await projectItem(data.repositoryOwner, issue.repo, issue.number, meerkat, "setProjectField"))?.id;
 		if (!itemId) {
 			const added = await graph(
 				`mutation { addProjectV2ItemById(input:{projectId:${quote(ids.projectId)},contentId:${quote(content.id)}}) { item { id } } }`,

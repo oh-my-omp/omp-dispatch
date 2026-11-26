@@ -196,7 +196,14 @@ test("entering Done from another state queues Status done; settling its write by
 	const closed = facts({ markers: [], item: null });
 	closed.issues[0]!.state = "closed";
 	let state = agenda(closed);
-	state.run = { kind: "attached", id: "run", mainAgentId: main.agentId, mainSessionId: main.sessionId, pid: 101, startedAt: "Sat Nov 7 06:00:00 2026" };
+	state.run = {
+		kind: "attached",
+		id: "run",
+		mainAgentId: main.agentId,
+		mainSessionId: main.sessionId,
+		pid: 101,
+		startedAt: "Sat Nov 7 06:00:00 2026",
+	};
 	const resolve = (to: string, effects: { effectId: string; disposition: "cancel" }[] = []): Agenda => {
 		const resolved = applyOperation(
 			state,
@@ -224,7 +231,11 @@ test("entering Done from another state queues Status done; settling its write by
 	expect(doneWrites().map((effect) => effect.action)).toEqual([{ kind: "setProjectField", issue, field: "status", option: "Done" }]);
 	const write = doneWrites()[0]!;
 	write.attempt = 1;
-	write.state = { kind: "failed", startedAt: 1, error: { kind: "uncertainOutcome", message: "External call returned without source confirmation" } };
+	write.state = {
+		kind: "failed",
+		startedAt: 1,
+		error: { kind: "uncertainOutcome", message: "External call returned without source confirmation" },
+	};
 	state = resolve("Done", [{ effectId: write.id, disposition: "cancel" }]);
 	expect(state.tickets[0]!.state).toBe("Done");
 	expect(doneWrites().map((effect) => effect.state.kind)).toEqual(["cancelled"]);

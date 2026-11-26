@@ -332,32 +332,12 @@ function buildRoot(dir: string, state: SimState): Node {
 				closedByPullRequestsReferences: () =>
 					connection(state.prs.filter((pr) => pr.repo === key && closedIssues(pr).includes(number)).map((pr) => reference(key, pr.number))),
 				comments: () => connection(issue.comments.map((comment) => node("IssueComment", { databaseId: comment.id, body: comment.body }))),
-				projectItems: () =>
-					connection(
-						state.project.items
-							.filter((item) => item.repo === key && item.number === number)
-							.map((item) =>
-								node(
-									"ProjectV2Item",
-									{
-										id: item.id,
-										project: projectNode(),
-										fieldValueByName: (args) =>
-											args.name === STATUS_FIELD && item.status !== null
-												? node("ProjectV2ItemFieldSingleSelectValue", { name: item.status })
-												: null,
-									},
-									{ fieldValueByName: ["name"] },
-								),
-							),
-					),
 			},
 			{
 				subIssues: PAGE_ARGS,
 				timelineItems: ["last", "itemTypes"],
 				closedByPullRequestsReferences: ["first", "includeClosedPrs", "after"],
 				comments: PAGE_ARGS,
-				projectItems: PAGE_ARGS,
 			},
 		);
 	};
@@ -375,8 +355,32 @@ function buildRoot(dir: string, state: SimState): Node {
 								options: STATUS_OPTIONS.map((name) => node("ProjectV2SingleSelectFieldOption", { id: optionId(name), name })),
 							})
 						: null,
+				items: (args) => {
+					const query = typeof args.query === "string" ? /^repo:([\w.-]+\/[\w.-]+) #(\d+)$/.exec(args.query) : null;
+					if (!query) throw new QueryError(`Unsupported project item query ${JSON.stringify(args.query)}`);
+					const itemRepo = query[1]!,
+						itemNumber = Number(query[2]);
+					return connection(
+						state.project.items
+							.filter((item) => item.repo.toLowerCase() === itemRepo.toLowerCase() && item.number === itemNumber)
+							.map((item) =>
+								node(
+									"ProjectV2Item",
+									{
+										id: item.id,
+										content: node("Issue", { number: item.number, repository: nameNode(item.repo) }),
+										fieldValueByName: (fieldArgs) =>
+											fieldArgs.name === STATUS_FIELD && item.status !== null
+												? node("ProjectV2ItemFieldSingleSelectValue", { name: item.status })
+												: null,
+									},
+									{ fieldValueByName: ["name"] },
+								),
+							),
+					);
+				},
 			},
-			{ field: ["name"] },
+			{ field: ["name"], items: ["first", "after", "query"] },
 		);
 	const prNode = (key: string, number: number): Node | null => {
 		const pr = state.prs.find((item) => item.repo === key && item.number === number);
