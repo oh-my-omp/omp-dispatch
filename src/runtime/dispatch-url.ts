@@ -1,5 +1,5 @@
 import type { InternalResource, InternalUrl, ProtocolHandler, ResolveContext } from "@oh-my-pi/pi-coding-agent/internal-urls";
-import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
+import { ToolError } from "@oh-my-pi/pi-coding-agent/tools/tool-errors";
 import { parseRepoReference, sameRepo } from "../domain/identity.ts";
 import type { Caller, PortError, PortInput, Result } from "../domain/model.ts";
 import type { ResolvedUrlCaller } from "../ports/contracts.ts";
