@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-11-26
+
 ### Fixed
 
 - Fixed the plugin failing to load on omp 19.2, which left `read dispatch://…` unanswered instead of returning Dispatch state or its tool errors
