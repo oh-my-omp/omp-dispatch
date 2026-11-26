@@ -1284,7 +1284,10 @@ export function statusOnDone(previous: ReadonlyAgenda, next: Agenda, meerkat: Me
 	for (const ticket of next.tickets) {
 		if (ticket.state !== "Done" || ticketDefinition(next.workflow, ticket)?.kind !== "final") continue;
 		const before = previous.tickets.find((item) => item.id === ticket.id);
-		if ((ticket.visits.Done ?? 0) > (before?.visits.Done ?? 0))
+		const entries = (ticket.visits.Done ?? 0) - (before?.visits.Done ?? 0);
+		if (entries <= 0) continue;
+		const stayedInDone = before?.state === "Done" && ticket.revision - before.revision === entries;
+		if (!stayedInDone)
 			enqueue(next, ticket.id, { kind: "setProjectField", issue: ticket.issue, field: "status", option: meerkat.status.done }, null);
 	}
 }

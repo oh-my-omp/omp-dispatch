@@ -191,16 +191,49 @@ test("a started work seat queues its impl comment and an in-progress Status, bot
 	).toMatchObject({ ok: false, error: { kind: "invalidTransition" } });
 });
 
-test("entering the final Done state queues Status done once per entry", () => {
-	const previous = agenda(facts({ markers: [], item: null }));
-	const next = structuredClone(previous);
-	next.tickets[0]!.state = "Done";
-	next.tickets[0]!.visits.Done = 1;
-	statusOnDone(previous, next, MEERKAT);
-	expect(next.effects.map((effect) => effect.action)).toEqual([{ kind: "setProjectField", issue, field: "status", option: "Done" }]);
-	const unchanged = structuredClone(next);
-	statusOnDone(next, unchanged, MEERKAT);
-	expect(unchanged.effects).toHaveLength(1);
+test("entering Done from another state queues Status done; settling its write by resolving to Done does not queue another", () => {
+	const main: Extract<Caller, { kind: "main" }> = { kind: "main", agentId: "Main", sessionId: "main", sessionFile: null };
+	const closed = facts({ markers: [], item: null });
+	closed.issues[0]!.state = "closed";
+	let state = agenda(closed);
+	state.run = { kind: "attached", id: "run", mainAgentId: main.agentId, mainSessionId: main.sessionId, pid: 101, startedAt: "Sat Nov 7 06:00:00 2026" };
+	const resolve = (to: string, effects: { effectId: string; disposition: "cancel" }[] = []): Agenda => {
+		const resolved = applyOperation(
+			state,
+			{
+				op: "resolve",
+				ticketId: "one",
+				revision: state.tickets[0]!.revision,
+				ruling: `Rule ${to}.`,
+				to,
+				...(to === "Done" ? { noCode: "Nothing to change." } : {}),
+				effects,
+			},
+			main,
+			closed,
+			2,
+			null,
+		);
+		if (!resolved.ok) throw new Error(resolved.error.message);
+		statusOnDone(state, resolved.value, MEERKAT);
+		return resolved.value;
+	};
+	const doneWrites = () => state.effects.filter((effect) => effect.action.kind === "setProjectField");
+	state = resolve("Done");
+	expect(state.tickets[0]!.state).toBe("Done");
+	expect(doneWrites().map((effect) => effect.action)).toEqual([{ kind: "setProjectField", issue, field: "status", option: "Done" }]);
+	const write = doneWrites()[0]!;
+	write.attempt = 1;
+	write.state = { kind: "failed", startedAt: 1, error: { kind: "uncertainOutcome", message: "External call returned without source confirmation" } };
+	state = resolve("Done", [{ effectId: write.id, disposition: "cancel" }]);
+	expect(state.tickets[0]!.state).toBe("Done");
+	expect(doneWrites().map((effect) => effect.state.kind)).toEqual(["cancelled"]);
+	state = resolve("Coding");
+	state = resolve("Done");
+	expect(doneWrites().map((effect) => effect.state.kind)).toEqual(["cancelled", "ready"]);
+	const unchanged = structuredClone(state);
+	statusOnDone(state, unchanged, MEERKAT);
+	expect(unchanged.effects).toHaveLength(state.effects.length);
 });
 
 function success<T>(value: T): Result<T, PortError> {
