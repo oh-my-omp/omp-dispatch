@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- With Meerkat integration on, an issue whose repository belongs to a different owner than the configured Project now has its Project Status read and confirmed, instead of every Status write ending `failed` and blocking `finish`
+- Resolving a `Done` ticket back to `Done` to settle a failed Project Status write no longer queues the same write again, so `finish` succeeds once that write is cancelled
+
 ## [0.3.1] - 2026-11-26
 
 ### Fixed
