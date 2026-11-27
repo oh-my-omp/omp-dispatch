@@ -3,7 +3,7 @@ import { access, mkdir, readdir, rm } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { z } from "@oh-my-pi/omptype/zod";
 // Compiled omp 19.1.0 exposes createAgentSession via the root shim, not a virtual @oh-my-pi/pi-coding-agent/sdk entry.
-import { createAgentSession } from "@oh-my-pi/pi-coding-agent";
+import { type CreateAgentSessionOptions, createAgentSession } from "@oh-my-pi/pi-coding-agent";
 import { resolveAgentModelSelection } from "@oh-my-pi/pi-coding-agent/config/model-resolver";
 import type { ToolDefinition } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/types";
 import { MCPManager } from "@oh-my-pi/pi-coding-agent/mcp/manager";
@@ -17,6 +17,7 @@ import { followMCPTools, type MCPToolFollower } from "@oh-my-pi/pi-coding-agent/
 import { cfgTaskAgentModelOverrides, cfgTaskDisabledAgents } from "@oh-my-pi/pi-coding-agent/task/settings";
 import { USER_TODO_EDIT_CUSTOM_TYPE } from "@oh-my-pi/pi-coding-agent/tools/todo";
 import { tr } from "../../omomp-shared/i18n.ts";
+import { omompTool } from "../../omomp-shared/tool-entry.ts";
 import type { Caller, ParseError, PortInput, Result } from "../domain/model.ts";
 import { parseSeatEscalateParameters, parseSeatSubmitParameters, parseSeatVerdictParameters } from "../domain/parse.ts";
 import { buildPublicGrammar } from "../domain/public-grammar.ts";
@@ -244,7 +245,7 @@ export function createHostPort(options: HostOptions): HostPort {
 					}
 					return { content: [{ type: "text" as const, text: JSON.stringify(response) }], details: response, isError: !response.ok };
 				};
-				const escalateTool: ToolDefinition = {
+				const escalateDefinition: ToolDefinition = {
 					name: "dispatch_escalate",
 					label: tr("Dispatch Escalate", "调度升级"),
 					description:
@@ -255,39 +256,29 @@ export function createHostPort(options: HostOptions): HostPort {
 						return runHandoff(parseSeatEscalateParameters(params, { ticketId: input.ticketId, revision: input.revision }));
 					},
 				};
-				const seatTools: ToolDefinition[] =
-					input.seat === "work"
-						? [
-								{
-									name: "dispatch_submit",
-									label: tr("Dispatch Submit", "调度提交"),
-									description:
-										"Hand off your pushed branch for the bound ticket (use read dispatch://seat for context). A successful submit ends this seat.",
-									loadMode: "essential",
-									parameters: grammar.seatSubmitParametersSchema,
-									async execute(_id, params) {
-										return runHandoff(parseSeatSubmitParameters(params, { ticketId: input.ticketId, revision: input.revision }));
-									},
-								},
-								escalateTool,
-							]
-						: [
-								{
-									name: "dispatch_verdict",
-									label: tr("Dispatch Verdict", "调度裁决"),
-									description:
-										"Hand off your independent gate verdict for the bound ticket or closure (use read dispatch://seat for context). A successful verdict ends this seat.",
-									loadMode: "essential",
-									parameters: grammar.seatVerdictParametersSchema,
-									async execute(_id, params) {
-										return runHandoff(
-											parseSeatVerdictParameters(params, { ticketId: input.ticketId, revision: input.revision, role: input.role }),
-										);
-									},
-								},
-								escalateTool,
-							];
-				const seatToolNames = seatTools.map((tool) => tool.name);
+				const submitDefinition: ToolDefinition = {
+					name: "dispatch_submit",
+					label: tr("Dispatch Submit", "调度提交"),
+					description:
+						"Hand off your pushed branch for the bound ticket (use read dispatch://seat for context). A successful submit ends this seat.",
+					loadMode: "essential",
+					parameters: grammar.seatSubmitParametersSchema,
+					async execute(_id, params) {
+						return runHandoff(parseSeatSubmitParameters(params, { ticketId: input.ticketId, revision: input.revision }));
+					},
+				};
+				const verdictDefinition: ToolDefinition = {
+					name: "dispatch_verdict",
+					label: tr("Dispatch Verdict", "调度裁决"),
+					description:
+						"Hand off your independent gate verdict for the bound ticket or closure (use read dispatch://seat for context). A successful verdict ends this seat.",
+					loadMode: "essential",
+					parameters: grammar.seatVerdictParametersSchema,
+					async execute(_id, params) {
+						return runHandoff(parseSeatVerdictParameters(params, { ticketId: input.ticketId, revision: input.revision, role: input.role }));
+					},
+				};
+				const seatToolNames = input.seat === "work" ? ["dispatch_submit", "dispatch_escalate"] : ["dispatch_verdict", "dispatch_escalate"];
 				const settings = (await parent.settings.cloneForCwd(workspace)).overlay({
 					"tools.approvalMode": "yolo",
 					"compaction.midTurnEnabled": true,
@@ -306,7 +297,7 @@ export function createHostPort(options: HostOptions): HostPort {
 				const mcpManager = MCPManager.instance();
 				mcpFollower = mcpManager ? followMCPTools(mcpManager, { scope: manager.getSessionId() }, new Set(seatToolNames)) : undefined;
 				const mcpTools = mcpFollower?.proxyTools() ?? [];
-				const created = await createAgentSession({
+				const sessionBase: CreateAgentSessionOptions = {
 					cwd: workspace,
 					sessionManager: manager,
 					authStorage: parent.modelRegistry.authStorage,
@@ -322,7 +313,6 @@ export function createHostPort(options: HostOptions): HostPort {
 								mountedToolNames: savedContract.data.mountedTools,
 							}
 						: { appendSystemPrompt: agent.systemPrompt, ...(agentTools ? { toolNames: agentTools } : {}) }),
-					customTools: seatTools,
 					enableMCP: true,
 					...(mcpManager ? { mcpManager, ...(mcpTools.length ? { mcpTools } : {}) } : {}),
 					...(mcpFollower ? { mcpToolScope: mcpFollower.scope } : {}),
@@ -343,7 +333,12 @@ export function createHostPort(options: HostOptions): HostPort {
 					expectedAgentRef: null,
 					spawns,
 					inheritedSessionAgents: parent.getSessionAgents(),
-				});
+				};
+				const created = await createAgentSession(
+					input.seat === "work"
+						? { ...sessionBase, customTools: [omompTool(submitDefinition), omompTool(escalateDefinition)] }
+						: { ...sessionBase, customTools: [omompTool(verdictDefinition), omompTool(escalateDefinition)] },
+				);
 				seat.session = created.session;
 				mcpFollower?.bind(created.session);
 				if (mcpFollower)
