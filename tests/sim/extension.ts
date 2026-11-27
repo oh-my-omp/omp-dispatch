@@ -102,13 +102,13 @@ function* startPlan(trigger: string): MainPlan {
 								id: ticket.id,
 								issue: issueRef(ticket.issue),
 								target,
-								dependsOn: ticket.dependsOn,
+								...(ticket.dependsOn.length > 0 ? { dependsOn: ticket.dependsOn } : { independent: true as const }),
 							})),
 						},
 					},
 				},
 			};
-	for (const id of opened.value?.launchable ?? []) yield { call: { name: "dispatch_step", args: { ticketId: id, launch: {} } } };
+	for (const id of opened.value?.launchable ?? []) yield { call: { name: "dispatch_step", args: { ticketId: id, launch: true } } };
 }
 
 function* attentionPlan(trigger: string): MainPlan {
@@ -118,7 +118,7 @@ function* attentionPlan(trigger: string): MainPlan {
 	};
 	for (const key of keys) {
 		const [kind = "", id = "", effect = ""] = key.split(":");
-		if (kind === "launch") yield { call: { name: "dispatch_step", args: { ticketId: id, launch: {} } } };
+		if (kind === "launch") yield { call: { name: "dispatch_step", args: { ticketId: id, launch: true } } };
 		else if (kind === "finish") yield finish;
 		else if (kind === "escalated") {
 			const read = yield { call: { name: "read", args: { path: `dispatch://${id}:raw` } } };

@@ -1,5 +1,7 @@
 import { expect, test } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
+import { z } from "@oh-my-pi/omptype/zod";
+import { omompTool } from "../omomp-shared/tool-entry.ts";
 import type { Action, ParseError, PortInput, Result } from "../src/domain/model.ts";
 import {
 	parseAgenda,
@@ -9,6 +11,7 @@ import {
 	parseSeatSubmitParameters,
 	parseSeatVerdictParameters,
 } from "../src/domain/parse.ts";
+import { buildPublicGrammar } from "../src/domain/public-grammar.ts";
 
 const repo = { owner: "oh-my-omp", name: "omp-dispatch" },
 	other = { owner: "oh-my-omp", name: "omp-config" };
@@ -45,7 +48,7 @@ test("dispatch_ticket maps flat structured convene, resume, and finish onto Port
 							dependsOn: ["B"],
 							adoptPr: { owner: "oh-my-omp", repo: "omp-dispatch", number: 300 },
 						},
-						{ id: "B", issue: wireOtherIssue, target: wireTarget, dependsOn: [] },
+						{ id: "B", issue: wireOtherIssue, target: wireTarget, independent: true },
 					],
 				},
 			}),
@@ -62,7 +65,7 @@ test("dispatch_ticket maps flat structured convene, resume, and finish onto Port
 		required(
 			parseDispatchTicketParameters({
 				convene: {
-					tickets: [{ id: "A", issue: wireIssue, target: wireTarget, dependsOn: [] }],
+					tickets: [{ id: "A", issue: wireIssue, target: wireTarget, independent: true }],
 				},
 			}),
 		),
@@ -82,12 +85,12 @@ test("dispatch_ticket refuses empty, combined, wrapped, or unknown fields", () =
 });
 
 test("dispatch_step maps launch and resolve with every structured githubAction and three-state adoptPr", () => {
-	expect(required(parseDispatchStepParameters({ ticketId: "A", launch: { role: "review" } }))).toEqual({
+	expect(required(parseDispatchStepParameters({ ticketId: "A", launch: true, role: "review" }))).toEqual({
 		op: "launch",
 		ticketId: "A",
 		role: "review",
 	});
-	expect(required(parseDispatchStepParameters({ ticketId: "A", launch: {} }))).toEqual({
+	expect(required(parseDispatchStepParameters({ ticketId: "A", launch: true }))).toEqual({
 		op: "launch",
 		ticketId: "A",
 	});
@@ -127,7 +130,7 @@ test("dispatch_step maps launch and resolve with every structured githubAction a
 				target: wireTarget,
 				adoptPr: { owner: "oh-my-omp", repo: "omp-dispatch", number: 300 },
 				noCode: "No code needed.",
-				add: [{ id: "C", issue: { owner: "oh-my-omp", repo: "omp-dispatch", number: 238 }, target: wireTarget, dependsOn: [] }],
+				add: [{ id: "C", issue: { owner: "oh-my-omp", repo: "omp-dispatch", number: 238 }, target: wireTarget, independent: true }],
 				remove: ["D"],
 				effects: [{ effectId: "run/publishPr/1", disposition: "retry" }],
 				githubActions: [
@@ -208,6 +211,15 @@ test("dispatch_step maps launch and resolve with every structured githubAction a
 		}),
 	);
 	expect("adoptPr" in untouched).toBe(false);
+	expect("dependsOn" in untouched).toBe(false);
+
+	const depsCleared = required(
+		parseDispatchStepParameters({
+			ticketId: "A",
+			resolve: { revision: 3, ruling: "Independent.", to: "Coding", clearDependsOn: true },
+		}),
+	);
+	expect(depsCleared).toEqual({ op: "resolve", ticketId: "A", revision: 3, ruling: "Independent.", to: "Coding", dependsOn: [] });
 
 	expect(
 		parseDispatchStepParameters({
@@ -221,6 +233,15 @@ test("dispatch_step maps launch and resolve with every structured githubAction a
 			},
 		}).ok,
 	).toBe(false);
+	expect(
+		parseDispatchStepParameters({
+			ticketId: "A",
+			resolve: { revision: 3, ruling: "Conflict.", to: "Coding", dependsOn: ["B"], clearDependsOn: true },
+		}).ok,
+	).toBe(false);
+	expect(parseDispatchStepParameters({ ticketId: "A", role: "review", resolve: { revision: 3, ruling: "Ruling.", to: "Coding" } }).ok).toBe(
+		false,
+	);
 });
 
 test("dispatch_step refuses empty, combined, or malformed githubActions", () => {
@@ -228,7 +249,7 @@ test("dispatch_step refuses empty, combined, or malformed githubActions", () => 
 	expect(
 		parseDispatchStepParameters({
 			ticketId: "A",
-			launch: {},
+			launch: true,
 			resolve: { revision: 1, ruling: "Ruling.", to: "Coding" },
 		}).ok,
 	).toBe(false);
@@ -283,7 +304,7 @@ test("dispatch_step refuses empty, combined, or malformed githubActions", () => 
 	).toBe(false);
 });
 
-test("an empty replaceBody body is allowed, while an empty createIssue body is refused", () => {
+test("replaceBody clears the body with clearBody or replaces it with body, refusing both or neither", () => {
 	expect(
 		required(
 			parseDispatchStepParameters({
@@ -292,7 +313,7 @@ test("an empty replaceBody body is allowed, while an empty createIssue body is r
 					revision: 3,
 					ruling: "Clear body.",
 					to: "Coding",
-					githubActions: [{ replaceBody: { issue: wireIssue, expectedHash: hash, body: "" } }],
+					githubActions: [{ replaceBody: { issue: wireIssue, expectedHash: hash, clearBody: true } }],
 				},
 			}),
 		),
@@ -304,17 +325,33 @@ test("an empty replaceBody body is allowed, while an empty createIssue body is r
 		to: "Coding",
 		actions: [{ kind: "replaceBody", issue, expectedHash: hash, body: "" }],
 	});
-	const refused = parseDispatchStepParameters({
-		ticketId: "A",
-		resolve: {
-			revision: 3,
-			ruling: "Ruling.",
-			to: "Coding",
-			githubActions: [{ createIssue: { repo: wireOtherRepo, title: "New issue", body: "" } }],
-		},
-	});
-	expect(refused.ok).toBe(false);
-	if (!refused.ok) expect(refused.error.path).toBe("resolve.githubActions.0.createIssue.body");
+	for (const action of [
+		{ replaceBody: { issue: wireIssue, expectedHash: hash } },
+		{ replaceBody: { issue: wireIssue, expectedHash: hash, body: "New body", clearBody: true } },
+		{ createIssue: { repo: wireOtherRepo, title: "New issue", body: "" } },
+	]) {
+		const refused = parseDispatchStepParameters({
+			ticketId: "A",
+			resolve: { revision: 3, ruling: "Ruling.", to: "Coding", githubActions: [action] },
+		});
+		expect(refused.ok).toBe(false);
+	}
+});
+
+test("entries require exactly one of dependsOn or independent", () => {
+	for (const entry of [
+		{ id: "A", issue: wireIssue, target: wireTarget },
+		{ id: "A", issue: wireIssue, target: wireTarget, dependsOn: ["B"], independent: true },
+	]) {
+		expect(parseDispatchTicketParameters({ convene: { tickets: [entry] } }).ok).toBe(false);
+	}
+	expect(
+		required(
+			parseDispatchTicketParameters({
+				convene: { tickets: [{ id: "A", issue: wireIssue, target: wireTarget, dependsOn: ["B"] }] },
+			}),
+		),
+	).toEqual({ op: "convene", parent: null, tickets: [{ id: "A", issue, target, dependsOn: ["B"], adoptPr: null }] });
 });
 
 test("zero-op seat tools map flat parameters using bound seat identity", () => {
@@ -380,7 +417,7 @@ test("zero-op seat tools map flat parameters using bound seat identity", () => {
 test("structured coordinates refuse malformed owner/repo/number fields and string DSLs", () => {
 	const badOwner = parseDispatchTicketParameters({
 		convene: {
-			tickets: [{ id: "A", issue: { owner: "bad/owner", repo: "omp-dispatch", number: 236 }, target: wireTarget, dependsOn: [] }],
+			tickets: [{ id: "A", issue: { owner: "bad/owner", repo: "omp-dispatch", number: 236 }, target: wireTarget, independent: true }],
 		},
 	});
 	expect(badOwner.ok).toBe(false);
@@ -388,7 +425,7 @@ test("structured coordinates refuse malformed owner/repo/number fields and strin
 
 	const badNumber = parseDispatchTicketParameters({
 		convene: {
-			tickets: [{ id: "A", issue: { owner: "oh-my-omp", repo: "omp-dispatch", number: 0 }, target: wireTarget, dependsOn: [] }],
+			tickets: [{ id: "A", issue: { owner: "oh-my-omp", repo: "omp-dispatch", number: 0 }, target: wireTarget, independent: true }],
 		},
 	});
 	expect(badNumber.ok).toBe(false);
@@ -396,10 +433,138 @@ test("structured coordinates refuse malformed owner/repo/number fields and strin
 
 	const stringDslRefused = parseDispatchTicketParameters({
 		convene: {
-			tickets: [{ id: "A", issue: "oh-my-omp/omp-dispatch#236", target: "oh-my-omp/omp-dispatch@main", dependsOn: [] }],
+			tickets: [{ id: "A", issue: "oh-my-omp/omp-dispatch#236", target: "oh-my-omp/omp-dispatch@main", independent: true }],
 		},
 	});
 	expect(stringDslRefused.ok).toBe(false);
+});
+
+test("omompTool normalizes empty values and refuses empty array elements across all five tools", () => {
+	const grammar = buildPublicGrammar(z);
+	const wrap = <T>(name: string, parameters: unknown, parseFn: (params: unknown) => T) =>
+		omompTool({
+			name,
+			parameters,
+			execute(_id: string, params: unknown) {
+				return parseFn(params);
+			},
+		});
+
+	const ticketTool = wrap("dispatch_ticket", grammar.dispatchTicketParametersSchema, parseDispatchTicketParameters);
+	const stepTool = wrap("dispatch_step", grammar.dispatchStepParametersSchema, parseDispatchStepParameters);
+	const submitTool = wrap("dispatch_submit", grammar.seatSubmitParametersSchema, (p) =>
+		parseSeatSubmitParameters(p, { ticketId: "A", revision: 2 }),
+	);
+	const verdictTool = wrap("dispatch_verdict", grammar.seatVerdictParametersSchema, (p) =>
+		parseSeatVerdictParameters(p, { ticketId: "A", revision: 2, role: "review" }),
+	);
+	const escalateTool = wrap("dispatch_escalate", grammar.seatEscalateParametersSchema, (p) =>
+		parseSeatEscalateParameters(p, { ticketId: "A", revision: 2 }),
+	);
+
+	expect(required(stepTool.execute("1", { ticketId: "A", launch: true, resolve: {} }))).toEqual({ op: "launch", ticketId: "A" });
+	expect(
+		required(
+			stepTool.execute("2", {
+				ticketId: "A",
+				launch: true,
+				role: "  ",
+				resolve: { dependsOn: [], target: { owner: " ", repo: "", branch: "  " } },
+			}),
+		),
+	).toEqual({ op: "launch", ticketId: "A" });
+	expect(stepTool.execute("3", { ticketId: "A", launch: null, resolve: {} }).ok).toBe(false);
+
+	const kept = required(stepTool.execute("4", { ticketId: "A", resolve: { revision: 3, ruling: "Keep.", to: "Coding", dependsOn: [] } }));
+	expect("dependsOn" in kept).toBe(false);
+	expect(
+		required(
+			stepTool.execute("5", { ticketId: "A", resolve: { revision: 3, ruling: "Independent.", to: "Coding", clearDependsOn: true } }),
+		),
+	).toEqual({ op: "resolve", ticketId: "A", revision: 3, ruling: "Independent.", to: "Coding", dependsOn: [] });
+	expect(
+		stepTool.execute("6", {
+			ticketId: "A",
+			resolve: {
+				revision: 3,
+				ruling: "Add.",
+				to: "Coding",
+				add: [{ id: "C", issue: wireIssue, target: wireTarget, dependsOn: [] }],
+			},
+		}).ok,
+	).toBe(false);
+
+	expect(
+		required(
+			ticketTool.execute("7", {
+				convene: { tickets: [{ id: "A", issue: wireIssue, target: wireTarget, independent: true }] },
+			}),
+		),
+	).toEqual({ op: "convene", parent: null, tickets: [{ id: "A", issue, target, dependsOn: [], adoptPr: null }] });
+	expect(
+		ticketTool.execute("8", {
+			convene: { tickets: [{ id: "A", issue: wireIssue, target: wireTarget, dependsOn: [] }] },
+		}).ok,
+	).toBe(false);
+
+	for (const [field, value] of [
+		["dependsOn", [" "]],
+		["remove", [""]],
+		["add", [{}]],
+		["effects", [{}]],
+		["githubActions", [{}]],
+	] as const) {
+		expect(() =>
+			stepTool.execute("9", {
+				ticketId: "A",
+				resolve: { revision: 3, ruling: "Ruling.", to: "Coding", [field]: value },
+			}),
+		).toThrow(`resolve.${field}[0]: array element must not be empty`);
+	}
+
+	const noCodeOmitted = required(
+		stepTool.execute("10", { ticketId: "A", resolve: { revision: 3, ruling: "Ruling.", to: "Coding", noCode: "  ", clearAdoptPr: false } }),
+	);
+	expect("noCode" in noCodeOmitted).toBe(false);
+	expect("adoptPr" in noCodeOmitted).toBe(false);
+
+	expect(required(escalateTool.execute("11", { kind: "question", reason: "Which?", tier: "  " }))).toEqual({
+		op: "escalate",
+		ticketId: "A",
+		revision: 2,
+		kind: "question",
+		reason: "Which?",
+	});
+	expect(required(escalateTool.execute("12", { kind: "question", reason: "Which?", tier: null }))).toEqual({
+		op: "escalate",
+		ticketId: "A",
+		revision: 2,
+		kind: "question",
+		reason: "Which?",
+	});
+
+	expect(() => stepTool.execute("13", { ticketId: "  ", launch: true })).toThrow('Validation failed for tool "dispatch_step"');
+	expect(() => stepTool.execute("14", { ticketId: "A", resolve: { revision: 3, ruling: "  ", to: "Coding" } })).toThrow(
+		'Validation failed for tool "dispatch_step"',
+	);
+	expect(() => escalateTool.execute("15", { kind: "blocked", reason: "  " })).toThrow('Validation failed for tool "dispatch_escalate"');
+	expect(() => submitTool.execute("16", { branch: "  ", head: sha, title: "Deliver", body: "Closes #236" })).toThrow(
+		'Validation failed for tool "dispatch_submit"',
+	);
+	expect(() => verdictTool.execute("17", { ok: true, note: "  " })).toThrow('Validation failed for tool "dispatch_verdict"');
+	expect(ticketTool.execute("18", { finish: { summary: "  " } })).toEqual(ticketTool.execute("18b", {}));
+
+	expect(
+		required(submitTool.execute("19", { branch: "feature", head: sha, title: "Deliver", body: "Closes #236", revision: null })),
+	).toEqual({ op: "submit", ticketId: "A", revision: 2, branch: "feature", head: sha, title: "Deliver", body: "Closes #236" });
+	expect(required(verdictTool.execute("20", { ok: true, note: "Verified.", revision: null }))).toEqual({
+		op: "verdict",
+		ticketId: "A",
+		revision: 2,
+		role: "review",
+		ok: true,
+		note: "Verified.",
+	});
 });
 
 test("the stored agenda formats still parse", () => {

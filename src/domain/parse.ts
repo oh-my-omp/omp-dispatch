@@ -58,14 +58,31 @@ function toTarget(value: WireTarget): Target {
 	return { repo: { owner: value.owner, name: value.repo }, base: value.branch };
 }
 
-function toEntry(value: WireEntry): Entry {
+function toEntry(value: WireEntry, path: string): Result<Entry, ParseError> {
+	if (value.dependsOn !== undefined && value.independent === true)
+		return failure(`${path}.dependsOn`, "dependsOn and independent cannot be combined");
+	if (value.dependsOn === undefined && value.independent !== true)
+		return failure(`${path}.dependsOn`, "Set exactly one of dependsOn or independent");
 	return {
-		id: value.id,
-		issue: toIssueRef(value.issue),
-		target: toTarget(value.target),
-		dependsOn: value.dependsOn,
-		adoptPr: value.adoptPr === undefined ? null : toIssueRef(value.adoptPr),
+		ok: true,
+		value: {
+			id: value.id,
+			issue: toIssueRef(value.issue),
+			target: toTarget(value.target),
+			dependsOn: value.dependsOn ?? [],
+			adoptPr: value.adoptPr === undefined ? null : toIssueRef(value.adoptPr),
+		},
 	};
+}
+
+function toEntries(values: readonly WireEntry[], path: string): Result<Entry[], ParseError> {
+	const collected: Entry[] = [];
+	for (let index = 0; index < values.length; index++) {
+		const entry = toEntry(values[index]!, `${path}.${index}`);
+		if (!entry.ok) return entry;
+		collected.push(entry.value);
+	}
+	return { ok: true, value: collected };
 }
 
 function toAction(value: WireGitHubAction, path: string): Result<Action, ParseError> {
@@ -121,13 +138,15 @@ function toAction(value: WireGitHubAction, path: string): Result<Action, ParseEr
 	}
 	if (value.replaceBody) {
 		const a = value.replaceBody;
+		if (a.body !== undefined && a.clearBody === true) return failure(`${path}.replaceBody.body`, "body and clearBody cannot be combined");
+		if (a.body === undefined && a.clearBody !== true) return failure(`${path}.replaceBody.body`, "Set exactly one of body or clearBody");
 		return parse(
 			actionSchema,
 			{
 				kind: "replaceBody",
 				issue: toIssueRef(a.issue),
 				expectedHash: a.expectedHash,
-				body: a.body,
+				body: a.body ?? "",
 			},
 			`${path}.replaceBody`,
 		);
@@ -232,10 +251,12 @@ export function parseDispatchTicketParameters(value: unknown): Result<PortInput,
 	const chosen = [convene !== undefined, resume !== undefined, finish !== undefined].filter(Boolean).length;
 	if (chosen !== 1) return failure("", "Specify exactly one of convene, resume, or finish");
 	if (convene) {
+		const tickets = toEntries(convene.tickets, "convene.tickets");
+		if (!tickets.ok) return tickets;
 		return parse(portInputSchema, {
 			op: "convene",
 			parent: convene.parent === undefined ? null : toIssueRef(convene.parent),
-			tickets: convene.tickets.map(toEntry),
+			tickets: tickets.value,
 		});
 	}
 	if (resume) {
@@ -247,17 +268,24 @@ export function parseDispatchTicketParameters(value: unknown): Result<PortInput,
 export function parseDispatchStepParameters(value: unknown): Result<PortInput, ParseError> {
 	const wire = parse(dispatchStepParametersSchema, value);
 	if (!wire.ok) return wire;
-	const { ticketId, launch, resolve } = wire.value;
-	const chosen = [launch !== undefined, resolve !== undefined].filter(Boolean).length;
+	const { ticketId, launch, role, resolve } = wire.value;
+	const chosen = [launch === true, resolve !== undefined].filter(Boolean).length;
 	if (chosen !== 1) return failure("", "Specify exactly one of launch or resolve");
-	if (launch) {
-		return parse(portInputSchema, compact({ op: "launch", ticketId, role: launch.role }));
+	if (launch === true) {
+		return parse(portInputSchema, compact({ op: "launch", ticketId, role }));
 	}
+	if (role !== undefined) return failure("role", "role is only allowed when launch is true");
 	const r = resolve!;
 	if (r.clearAdoptPr === true && r.adoptPr !== undefined) {
 		return failure("resolve.adoptPr", "adoptPr and clearAdoptPr cannot be combined");
 	}
+	if (r.clearDependsOn === true && r.dependsOn !== undefined) {
+		return failure("resolve.dependsOn", "dependsOn and clearDependsOn cannot be combined");
+	}
 	const adoptPr = r.clearAdoptPr === true ? null : r.adoptPr === undefined ? undefined : toIssueRef(r.adoptPr);
+	const dependsOn = r.clearDependsOn === true ? [] : r.dependsOn;
+	const added = r.add === undefined ? undefined : toEntries(r.add, "resolve.add");
+	if (added !== undefined && !added.ok) return added;
 	const enqueued = r.githubActions === undefined ? undefined : toActions(r.githubActions, "resolve.githubActions");
 	if (enqueued !== undefined && !enqueued.ok) return enqueued;
 	return parse(
@@ -268,11 +296,11 @@ export function parseDispatchStepParameters(value: unknown): Result<PortInput, P
 			revision: r.revision,
 			ruling: r.ruling,
 			to: r.to,
-			dependsOn: r.dependsOn,
+			dependsOn,
 			target: r.target === undefined ? undefined : toTarget(r.target),
 			adoptPr,
 			noCode: r.noCode,
-			add: r.add === undefined ? undefined : r.add.map(toEntry),
+			add: added?.value,
 			remove: r.remove,
 			effects: r.effects,
 			actions: enqueued?.value,

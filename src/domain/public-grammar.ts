@@ -128,7 +128,14 @@ export function buildPublicGrammar(z: PublicZ) {
 		id: text.describe("The ticket id, unique within the agenda; resolve dependsOn and remove refer to it."),
 		issue: wireIssueRefSchema.describe("The GitHub issue this ticket delivers."),
 		target: wireTargetSchema.describe("The repository and base branch this ticket delivers to."),
-		dependsOn: z.array(text).describe("Ticket ids that must be delivered before this ticket may launch; [] for an independent ticket."),
+		dependsOn: z
+			.array(text)
+			.optional()
+			.describe("Ticket ids that must be delivered before this ticket may launch. Set exactly one of dependsOn or independent."),
+		independent: z
+			.literal(true)
+			.optional()
+			.describe("true declares that the ticket has no dependencies. Set exactly one of dependsOn or independent."),
 		adoptPr: wireIssueRefSchema.optional().describe("An existing pull request to adopt. Omit when there is none."),
 	}).describe("One ticket entry supplied to convene or resolve.add.");
 	const wireEffectsSchema = z
@@ -177,7 +184,11 @@ export function buildPublicGrammar(z: PublicZ) {
 		replaceBody: object({
 			issue: wireIssueRefSchema.describe("The subject issue."),
 			expectedHash: hashSchema.describe("64-character hex issue body hash expected before the edit."),
-			body: z.string().describe("New issue body (may be empty)."),
+			body: text.optional().describe("New issue body. Set exactly one of body or clearBody."),
+			clearBody: z
+				.literal(true)
+				.optional()
+				.describe("true replaces the issue body with an empty one. Set exactly one of body or clearBody."),
 		})
 			.optional()
 			.describe("Replace an issue body."),
@@ -258,11 +269,13 @@ export function buildPublicGrammar(z: PublicZ) {
 
 	const dispatchStepParametersSchema = object({
 		ticketId: text.describe("The ticket id (or closure id), as returned by read dispatch://status or read dispatch://tickets."),
-		launch: object({
-			role: roleSchema.optional().describe("Optional seat role to start; omit to launch the ticket's currently executable seats."),
-		})
+		launch: z
+			.literal(true)
 			.optional()
-			.describe("Launch this ticket once so Dispatch relays its seats along the workflow."),
+			.describe("true launches this ticket once so Dispatch relays its seats along the workflow. Set exactly one of launch or resolve."),
+		role: roleSchema
+			.optional()
+			.describe("Only with launch: the seat role to start; omit to launch the ticket's currently executable seats."),
 		resolve: object({
 			revision: revision.describe(
 				"The ticket revision returned by read dispatch://<ticketId> or read dispatch://status. A stale revision is refused.",
@@ -272,7 +285,14 @@ export function buildPublicGrammar(z: PublicZ) {
 				.string()
 				.regex(/^[A-Za-z][A-Za-z0-9_-]*$/)
 				.describe("Workflow state to continue in, by name (use a state from the ticket workflow, or the parent workflow for the closure)."),
-			dependsOn: z.array(text).optional().describe("Replaces the ticket dependency ids; [] makes it independent."),
+			dependsOn: z
+				.array(text)
+				.optional()
+				.describe("Replaces the ticket dependency ids. Omit to keep them; do not combine with clearDependsOn."),
+			clearDependsOn: z
+				.literal(true)
+				.optional()
+				.describe("true removes every dependency so the ticket becomes independent; omit keeps them. Do not combine with dependsOn."),
 			target: wireTargetSchema.optional().describe("Replaces the ticket target repository and base branch."),
 			adoptPr: wireIssueRefSchema
 				.optional()
