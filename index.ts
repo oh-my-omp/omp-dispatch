@@ -7,6 +7,7 @@ import { logger } from "@oh-my-pi/pi-utils";
 import { applyActiveTools } from "./omomp-shared/active-tools.ts";
 import { tr } from "./omomp-shared/i18n.ts";
 import { registerInternalScheme } from "./omomp-shared/internal-url.ts";
+import { omompTool } from "./omomp-shared/tool-entry.ts";
 import type { ParseError, PortInput, Result } from "./src/domain/model.ts";
 import { parseDispatchStepParameters, parseDispatchTicketParameters } from "./src/domain/parse.ts";
 import { buildPublicGrammar } from "./src/domain/public-grammar.ts";
@@ -222,32 +223,36 @@ export default function dispatch(pi: ExtensionAPI): void {
 		description: tr("Start Main as coordinator for <owner>/<repo>#<number>", "将 Main 启动为 <owner>/<repo>#<number> 的协调者"),
 		type: "string",
 	});
-	pi.registerTool({
-		name: "dispatch_ticket",
-		label: tr("Dispatch Ticket", "调度工单"),
-		description:
-			"Manage Dispatch agenda lifecycle (convene a new ticket graph, resume a saved active agenda, or finish a completed agenda). Read live state via read dispatch://status, dispatch://tickets, or dispatch://<ticketId>.",
-		loadMode: "essential",
-		parameters: grammar.dispatchTicketParametersSchema,
-		defaultInactive: true,
-		async execute(_id, params, _signal, _update, ctx) {
-			const response = await runtime.execute(ctx, parseDispatchTicketParameters(params));
-			return { content: [{ type: "text", text: JSON.stringify(response) }], details: response, isError: !response.ok };
-		},
-	});
-	pi.registerTool({
-		name: "dispatch_step",
-		label: tr("Dispatch Step", "调度步骤"),
-		description:
-			"Launch a Dispatch ticket once (Dispatch relays its seats automatically) or resolve a ticket/closure with an exceptional ruling, topology edit, effect disposition, or GitHub write actions. Read state via read dispatch://status or dispatch://<ticketId>.",
-		loadMode: "essential",
-		parameters: grammar.dispatchStepParametersSchema,
-		defaultInactive: true,
-		async execute(_id, params, _signal, _update, ctx) {
-			const response = await runtime.execute(ctx, parseDispatchStepParameters(params));
-			return { content: [{ type: "text", text: JSON.stringify(response) }], details: response, isError: !response.ok };
-		},
-	});
+	pi.registerTool(
+		omompTool({
+			name: "dispatch_ticket",
+			label: tr("Dispatch Ticket", "调度工单"),
+			description:
+				"Manage Dispatch agenda lifecycle (convene a new ticket graph, resume a saved active agenda, or finish a completed agenda). Read live state via read dispatch://status, dispatch://tickets, or dispatch://<ticketId>.",
+			loadMode: "essential",
+			parameters: grammar.dispatchTicketParametersSchema,
+			defaultInactive: true,
+			async execute(_id, params, _signal, _update, ctx) {
+				const response = await runtime.execute(ctx, parseDispatchTicketParameters(params));
+				return { content: [{ type: "text", text: JSON.stringify(response) }], details: response, isError: !response.ok };
+			},
+		}),
+	);
+	pi.registerTool(
+		omompTool({
+			name: "dispatch_step",
+			label: tr("Dispatch Step", "调度步骤"),
+			description:
+				"Launch a Dispatch ticket once (Dispatch relays its seats automatically) or resolve a ticket/closure with an exceptional ruling, topology edit, effect disposition, or GitHub write actions. Read state via read dispatch://status or dispatch://<ticketId>.",
+			loadMode: "essential",
+			parameters: grammar.dispatchStepParametersSchema,
+			defaultInactive: true,
+			async execute(_id, params, _signal, _update, ctx) {
+				const response = await runtime.execute(ctx, parseDispatchStepParameters(params));
+				return { content: [{ type: "text", text: JSON.stringify(response) }], details: response, isError: !response.ok };
+			},
+		}),
+	);
 	pi.registerCommand("dispatch-launcher", {
 		description: tr(
 			"Install, uninstall, or inspect the local Dispatch launcher, or register its GitHub App (install|uninstall|status|github-app register --webhook-url <url>)",

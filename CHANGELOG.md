@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- `dispatch_step` launches with `launch: true` and an optional root `role` instead of `launch: { role? }`; convene and `resolve.add` ticket entries declare no dependencies with `independent: true` instead of `dependsOn: []`, and `resolve` clears a ticket's dependencies with `clearDependsOn: true` instead of `dependsOn: []`
+- `replaceBody` clears an issue body with `clearBody: true` instead of an empty `body`; `body` must now be a non-empty string, and every entry or action sets exactly one of the pair
+
+### Changed
+
+- All five tools are registered through the shared `omompTool` entry: blank strings, empty arrays, empty objects and `null` in tool arguments now behave as if the field was omitted, array elements must not be empty, and arguments are re-validated before the tool runs
+
 ## [0.3.2] - 2026-11-27
 
 ### Fixed
