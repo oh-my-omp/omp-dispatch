@@ -11,6 +11,8 @@
 
 - All five tools are registered through the shared `omompTool` entry: blank strings, empty arrays, empty objects and `null` in tool arguments now behave as if the field was omitted, array elements must not be empty, and arguments are re-validated before the tool runs
 
+## [0.3.2] - 2026-11-27
+
 ### Fixed
 
 - With Meerkat integration on, an issue whose repository belongs to a different owner than the configured Project now has its Project Status read and confirmed, instead of every Status write ending `failed` and blocking `finish`
