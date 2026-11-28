@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-28
+
 ### Breaking Changes
 
 - `dispatch_step` launches with `launch: true` and an optional root `role` instead of `launch: { role? }`; convene and `resolve.add` ticket entries declare no dependencies with `independent: true` instead of `dependsOn: []`, and `resolve` clears a ticket's dependencies with `clearDependsOn: true` instead of `dependsOn: []`
